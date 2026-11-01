@@ -44,6 +44,7 @@ export default function EmployeeDashboard() {
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All Status');
+  const [slaFilter, setSlaFilter] = useState('All SLA');
   const [categoryFilter, setCategoryFilter] = useState('All Category');
   const [priorityFilter, setPriorityFilter] = useState('All Priority');
 
@@ -55,6 +56,13 @@ export default function EmployeeDashboard() {
   const [myTicketsLoadingText, setMyTicketsLoadingText] = useState('Loading...');
   const [selectedDashboardTicket, setSelectedDashboardTicket] = useState(null);
   const [dashboardModalLoading, setDashboardModalLoading] = useState(false);
+  const [departmentSummary, setDepartmentSummary] = useState(null);
+
+  const isManager = useMemo(() => {
+    const rawPos = String(effectiveUser?.position_level || effectiveUser?.profile?.position_level || '').toLowerCase();
+    const rawRole = String(effectiveUser?.role || effectiveUser?.profile?.role || '').toLowerCase();
+    return rawPos === 'manager' || rawRole.includes('manager') || Boolean(departmentSummary?.is_manager);
+  }, [effectiveUser, departmentSummary]);
 
   const visible = useMemo(() => tickets.filter((t) => !t.rejected), [tickets]);
 
@@ -63,6 +71,9 @@ export default function EmployeeDashboard() {
     setLoadingTickets(true);
     try {
       const list = await getEmployeeAssignedTickets({ employeeEmail: email, forceRefresh });
+      if (list?.department_summary) {
+        setDepartmentSummary(list.department_summary);
+      }
       setTickets(list.map((t) => ({ ...t, rejected: false })));
     } finally {
       setLoadingTickets(false);
@@ -263,6 +274,9 @@ export default function EmployeeDashboard() {
     intervalMs: 30000,
     shouldRefresh: ({ source, payload }) => {
       if (source === 'websocket') {
+        if (isManager) {
+          return true;
+        }
         const myEmpId = Number(user?.emp_id ?? user?.id);
         const payloadTicketId = Number(
           payload?.ticket_id ||
@@ -391,17 +405,19 @@ export default function EmployeeDashboard() {
       if (t.due_at && new Date(t.due_at) < new Date()) return true;
       return false;
     };
-    const slaBreachedCount = visible.filter(isBreachedTicket).length;
-    const escalatedCount = visible.filter((t) => (t.status === 'Escalated' || t.escalated || t.priority === 'Critical' || t.priority === 'High') && !CLOSED_STATUSES.includes(t.status)).length;
+    const slaBreachedCount = (isManager && typeof departmentSummary?.sla_breached_count === 'number')
+      ? departmentSummary.sla_breached_count
+      : visible.filter(isBreachedTicket).length;
+    const escalatedCount = visible.filter((t) => (t.status === 'Escalated' || t.escalated) && !CLOSED_STATUSES.includes(t.status)).length;
 
     return [
       { label: 'Incoming Tickets', value: incomingCount, sub: 'Awaiting acceptance', icon: Inbox, variant: 'default' },
       { label: 'Assigned Tickets', value: assignedCount, sub: 'Active work in progress', icon: ClipboardList, variant: 'default' },
       { label: 'Completed Tickets', value: completedCount, sub: 'Resolved & closed history', icon: CheckCircle2, variant: 'default' },
-      { label: 'SLA Breached', value: slaBreachedCount, sub: 'SLA violations detected', icon: AlertTriangle, variant: 'destructive' },
-      { label: 'Escalated Tickets', value: escalatedCount, sub: 'Critical tickets requiring review', icon: ShieldAlert, variant: 'warning' },
+      { label: 'SLA Breached', value: slaBreachedCount, sub: isManager ? 'Department SLA violations' : 'SLA violations detected', icon: AlertTriangle, variant: 'destructive' },
+      { label: 'Escalated Tickets', value: escalatedCount, sub: 'Department leadership escalation', icon: ShieldAlert, variant: 'destructive' },
     ];
-  }, [visible]);
+  }, [visible, isManager, departmentSummary]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -416,17 +432,62 @@ export default function EmployeeDashboard() {
       }
       if (categoryFilter !== 'All Category' && t.category !== categoryFilter) return false;
       if (priorityFilter !== 'All Priority' && t.priority !== priorityFilter) return false;
+      if (slaFilter !== 'All SLA') {
+        const rawSla = t.sla_status || t.slaStatus || (t.sla?.resolution?.status) || (t.sla_breached ? 'Breached' : null);
+        const normalized = rawSla ? String(rawSla).toLowerCase().replace(/[\s_-]+/g, '') : '';
+        const filterNorm = slaFilter.toLowerCase().replace(/[\s_-]+/g, '');
+        if (filterNorm === 'breached') {
+          const isBreached = normalized === 'breached' || normalized === 'violated' || Boolean(t.is_breached) || Boolean(t.sla_breached) || (!normalized && t.resolution_due_at && new Date(t.resolution_due_at) < new Date());
+          if (!isBreached) return false;
+        } else if (filterNorm === 'atrisk') {
+          const isAtRisk = normalized === 'atrisk' || Boolean(t.is_at_risk);
+          if (!isAtRisk) return false;
+        } else if (filterNorm === 'ontrack') {
+          const isBreached = normalized === 'breached' || normalized === 'violated' || Boolean(t.is_breached) || Boolean(t.sla_breached) || (!normalized && t.resolution_due_at && new Date(t.resolution_due_at) < new Date());
+          const isOnTrack = normalized === 'ontrack' || (!isBreached && !t.is_at_risk && !t.is_paused);
+          if (!isOnTrack) return false;
+        } else if (filterNorm === 'paused') {
+          const isPaused = normalized === 'paused' || Boolean(t.is_paused);
+          if (!isPaused) return false;
+        } else if (normalized !== filterNorm) {
+          return false;
+        }
+      }
       return true;
     });
-  }, [visible, search, statusFilter, categoryFilter, priorityFilter]);
+  }, [visible, search, statusFilter, categoryFilter, priorityFilter, slaFilter]);
 
   const activeTickets = useMemo(() => {
     const CLOSED_STATUSES = ['Closed', 'Resolved'];
     return visible.filter((t) => !CLOSED_STATUSES.includes(t.status));
   }, [visible]);
 
-  const urgentTicket = visible.find((t) => t.status === 'Escalated');
-  const escalatedTicket = visible.find((t) => t.priority === 'Critical' && t.status !== 'Resolved');
+  const slaBreachedTicket = useMemo(() => {
+    if (isManager && departmentSummary?.sla_breached_ticket) {
+      return departmentSummary.sla_breached_ticket;
+    }
+    const CLOSED_STATUSES = ['Closed', 'Resolved'];
+    return visible.find((t) => {
+      if (CLOSED_STATUSES.includes(t.status)) return false;
+      const s = String(t.sla_status || t.slaStatus || (t.sla?.resolution?.status) || '').toLowerCase().replace(/[\s_-]+/g, '');
+      if (s === 'breached' || s === 'violated' || Boolean(t.sla_breached) || Boolean(t.is_breached)) return true;
+      if (t.resolution_due_at && new Date(t.resolution_due_at) < new Date()) return true;
+      if (t.due_at && new Date(t.due_at) < new Date()) return true;
+      return false;
+    });
+  }, [isManager, departmentSummary, visible]);
+
+  const handleOpenSlaBreachedTicket = useCallback((t) => {
+    if (!t) return;
+    const isVisibleInQueue = visible.some((cand) => cand.id === t.id);
+    if (isVisibleInQueue) {
+      openTicketFlow(t);
+    } else {
+      handleViewDashboardTicket(t);
+    }
+  }, [visible, openTicketFlow, handleViewDashboardTicket]);
+
+  const escalatedTicket = visible.find((t) => (t.status === 'Escalated' || t.escalated) && !['Closed', 'Resolved'].includes(t.status));
 
   const goMachine = () => navigate('/employee/machine');
 
@@ -434,9 +495,9 @@ export default function EmployeeDashboard() {
     <div className="flex flex-col gap-6 font-sans text-dark-slate">
       <DashboardHeader
         greeting={(() => {
-          const displayName = effectiveUser?.first_name
-            ? `${effectiveUser.first_name}${effectiveUser.last_name ? ' ' + effectiveUser.last_name : ''}`
-            : (effectiveUser?.name || 'General Employee');
+          const displayName = (effectiveUser?.name && effectiveUser.name !== 'User')
+            ? effectiveUser.name
+            : ([effectiveUser?.first_name, effectiveUser?.last_name].filter(Boolean).join(' ') || 'Employee');
           return `Welcome back, ${displayName}!`;
         })()}
         subtitle="Here's a real-time summary of your assigned equipment support tickets."
@@ -452,63 +513,108 @@ export default function EmployeeDashboard() {
             icon={s.icon}
             variant={s.variant}
             loading={loadingTickets}
+            onClick={() => {
+              if (s.label === 'SLA Breached') {
+                setSlaFilter((prev) => (prev === 'Breached' ? 'All SLA' : 'Breached'));
+                setStatusFilter('All Status');
+              } else if (s.label === 'Escalated Tickets') {
+                setStatusFilter((prev) => (prev === 'Escalated' ? 'All Status' : 'Escalated'));
+                setSlaFilter('All SLA');
+              } else if (s.label === 'Assigned Tickets') {
+                setStatusFilter((prev) => (prev === 'In Progress' ? 'All Status' : 'In Progress'));
+                setSlaFilter('All SLA');
+              } else if (s.label === 'Completed Tickets') {
+                setStatusFilter((prev) => (prev === 'Resolved' ? 'All Status' : 'Resolved'));
+                setSlaFilter('All SLA');
+              }
+            }}
           />
         ))}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="rounded-2xl border border-red-200 bg-red-50/50 p-6 shadow-level-1">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
-            <span className="text-sm font-bold text-red-800">Ventilator Pressure Alarm Fault</span>
-          </div>
-          <p className="text-xs text-red-600 mb-4 font-medium">Immediate action required</p>
-          {urgentTicket && (
-            <button
-              type="button"
-              onClick={() => openTicketFlow(urgentTicket)}
-              className="w-full flex items-center justify-between rounded-xl border border-red-200 bg-surface px-4 py-3 shadow-xs hover:border-red-300 transition-colors text-left cursor-pointer"
-            >
-              <div>
-                <p className="text-sm font-semibold text-dark-slate">SLA Breached</p>
-                <p className="text-xs text-muted-slate">{urgentTicket.id} · {urgentTicket.facility || 'Facility #1'}</p>
-              </div>
-              <ChevronRight className="h-4 w-4 text-muted-slate" />
-            </button>
-          )}
-        </div>
-
-        <div className="rounded-2xl border border-amber-200 bg-amber-50/50 p-6 shadow-level-1">
+        <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-6 shadow-level-1">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
-              <div className="w-2.5 h-2.5 rounded-full bg-amber-500" />
-              <span className="text-sm font-bold text-amber-900">Escalated Tickets</span>
+              <div className={`w-2.5 h-2.5 rounded-full ${slaBreachedTicket ? 'bg-rose-500 animate-pulse' : 'bg-emerald-500'}`} />
+              <span className="text-sm font-bold text-rose-900">
+                {slaBreachedTicket ? 'SLA Breached Ticket' : 'SLA Compliance Status'}
+              </span>
             </div>
             <button
               type="button"
-              onClick={() => navigate('/employee/assigned')}
-              className="text-amber-800 hover:text-amber-950 p-1 cursor-pointer"
-              aria-label="Go to assigned"
+              onClick={() => navigate('/employee/assigned', { state: { filterSla: 'Breached' } })}
+              className="text-rose-800 hover:text-rose-950 p-1 cursor-pointer"
+              aria-label="View assigned tickets"
             >
               <ChevronRight className="h-4 w-4" />
             </button>
           </div>
-          <p className="text-xs text-amber-700 mb-4 font-medium">Requires senior technical review</p>
-          {escalatedTicket && (
+          <p className="text-xs text-rose-700 mb-4 font-medium">
+            {slaBreachedTicket ? (isManager ? 'Department resolution target overdue' : 'Immediate action required — resolution target overdue') : 'All assigned tickets currently within SLA timeline'}
+          </p>
+          {slaBreachedTicket ? (
+            <button
+              type="button"
+              onClick={() => handleOpenSlaBreachedTicket(slaBreachedTicket)}
+              className="w-full flex items-center justify-between rounded-xl border border-rose-200 bg-surface px-4 py-3 shadow-xs hover:border-rose-300 transition-colors text-left cursor-pointer"
+            >
+              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                <div className="w-2 h-2 bg-rose-500 rounded-full shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-dark-slate truncate">{slaBreachedTicket.title}</p>
+                  <p className="text-xs text-muted-slate truncate">{slaBreachedTicket.id} · {slaBreachedTicket.facility || slaBreachedTicket.equipment || 'On-site'}</p>
+                </div>
+              </div>
+              <ChevronRight className="h-4 w-4 text-muted-slate shrink-0 ml-2" />
+            </button>
+          ) : (
+            <div className="rounded-xl border border-dashed border-rose-200 bg-white/50 p-3 text-center text-xs text-rose-700">
+              No tickets currently breaching SLA.
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-6 shadow-level-1">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <div className={`w-2.5 h-2.5 rounded-full ${escalatedTicket ? 'bg-rose-600 animate-pulse' : 'bg-slate-400'}`} />
+              <span className="text-sm font-bold text-rose-950">Escalated Tickets</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate('/employee/assigned', { state: { filterStatus: 'Escalated' } })}
+              className="text-rose-800 hover:text-rose-950 p-1 cursor-pointer"
+
+              aria-label="Go to escalated tickets"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+          <p className="text-xs text-rose-800 mb-4 font-medium truncate">
+            {escalatedTicket?.escalation_reason ? `Reason: "${escalatedTicket.escalation_reason}"` : 'Requires department leadership review and oversight'}
+          </p>
+          {escalatedTicket ? (
             <button
               type="button"
               onClick={() => openTicketFlow(escalatedTicket)}
-              className="w-full flex items-center justify-between rounded-xl border border-amber-200 bg-surface px-4 py-3 shadow-xs hover:border-amber-300 transition-colors text-left cursor-pointer"
+              className="w-full flex items-center justify-between rounded-xl border border-rose-200 bg-surface px-4 py-3 shadow-xs hover:border-rose-300 transition-colors text-left cursor-pointer"
             >
-              <div className="flex items-center gap-2.5">
-                <div className="w-2 h-2 bg-red-500 rounded-full shrink-0" />
-                <div>
-                  <p className="text-sm font-semibold text-dark-slate">{escalatedTicket.title}</p>
-                  <p className="text-xs text-muted-slate">{escalatedTicket.id} · {escalatedTicket.facility || 'Facility #1'}</p>
+              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                <Badge variant="destructive" className="shrink-0 text-[10px]">
+                  Escalated
+                </Badge>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-dark-slate truncate">{escalatedTicket.title}</p>
+                  <p className="text-xs text-muted-slate truncate">{escalatedTicket.id} · {escalatedTicket.facility || escalatedTicket.equipment || 'Direct Leadership Escalation'}</p>
                 </div>
               </div>
-              <ChevronRight className="h-4 w-4 text-muted-slate" />
+              <ChevronRight className="h-4 w-4 text-muted-slate shrink-0 ml-2" />
             </button>
+          ) : (
+            <div className="rounded-xl border border-dashed border-rose-200 bg-white/50 p-3 text-center text-xs text-rose-700">
+              No tickets currently escalated to leadership.
+            </div>
           )}
         </div>
       </div>
@@ -548,6 +654,15 @@ export default function EmployeeDashboard() {
                 className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
               >
                 {['All Status', 'Open', 'In Progress', 'Escalated', 'Pending', 'Pending Reassign', 'On Hold'].map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              <select
+                value={slaFilter}
+                onChange={(e) => setSlaFilter(e.target.value)}
+                className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+              >
+                {['All SLA', 'Breached', 'At Risk', 'On Track', 'Paused'].map((s) => (
                   <option key={s} value={s}>{s}</option>
                 ))}
               </select>

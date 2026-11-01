@@ -104,6 +104,7 @@ export default function EmployeeAssigned() {
   const [loadError, setLoadError] = useState('');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All Status');
+  const [slaFilter, setSlaFilter] = useState(location.state?.filterSla || 'All SLA');
   const [categoryFilter, setCategoryFilter] = useState('All Category');
   const [priorityFilter, setPriorityFilter] = useState('All Priority');
   const [sortPriority, setSortPriority] = useState('Priority');
@@ -169,6 +170,17 @@ export default function EmployeeAssigned() {
       }
     }
   }, [location.state, tickets]);
+
+  useEffect(() => {
+    if (location.state?.filterSla) {
+      setSlaFilter(location.state.filterSla);
+      setIncomingTab('all');
+    }
+    if (location.state?.filterStatus) {
+      setStatusFilter(location.state.filterStatus);
+      setIncomingTab('all');
+    }
+  }, [location.state]);
 
 
 
@@ -254,6 +266,27 @@ export default function EmployeeAssigned() {
 
       if (categoryFilter !== 'All Category' && t.category !== categoryFilter) return false;
       if (priorityFilter !== 'All Priority' && t.priority !== priorityFilter) return false;
+      if (slaFilter !== 'All SLA') {
+        const rawSla = t.sla_status || t.slaStatus || (t.sla?.resolution?.status) || (t.sla_breached ? 'Breached' : null);
+        const normalized = rawSla ? String(rawSla).toLowerCase().replace(/[\s_-]+/g, '') : '';
+        const filterNorm = slaFilter.toLowerCase().replace(/[\s_-]+/g, '');
+        if (filterNorm === 'breached') {
+          const isBreached = normalized === 'breached' || normalized === 'violated' || Boolean(t.is_breached) || Boolean(t.sla_breached) || (!normalized && t.resolution_due_at && new Date(t.resolution_due_at) < new Date());
+          if (!isBreached) return false;
+        } else if (filterNorm === 'atrisk') {
+          const isAtRisk = normalized === 'atrisk' || Boolean(t.is_at_risk);
+          if (!isAtRisk) return false;
+        } else if (filterNorm === 'ontrack') {
+          const isBreached = normalized === 'breached' || normalized === 'violated' || Boolean(t.is_breached) || Boolean(t.sla_breached) || (!normalized && t.resolution_due_at && new Date(t.resolution_due_at) < new Date());
+          const isOnTrack = normalized === 'ontrack' || (!isBreached && !t.is_at_risk && !t.is_paused);
+          if (!isOnTrack) return false;
+        } else if (filterNorm === 'paused') {
+          const isPaused = normalized === 'paused' || Boolean(t.is_paused);
+          if (!isPaused) return false;
+        } else if (normalized !== filterNorm) {
+          return false;
+        }
+      }
       if (q) {
         const cleanQ = q.trim().toLowerCase();
         const searchBlob = buildEmployeeTicketSearchString(t);
@@ -278,7 +311,7 @@ export default function EmployeeAssigned() {
     }
 
     return list;
-  }, [tickets, search, incomingTab, statusFilter, categoryFilter, priorityFilter, sortPriority, typeFilter]);
+  }, [tickets, search, incomingTab, statusFilter, slaFilter, categoryFilter, priorityFilter, sortPriority, typeFilter]);
 
   const handleAcceptAssignment = useCallback(async (id) => {
     const ticketObj = tickets.find((t) => t.id === id);
@@ -519,6 +552,15 @@ export default function EmployeeAssigned() {
             ))}
           </select>
           <select
+            value={slaFilter}
+            onChange={(e) => setSlaFilter(e.target.value)}
+            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+          >
+            {['All SLA', 'Breached', 'At Risk', 'On Track', 'Paused'].map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+          <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
             className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
@@ -635,7 +677,7 @@ export default function EmployeeAssigned() {
                       {(() => {
                         const rawSla = t.sla_status || t.slaStatus || (t.sla_breached ? 'Breached' : null);
                         const normalized = rawSla ? String(rawSla).toLowerCase().replace(/[\s_-]+/g, '') : '';
-                        if (normalized === 'breached' || normalized === 'violated') {
+                        if (normalized === 'breached' || normalized === 'violated' || Boolean(t.is_breached) || (!normalized && t.resolution_due_at && new Date(t.resolution_due_at) < new Date())) {
                           return (
                             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
                               <AlertTriangle className="h-2.5 w-2.5 text-rose-600 shrink-0" />

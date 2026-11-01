@@ -51,7 +51,8 @@ const renderSlaBadge = (ticket) => {
     ? ticket.time_remaining_minutes
     : null;
 
-  if (status === 'breached') {
+  const isBreached = status === 'breached' || status === 'violated' || Boolean(ticket.is_breached) || Boolean(ticket.sla_breached) || (!status && ticket.resolution_due_at && new Date(ticket.resolution_due_at) < new Date());
+  if (isBreached) {
     return (
       <div className="flex flex-col gap-0.5">
         <span
@@ -209,6 +210,17 @@ export default function EmployeeMachine() {
     }
   }, [location.state, tickets]);
 
+  useEffect(() => {
+    if (location.state?.filterSla) {
+      setSlaFilter(location.state.filterSla);
+      setAssignedTab('all');
+    }
+    if (location.state?.filterStatus) {
+      setStatusFilter(location.state.filterStatus);
+      setAssignedTab('all');
+    }
+  }, [location.state]);
+
   const handleRealtimeRefresh = useCallback(() => {
     clearEmployeeTicketsCache();
     loadTickets({ forceRefresh: true });
@@ -286,6 +298,10 @@ export default function EmployeeMachine() {
         const targetSla = slaFilter.toLowerCase().replace(/[\s_-]+/g, '');
         const raw = t.sla_status || t.slaStatus || (t.sla?.resolution?.status) || '';
         const norm = String(raw).toLowerCase().replace(/[\s_-]+/g, '');
+        if (targetSla === 'breached') {
+          const isBreached = norm === 'breached' || norm === 'violated' || Boolean(t.is_breached) || Boolean(t.sla_breached) || (!norm && t.resolution_due_at && new Date(t.resolution_due_at) < new Date());
+          if (!isBreached) return false;
+        } else
         if (targetSla === 'ontrack') {
           if (norm !== 'ontrack' && norm !== 'compliant') return false;
         } else if (norm !== targetSla) {

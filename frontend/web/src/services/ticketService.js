@@ -826,9 +826,10 @@ const fetchEmployeeAssignedTickets = async ({ employeeEmail }) => {
       },
     });
     const tickets = response.data?.tickets ?? [];
+    const departmentSummary = response.data?.department_summary ?? null;
 
     const overrides = getEmployeeOverrides();
-    return tickets.map((t) => {
+    const mapped = tickets.map((t) => {
       const { status: _overrideStatus, ...overrideFields } = overrides[t.id] || {};
 
       return {
@@ -836,6 +837,12 @@ const fetchEmployeeAssignedTickets = async ({ employeeEmail }) => {
         ...overrideFields,
       };
     });
+
+    if (departmentSummary) {
+      mapped.department_summary = departmentSummary;
+    }
+
+    return mapped;
   } catch (error) {
     console.warn('Failed to fetch assigned tickets from ticket-service:', error);
     throw error;

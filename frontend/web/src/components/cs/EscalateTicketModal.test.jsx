@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import EscalateTicketModal from './EscalateTicketModal';
 
 describe('EscalateTicketModal Component Tests', () => {
@@ -113,6 +113,51 @@ describe('EscalateTicketModal Component Tests', () => {
     expect(screen.queryByText('Reymie Gonzaga')).toBeNull();
   });
 
+  it('allows switching to IT department tab to escalate to IT Manager Ejay Detera', async () => {
+    const handleConfirmEscalate = vi.fn().mockResolvedValue(true);
+
+    render(
+      <EscalateTicketModal
+        isOpen={true}
+        onClose={vi.fn()}
+        ticket={serviceTicket}
+        employees={mockEmployees}
+        onConfirmEscalate={handleConfirmEscalate}
+      />
+    );
+
+    // Initially shows Service Manager
+    expect(screen.getByText('Reymie Gonzaga')).toBeDefined();
+    expect(screen.queryByText('Ejay Detera')).toBeNull();
+
+    // Click 'IT' department tab button
+    const itButtons = screen.getAllByRole('button', { name: /^IT$/i });
+    fireEvent.click(itButtons[0]);
+
+    // Now Ejay Detera (IT Manager) should be visible and Reymie Gonzaga should be gone
+    expect(screen.getByText('Ejay Detera')).toBeDefined();
+    expect(screen.queryByText('Reymie Gonzaga')).toBeNull();
+
+    // Fill escalation reason
+    const textarea = screen.getByPlaceholderText(/Explain why this ticket is being escalated/i);
+    fireEvent.change(textarea, { target: { value: 'Requires infrastructure server reboot' } });
+
+    // Submit form
+    const submitBtn = screen.getByRole('button', { name: /Confirm Escalation/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(handleConfirmEscalate).toHaveBeenCalledTimes(1);
+      expect(handleConfirmEscalate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetEmployee: expect.objectContaining({ id: 1140, name: 'Ejay Detera' }),
+          reason: 'Requires infrastructure server reboot',
+          categoryType: 'it',
+        })
+      );
+    });
+  });
+
   it('displays blocked banner when no manager exists for the ticket department', () => {
     const facilitiesTicket = {
       id: 103,
@@ -135,5 +180,34 @@ describe('EscalateTicketModal Component Tests', () => {
 
     // Banner informing user that no Facilities manager was found
     expect(screen.getByText(/Blocked Escalation: No Facilities Manager Found/i)).toBeDefined();
+  });
+
+  it('blocks re-escalation and disables confirm button when ticket is already escalated', () => {
+    const escalatedTicket = {
+      id: 104,
+      ticket_number: 'TCK-2026-00104',
+      title: 'Already escalated server outage',
+      category: 'IT Hardware & Software',
+      department: 'IT',
+      status: 'Escalated',
+    };
+
+    render(
+      <EscalateTicketModal
+        isOpen={true}
+        onClose={vi.fn()}
+        ticket={escalatedTicket}
+        employees={mockEmployees}
+        onConfirmEscalate={vi.fn()}
+      />
+    );
+
+    // Banner informing user that ticket is already escalated
+    expect(screen.getByText(/Ticket Already Escalated/i)).toBeDefined();
+    expect(screen.getByText(/This ticket has already been escalated to department leadership/i)).toBeDefined();
+
+    // Submit button should be disabled
+    const submitBtn = screen.getByRole('button', { name: /Confirm Escalation/i });
+    expect(submitBtn.hasAttribute('disabled')).toBe(true);
   });
 });

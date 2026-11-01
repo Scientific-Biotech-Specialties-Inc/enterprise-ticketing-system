@@ -17,11 +17,16 @@ class Employee extends Authenticatable
 
     protected $fillable = [
         'email',
+        'phone_number',
         'password_hash',
         'first_name',
         'last_name',
         'role',
+        'position_level',
+        'technical_role',
         'department',
+        'branch',
+        'branch_id',
         'is_active',
         'failed_login_count',
         'locked_until',
@@ -34,6 +39,10 @@ class Employee extends Authenticatable
         'password_hash',
     ];
 
+    protected $appends = [
+        'name',
+    ];
+
     protected $casts = [
         'is_active' => 'boolean',
         'failed_login_count' => 'integer',
@@ -42,6 +51,12 @@ class Employee extends Authenticatable
         'last_seen_at' => 'datetime',
         'password_change_at' => 'datetime',
     ];
+
+    public function getNameAttribute(): string
+    {
+        $fullName = trim("{$this->first_name} {$this->last_name}");
+        return $fullName !== '' ? $fullName : ($this->email ?? 'Employee');
+    }
 
     public function getAuthPassword()
     {

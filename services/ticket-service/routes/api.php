@@ -92,6 +92,12 @@ Route::get('/employees/filter-options', function (Request $request) {
 });
 
 Route::middleware('auth.subsystem')->group(function () {
+    // ─── Admin Branch Dashboard & Reports ─────────────────────────────────────
+    Route::get('/admin-dashboard', [TicketDashboardController::class, 'adminDashboard'])->middleware('no-cache');
+    Route::get('/admin/dashboard', [TicketDashboardController::class, 'adminDashboard'])->middleware('no-cache');
+    Route::get('/admin-reports', [TicketDashboardController::class, 'adminReports'])->middleware('no-cache');
+    Route::get('/admin/reports', [TicketDashboardController::class, 'adminReports'])->middleware('no-cache');
+
     // ─── Employee Assignment Forwarding ────────────────────────────────────────
     Route::match(['post', 'patch'], '/tickets/{ticketId}/accept', function (Request $request, $ticketId) {
         $token = $request->bearerToken();

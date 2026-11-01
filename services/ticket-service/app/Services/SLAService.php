@@ -1011,39 +1011,41 @@ class SLAService
             );
         }
 
-        // Notify designated Department Manager for this ticket (AC-9)
-        $manager = $this->resolveDepartmentManagerForTicket($ticket);
-        if ($manager && !in_array((int) $manager->emp_id, $assignedEmpIds, true)) {
-            $mgrTitle = "Department SLA Breach Alert: {$ticketRef}";
-            $mgrMessage = "Manager Alert: Ticket {$ticketRef}: \"{$ticketTitle}\" has breached its resolution SLA deadline ({$overdueDuration}). Immediate departmental intervention required.";
-            $notificationService->notifyRecipient(
-                (int) $manager->emp_id,
-                'employee',
-                $mgrTitle,
-                $mgrMessage,
-                $ticketId,
-                array_merge($notificationData, [
-                    'is_manager_alert' => true,
-                    'manager_name' => $manager->first_name . ' ' . $manager->last_name,
-                ]),
-                'overdue_sla_breach'
-            );
+        // Notify designated Department Manager(s) for this ticket (AC-9)
+        $managers = $this->resolveDepartmentManagersForTicket($ticket);
+        foreach ($managers as $manager) {
+            if ($manager && !in_array((int) $manager->emp_id, $assignedEmpIds, true)) {
+                $mgrTitle = "Department SLA Breach Alert: {$ticketRef}";
+                $mgrMessage = "Manager Alert: Ticket {$ticketRef}: \"{$ticketTitle}\" has breached its resolution SLA deadline ({$overdueDuration}). Immediate departmental intervention required.";
+                $notificationService->notifyRecipient(
+                    (int) $manager->emp_id,
+                    'employee',
+                    $mgrTitle,
+                    $mgrMessage,
+                    $ticketId,
+                    array_merge($notificationData, [
+                        'is_manager_alert' => true,
+                        'manager_name' => $manager->first_name . ' ' . $manager->last_name,
+                    ]),
+                    'overdue_sla_breach'
+                );
 
-            $notificationService->sendTicketEmail(
-                (int) $manager->emp_id,
-                $mgrTitle,
-                $mgrMessage,
-                $ticketId,
-                $ticketTitle,
-                $categoryName,
-                $priorityName,
-                'overdue_sla_breach',
-                [
-                    'customer_name' => $customerName,
-                    'sla_deadline' => $dueAt,
-                    'overdue_duration' => $overdueDuration,
-                ]
-            );
+                $notificationService->sendTicketEmail(
+                    (int) $manager->emp_id,
+                    $mgrTitle,
+                    $mgrMessage,
+                    $ticketId,
+                    $ticketTitle,
+                    $categoryName,
+                    $priorityName,
+                    'overdue_sla_breach',
+                    [
+                        'customer_name' => $customerName,
+                        'sla_deadline' => $dueAt,
+                        'overdue_duration' => $overdueDuration,
+                    ]
+                );
+            }
         }
 
         // Broadcast real-time change
@@ -1274,7 +1276,160 @@ class SLAService
     /**
      * Resolve the designated department manager for a ticket (AC-9).
      */
+    public function resolveDepartmentManagersForTicket($ticket): array
+    {
+        $categoryName = '';
+        if (!empty($ticket->problem_category_ID)) {
+            $categoryName = (string) (DB::table('problem_categories')->where('problem_category_ID', $ticket->problem_category_ID)->value('category_name') ?? '');
+        }
+        $catLower = strtolower($categoryName . ' ' . ($ticket->title ?? '') . ' ' . ($ticket->description ?? ''));
+
+        // Check assigned employee's department or ticket department
+        $assignedDept = '';
+        if (!empty($ticket->assigned_to)) {
+            $assignedDept = (string) (DB::table('employees')->where('emp_id', $ticket->assigned_to)->value('department') ?? '');
+        }
+
+        $hasPosLevel = \Illuminate\Support\Facades\Schema::hasColumn('employees', 'position_level');
+
+        $targetDept = $assignedDept;
+        if (empty($targetDept) && !empty($ticket->department_id)) {
+            $targetDept = (string) (DB::table('departments')->where('id', $ticket->department_id)->value('name') ?? '');
+        }
+
+        $managers = collect();
+
+        if (!empty($targetDept)) {
+            $directManagers = DB::table('employees')
+                ->whereRaw('LOWER(department) = ?', [strtolower(trim($targetDept))])
+                ->where(function ($q) use ($hasPosLevel) {
+                    if ($hasPosLevel) {
+                        $q->whereIn(DB::raw('LOWER(COALESCE(position_level, ""))'), ['manager', 'lead', 'senior'])
+                          ->orWhereRaw('LOWER(COALESCE(role, "")) LIKE ?', ['%manager%'])
+                          ->orWhereRaw('LOWER(COALESCE(role, "")) LIKE ?', ['%lead%']);
+                    } else {
+                        $q->whereRaw('LOWER(COALESCE(role, "")) LIKE ?', ['%manager%'])
+                          ->orWhereRaw('LOWER(COALESCE(role, "")) LIKE ?', ['%lead%']);
+                    }
+                })
+                ->orderByRaw("CASE 
+                    WHEN LOWER(COALESCE(position_level, '')) = 'manager' THEN 1 
+                    WHEN LOWER(COALESCE(position_level, '')) = 'lead' THEN 2 
+                    WHEN LOWER(COALESCE(position_level, '')) = 'senior' THEN 3 
+                    ELSE 4 END")
+                ->get();
+
+            if ($directManagers->isNotEmpty()) {
+                $managers = $managers->merge($directManagers);
+            }
+        }
+
+        $fullContext = strtolower($catLower . ' ' . $assignedDept);
+
+        $isIT = (bool) preg_match('/\b(it|information technology|software|network|system|server|database|computer|login|password|wifi|bug|api)\b/i', $fullContext);
+        $isCS = (bool) preg_match('/\b(customer service|customer support|cs|inquiry|billing|account|client)\b/i', $fullContext);
+        $isService = (bool) preg_match('/\b(service|biomedical|machine|hardware|device|calibration|repair|equipment|imaging|clinical|maintenance|radiology|facilities)\b/i', $fullContext);
+
+        if ($isIT && !$isCS && !$isService) {
+            $deptType = 'it';
+        } elseif ($isCS && !$isService && !$isIT) {
+            $deptType = 'cs';
+        } else {
+            $deptType = $isIT ? 'it' : 'service';
+        }
+
+        if (!empty($assignedDept)) {
+            $adLower = strtolower($assignedDept);
+            if (str_contains($adLower, 'customer')) {
+                $deptType = 'cs';
+            } elseif (str_contains($adLower, 'it') || str_contains($adLower, 'network')) {
+                $deptType = 'it';
+            } elseif (str_contains($adLower, 'service') || str_contains($adLower, 'biomedical') || str_contains($adLower, 'radiology') || str_contains($adLower, 'facilities')) {
+                $deptType = 'service';
+            }
+        }
+
+        $query = DB::table('employees')
+            ->where(function ($q) use ($hasPosLevel) {
+                if ($hasPosLevel) {
+                    $q->whereRaw('LOWER(COALESCE(position_level, "")) = ?', ['manager'])
+                      ->orWhereRaw('LOWER(COALESCE(position_level, "")) = ?', ['lead'])
+                      ->orWhereRaw('LOWER(COALESCE(role, "")) LIKE ?', ['%manager%']);
+                } else {
+                    $q->whereRaw('LOWER(COALESCE(role, "")) LIKE ?', ['%manager%'])
+                      ->orWhereRaw('LOWER(COALESCE(role, "")) LIKE ?', ['%lead%']);
+                }
+            });
+
+        if ($deptType === 'it') {
+            $query->where(function ($q) {
+                $q->whereRaw('LOWER(COALESCE(department, "")) LIKE ?', ['%it%'])
+                  ->orWhereRaw('LOWER(COALESCE(department, "")) LIKE ?', ['%network%'])
+                  ->orWhereRaw('LOWER(COALESCE(role, "")) LIKE ?', ['%it%']);
+            });
+        } elseif ($deptType === 'cs') {
+            $query->where(function ($q) {
+                $q->whereRaw('LOWER(COALESCE(department, "")) LIKE ?', ['%customer%'])
+                  ->orWhereRaw('LOWER(COALESCE(role, "")) LIKE ?', ['%customer%']);
+            });
+        } else {
+            $query->where(function ($q) {
+                $q->where(function ($sq) {
+                    $sq->whereRaw('LOWER(COALESCE(department, "")) LIKE ?', ['%service%'])
+                       ->orWhereRaw('LOWER(COALESCE(department, "")) LIKE ?', ['%biomedical%'])
+                       ->orWhereRaw('LOWER(COALESCE(department, "")) LIKE ?', ['%radiology%'])
+                       ->orWhereRaw('LOWER(COALESCE(department, "")) LIKE ?', ['%facilities%']);
+                })->whereRaw('LOWER(COALESCE(department, "")) NOT LIKE ?', ['%customer%'])
+                  ->whereRaw('LOWER(COALESCE(role, "")) NOT LIKE ?', ['%customer%']);
+            });
+        }
+
+        if ($hasPosLevel) {
+            $query->orderByRaw("CASE WHEN LOWER(COALESCE(position_level, '')) = 'manager' THEN 1 WHEN LOWER(COALESCE(position_level, '')) = 'lead' THEN 2 ELSE 3 END");
+        }
+
+        $deptManagers = $query->get();
+        if ($deptManagers->isNotEmpty()) {
+            $managers = $managers->merge($deptManagers);
+        }
+
+        // Fallback to Configuration Service
+        try {
+            $configUrl = env('CONFIGURATION_SERVICE_URL', 'http://configuration-service:8000');
+            $res = \Illuminate\Support\Facades\Http::timeout(2)->get("{$configUrl}/api/ticket-configurations/department_managers");
+            if ($res->successful()) {
+                $val = $res->json('value') ?? $res->json();
+                if (!empty($val[$deptType]['id'])) {
+                    $cfgManager = DB::table('employees')->where('emp_id', $val[$deptType]['id'])->first();
+                    if ($cfgManager) {
+                        $managers->push($cfgManager);
+                    }
+                }
+            }
+        } catch (\Throwable $e) {}
+
+        if ($managers->isEmpty()) {
+            $defaultMgrId = match ($deptType) {
+                'it' => 1038,
+                'cs' => 1,
+                default => 1028,
+            };
+            $defManager = DB::table('employees')->where('emp_id', $defaultMgrId)->first();
+            if ($defManager) {
+                $managers->push($defManager);
+            }
+        }
+
+        return $managers->unique('emp_id')->values()->all();
+    }
+
     public function resolveDepartmentManagerForTicket($ticket): ?object
+    {
+        $managers = $this->resolveDepartmentManagersForTicket($ticket);
+        return !empty($managers) ? $managers[0] : null;
+    }
+
+    protected function unusedOldResolve($ticket): ?object
     {
         $categoryName = '';
         if (!empty($ticket->problem_category_ID)) {

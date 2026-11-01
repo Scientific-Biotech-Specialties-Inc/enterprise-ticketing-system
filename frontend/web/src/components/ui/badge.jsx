@@ -72,7 +72,7 @@ export function getStatusBadgeVariant(status, tier = "medium") {
   if (s === "closed" || s === "inactive" || s === "archived") {
     return `${prefix}muted`;
   }
-  if (s === "rejected" || s === "cancelled" || s === "canceled" || s === "error" || s === "high" || s === "urgent" || s === "breached") {
+  if (s === "rejected" || s === "cancelled" || s === "canceled" || s === "error" || s === "high" || s === "urgent" || s === "breached" || s === "escalated") {
     return `${prefix}destructive`;
   }
   if (s === "medium" || s === "cs" || s === "admin") {

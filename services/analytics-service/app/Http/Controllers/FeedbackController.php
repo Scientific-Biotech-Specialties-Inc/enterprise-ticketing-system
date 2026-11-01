@@ -300,13 +300,44 @@ class FeedbackController extends Controller
     /**
      * Get aggregate CSAT statistics.
      */
-    public function csatStats()
+    public function csatStats(Request $request)
     {
-        $avgScore = CustomerFeedback::avg('overall_rating') ?? 4.85;
-        $totalReviews = CustomerFeedback::count();
+        $query = CustomerFeedback::query();
+
+        if ($request->filled('date_from')) {
+            $query->where('created_at', '>=', \Carbon\Carbon::parse($request->query('date_from'))->startOfDay());
+        }
+        if ($request->filled('date_to')) {
+            $query->where('created_at', '<=', \Carbon\Carbon::parse($request->query('date_to'))->endOfDay());
+        }
+
+        if ($request->filled('ticket_ids')) {
+            $tIds = is_array($request->query('ticket_ids')) 
+                ? $request->query('ticket_ids') 
+                : explode(',', $request->query('ticket_ids'));
+            $tIds = array_filter(array_map('trim', $tIds));
+            if (!empty($tIds)) {
+                $query->whereIn('ticket_id', $tIds);
+            }
+        }
+
+        $avgScore = (clone $query)->avg('overall_rating');
+        $totalReviews = (clone $query)->count();
+        $satisfiedCount = (clone $query)->where('overall_rating', '>=', 4)->count();
+        $satisfactionPercentage = $totalReviews > 0 ? round(($satisfiedCount / $totalReviews) * 100, 1) : 100.0;
 
         // Calculate monthly trend over last 6 periods
-        $trends = CustomerFeedback::select(
+        $trendsQuery = CustomerFeedback::query();
+        if ($request->filled('ticket_ids')) {
+            $tIds = is_array($request->query('ticket_ids')) 
+                ? $request->query('ticket_ids') 
+                : explode(',', $request->query('ticket_ids'));
+            $tIds = array_filter(array_map('trim', $tIds));
+            if (!empty($tIds)) {
+                $trendsQuery->whereIn('ticket_id', $tIds);
+            }
+        }
+        $trends = $trendsQuery->select(
             DB::raw("DATE_FORMAT(created_at, '%b %Y') as month"),
             DB::raw("AVG(overall_rating) as csat")
         )
@@ -318,8 +349,9 @@ class FeedbackController extends Controller
         return response()->json([
             'status' => 'success',
             'data' => [
-                'average_score' => round((float) $avgScore, 2),
+                'average_score' => $avgScore !== null ? round((float) $avgScore, 2) : 5.0,
                 'total_reviews' => $totalReviews,
+                'satisfaction_percentage' => $satisfactionPercentage,
                 'trends' => $trends,
             ],
         ]);

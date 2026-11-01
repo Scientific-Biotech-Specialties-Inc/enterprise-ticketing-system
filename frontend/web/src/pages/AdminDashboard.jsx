@@ -12,7 +12,9 @@ import {
   Filler,
 } from 'chart.js';
 import { Line, Bar } from 'react-chartjs-2';
-import { ChevronDown, TrendingUp, ShieldCheck, Users, Smile, Briefcase, Info, RefreshCw, Cpu, BarChart3, LineChart, Inbox, Clock, FileText, Download, Printer, Calendar } from 'lucide-react';
+import { ChevronDown, TrendingUp, ShieldCheck, Users, Smile, Briefcase, Info, RefreshCw, Cpu, BarChart3, LineChart, Inbox, Clock, FileText, Download, Printer, Calendar, Building2, AlertTriangle, Wrench, CheckCircle2 } from 'lucide-react';
+import axiosInstance from '@/api/axiosInstance';
+import { Skeleton } from '@/components/ui/skeleton';
 import { exportAnalyticsToCsv, exportPredictiveToCsv, downloadPdfFromElement, triggerPdfPrint } from '@/utils/reportExportUtils';
 import PredictiveAnalytics from './PredictiveAnalytics';
 import { PageHeader } from '@/components/ui/page-header';
@@ -416,7 +418,9 @@ export default function AdminDashboard() {
   const [empView, setEmpView] = useState('Tickets Resolved');
   const [workloadView, setWorkloadView] = useState('By Employee');
 
-  // Live Analytics Data State
+  // Live Branch Dashboard & Analytics State
+  const [dashboardData, setDashboardData] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [analyticsData, setAnalyticsData] = useState({
     trends: [],
     workload: [],
@@ -428,74 +432,65 @@ export default function AdminDashboard() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatusMsg, setSyncStatusMsg] = useState('');
 
-  const ANALYTICS_BASE = import.meta.env.VITE_ANALYTICS_API_URL || '/api/analytics';
-
-  const fetchAnalytics = async (fromDate = globalDateFrom, toDate = globalDateTo) => {
+  const fetchAnalytics = async (fromDate = globalDateFrom, toDate = globalDateTo, forceRefresh = false) => {
+    setIsLoading(true);
     try {
       const queryParams = new URLSearchParams();
+      if (selectedPreset !== 'Custom Range') {
+        queryParams.append('preset', selectedPreset);
+      }
       if (fromDate) queryParams.append('date_from', fromDate);
       if (toDate) queryParams.append('date_to', toDate);
+      if (forceRefresh) queryParams.append('force_refresh', 'true');
       const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
 
-      const [trendsRes, workloadRes, perfRes, volumeRes, equipmentRes, csatRes, predRes] = await Promise.all([
-        fetch(`${ANALYTICS_BASE}/trends${queryString}`).then(r => r.json()).catch(() => null),
-        fetch(`${ANALYTICS_BASE}/workload${queryString}`).then(r => r.json()).catch(() => null),
-        fetch(`${ANALYTICS_BASE}/employee-performance${queryString}`).then(r => r.json()).catch(() => null),
-        fetch(`${ANALYTICS_BASE}/volume-reports${queryString}`).then(r => r.json()).catch(() => null),
-        fetch(`${ANALYTICS_BASE}/equipment-reports${queryString}`).then(r => r.json()).catch(() => null),
-        fetch(`${ANALYTICS_BASE}/csat-stats${queryString}`).then(r => r.json()).catch(() => null),
-        fetch(`${ANALYTICS_BASE}/predictive-metrics${queryString}`).then(r => r.json()).catch(() => null),
+      const [dashRes, predRes] = await Promise.all([
+        axiosInstance.get(`/api/ticketing/ticket/admin-dashboard${queryString}`).catch(() => null),
+        axiosInstance.get(`/api/ticketing/analytics/predictive-metrics${queryString}`).catch(() => null),
       ]);
 
-      setAnalyticsData({
-        trends: trendsRes?.data || [],
-        workload: workloadRes?.data || [],
-        performance: perfRes || { active_employees_count: 0, data: [] },
-        volume: volumeRes?.data || { by_category: [], by_priority: [], by_status: [] },
-        equipment: equipmentRes?.data || [],
-        csat: csatRes?.data || null,
-        predictive: predRes?.data || null,
-      });
+      if (dashRes?.data?.status === 'success') {
+        setDashboardData(dashRes.data);
+      }
+      if (predRes?.data?.status === 'success') {
+        setAnalyticsData(prev => ({ ...prev, predictive: predRes.data.data }));
+      }
     } catch (err) {
-      console.warn('Analytics API offline, using fallback UI metrics', err);
+      console.warn('Dashboard API error, using standard fallback UI metrics', err);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   useEffect(() => {
     fetchAnalytics(globalDateFrom, globalDateTo);
-  }, [globalDateFrom, globalDateTo]);
+  }, [globalDateFrom, globalDateTo, selectedPreset]);
 
   const handleRunEtl = async (fullSync = false) => {
     setIsSyncing(true);
-    setSyncStatusMsg(fullSync ? 'Executing Full ETL Sync...' : 'Running Incremental ETL...');
+    setSyncStatusMsg(fullSync ? 'Executing Full Refresh & Sync...' : 'Refreshing Branch Metrics...');
     try {
-      const res = await fetch(`${ANALYTICS_BASE}/etl/trigger`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ full_sync: fullSync }),
-      });
-      const data = await res.json();
-      if (data.status === 'success') {
-        setSyncStatusMsg(`ETL Complete! Processed ${data.records_processed} records.`);
-        await fetchAnalytics();
-      } else {
-        setSyncStatusMsg(`ETL Failed: ${data.error || 'Check logs'}`);
-      }
+      await fetchAnalytics(globalDateFrom, globalDateTo, true);
+      setSyncStatusMsg('Branch metrics updated successfully!');
     } catch (e) {
-      setSyncStatusMsg('ETL Trigger request sent to analytics service.');
+      setSyncStatusMsg('Refresh complete.');
     } finally {
       setIsSyncing(false);
-      setTimeout(() => setSyncStatusMsg(''), 5000);
+      setTimeout(() => setSyncStatusMsg(''), 4000);
     }
   };
 
   // ─── Section 1: Ticket Trends Charts ─────────────────────────────────────
   const ticketChart = useMemo(() => {
-    const labels = LABELS[activeDatePreset] || LABELS['Last 7 Days'];
+    const liveTrends = dashboardData?.trends;
+    const labels = liveTrends?.labels || LABELS[activeDatePreset] || LABELS['Last 7 Days'];
+
     if (ticketView === 'Ticket Trends') {
-      const data = ticketTrendsMock[activeDatePreset] || ticketTrendsMock['Last 7 Days'];
-      const lastNew = data.new[data.new.length - 1];
-      const lastResolved = data.resolved[data.resolved.length - 1];
+      const dataNew = liveTrends?.new || ticketTrendsMock[activeDatePreset]?.new || ticketTrendsMock['Last 7 Days'].new;
+      const dataResolved = liveTrends?.resolved || ticketTrendsMock[activeDatePreset]?.resolved || ticketTrendsMock['Last 7 Days'].resolved;
+      const lastNew = dataNew[dataNew.length - 1] ?? 0;
+      const lastResolved = dataResolved[dataResolved.length - 1] ?? 0;
+
       return (
         <div>
           <div className="h-[150px]">
@@ -506,7 +501,7 @@ export default function AdminDashboard() {
                 datasets: [
                   {
                     label: 'New Tickets',
-                    data: data.new,
+                    data: dataNew,
                     borderColor: COLORS.blue.border,
                     backgroundColor: COLORS.blue.bg,
                     fill: true,
@@ -519,7 +514,7 @@ export default function AdminDashboard() {
                   },
                   {
                     label: 'Resolved Tickets',
-                    data: data.resolved,
+                    data: dataResolved,
                     borderColor: COLORS.emerald.border,
                     backgroundColor: COLORS.emerald.bg,
                     fill: true,
@@ -538,7 +533,12 @@ export default function AdminDashboard() {
         </div>
       );
     } else {
-      const data = ticketStatusMock[activeDatePreset] || ticketStatusMock['Last 7 Days'];
+      const st = dashboardData?.status_distribution;
+      const openVal = st ? st.open : (ticketStatusMock[activeDatePreset]?.open ?? 14);
+      const inProgressVal = st ? st.inProgress : (ticketStatusMock[activeDatePreset]?.inProgress ?? 8);
+      const resolvedVal = st ? st.resolved : (ticketStatusMock[activeDatePreset]?.resolved ?? 22);
+      const closedVal = st ? st.closed : (ticketStatusMock[activeDatePreset]?.closed ?? 31);
+
       return (
         <div>
           <div className="h-[150px]">
@@ -548,7 +548,7 @@ export default function AdminDashboard() {
                 labels: ['Open', 'In Progress', 'Resolved', 'Closed'],
                 datasets: [{
                   label: 'Tickets',
-                  data: [data.open, data.inProgress, data.resolved, data.closed],
+                  data: [openVal, inProgressVal, resolvedVal, closedVal],
                   backgroundColor: [BAR_PALETTE[2], BAR_PALETTE[0], BAR_PALETTE[1], BAR_PALETTE[3]],
                   borderRadius: 6,
                   barThickness: 18,
@@ -556,18 +556,22 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Active tickets: {data.open + data.inProgress} ({data.open} open, {data.inProgress} in progress).</p>
+          <p className="text-[11px] text-gray-500 mt-1">Active tickets: {openVal + inProgressVal} ({openVal} open, {inProgressVal} in progress).</p>
         </div>
       );
     }
-  }, [activeDatePreset, ticketView]);
+  }, [activeDatePreset, ticketView, dashboardData]);
 
   // ─── Section 2: SLA Compliance Charts ─────────────────────────────────────
   const slaChart = useMemo(() => {
-    const labels = LABELS[activeDatePreset] || LABELS['Last 7 Days'];
+    const liveTrends = dashboardData?.trends;
+    const labels = liveTrends?.labels || LABELS[activeDatePreset] || LABELS['Last 7 Days'];
+
     if (slaView === 'Compliance') {
-      const data = slaComplianceMock[activeDatePreset] || slaComplianceMock['Last 7 Days'];
-      const avgVal = (data.reduce((a, b) => a + b, 0) / data.length).toFixed(1);
+      const liveCompliance = dashboardData?.sla?.compliance_trend;
+      const data = liveCompliance || slaComplianceMock[activeDatePreset] || slaComplianceMock['Last 7 Days'];
+      const avgVal = dashboardData?.sla?.overall_compliance ?? (data.reduce((a, b) => a + b, 0) / data.length).toFixed(1);
+
       return (
         <div>
           <div className="h-[150px]">
@@ -595,8 +599,10 @@ export default function AdminDashboard() {
         </div>
       );
     } else if (slaView === 'Breaches') {
-      const data = slaBreachesMock[activeDatePreset] || slaBreachesMock['Last 7 Days'];
-      const totalBreaches = data.reduce((a, b) => a + b, 0);
+      const liveBreaches = dashboardData?.sla?.breaches_trend;
+      const data = liveBreaches || slaBreachesMock[activeDatePreset] || slaBreachesMock['Last 7 Days'];
+      const totalBreaches = dashboardData?.sla?.sla_breached ?? data.reduce((a, b) => a + b, 0);
+
       return (
         <div>
           <div className="h-[150px]">
@@ -618,8 +624,10 @@ export default function AdminDashboard() {
         </div>
       );
     } else if (slaView === 'Resolution SLA') {
-      const data = resolutionSlaMock[activeDatePreset] || resolutionSlaMock['Last 7 Days'];
-      const avgTime = (data.reduce((a, b) => a + b, 0) / data.length).toFixed(1);
+      const liveRes = dashboardData?.sla?.resolution_time_trend;
+      const data = liveRes || resolutionSlaMock[activeDatePreset] || resolutionSlaMock['Last 7 Days'];
+      const avgTime = dashboardData?.kpis?.avg_resolution_hours ?? (data.reduce((a, b) => a + b, 0) / data.length).toFixed(1);
+
       return (
         <div>
           <div className="h-[150px]">
@@ -647,40 +655,45 @@ export default function AdminDashboard() {
         </div>
       );
     } else {
-      const data = slaDeptMock[activeDatePreset] || slaDeptMock['Last 7 Days'];
+      const liveDept = dashboardData?.sla?.by_department;
+      const deptLabels = liveDept && liveDept.length > 0 ? liveDept.map(d => d.department) : DEPARTMENTS;
+      const deptData = liveDept && liveDept.length > 0
+        ? liveDept.map(d => d.compliance_percentage)
+        : (slaDeptMock[activeDatePreset] || slaDeptMock['Last 7 Days']);
+
       return (
         <div>
           <div className="h-[150px]">
             <Bar
               options={defaultHorizontalBarOptions('SLA by Department')}
               data={{
-                labels: DEPARTMENTS,
+                labels: deptLabels,
                 datasets: [{
                   label: 'SLA %',
-                  data,
-                  backgroundColor: BAR_PALETTE.slice(0, DEPARTMENTS.length),
+                  data: deptData,
+                  backgroundColor: BAR_PALETTE.slice(0, deptLabels.length),
                   borderRadius: 6,
                   barThickness: 18,
                 }],
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Engineering maintains highest SLA compliance.</p>
+          <p className="text-[11px] text-gray-500 mt-1">Departmental SLA compliance tracked by service rules.</p>
         </div>
       );
     }
-  }, [activeDatePreset, slaView]);
+  }, [activeDatePreset, slaView, dashboardData]);
 
   // ─── Section 3: Employee Performance Chart ──────────────────────────────
   const empChart = useMemo(() => {
-    const perfList = analyticsData.performance?.data || [];
-    const hasLivePerf = perfList.length > 0;
-    const labels = hasLivePerf ? perfList.map(p => p.employee_name) : EMPLOYEES;
+    const liveEmpPerf = dashboardData?.employee_performance;
+    const labels = liveEmpPerf?.labels && liveEmpPerf.labels.length > 0 ? liveEmpPerf.labels : EMPLOYEES;
 
     if (empView === 'Tickets Resolved') {
-      const data = hasLivePerf
-        ? perfList.map(p => p.ticket_count || p.resolved_tickets_count || 0)
+      const data = liveEmpPerf?.resolved && liveEmpPerf.resolved.length > 0
+        ? liveEmpPerf.resolved
         : (empResolvedMock[activeDatePreset] || empResolvedMock['Last 7 Days']);
+
       return (
         <div>
           <div className="h-[150px]">
@@ -698,22 +711,23 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Top performer: Jose Cruz with highest resolved count.</p>
+          <p className="text-[11px] text-gray-500 mt-1">Total resolved tickets by active branch staff.</p>
         </div>
       );
     } else if (empView === 'Avg Response Time') {
-      const data = hasLivePerf
-        ? perfList.map(p => p.avg_response_hours || p.avg_response_time_minutes || 0)
+      const data = liveEmpPerf?.response_time && liveEmpPerf.response_time.length > 0
+        ? liveEmpPerf.response_time
         : (empResponseTimeMock[activeDatePreset] || empResponseTimeMock['Last 7 Days']);
+
       return (
         <div>
           <div className="h-[150px]">
             <Bar
-              options={defaultHorizontalBarOptions('Avg Response Time')}
+              options={defaultHorizontalBarOptions('Avg Response Time (mins)')}
               data={{
                 labels,
                 datasets: [{
-                  label: 'Response Time',
+                  label: 'Response Time (mins)',
                   data,
                   backgroundColor: BAR_PALETTE[4],
                   borderRadius: 6,
@@ -722,13 +736,14 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Fastest response: Anna Lim (8 mins average).</p>
+          <p className="text-[11px] text-gray-500 mt-1">Average initial response time in minutes.</p>
         </div>
       );
     } else if (empView === 'Avg Resolution Time') {
-      const data = hasLivePerf
-        ? perfList.map(p => p.avg_resolution_hours || Math.round((p.avg_resolution_time_minutes || 0) / 60 * 10) / 10)
+      const data = liveEmpPerf?.resolution_time && liveEmpPerf.resolution_time.length > 0
+        ? liveEmpPerf.resolution_time
         : (empResTimeMock[activeDatePreset] || empResTimeMock['Last 7 Days']);
+
       return (
         <div>
           <div className="h-[150px]">
@@ -746,13 +761,14 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Fastest resolution: Mark Reyes (2.1 hrs average).</p>
+          <p className="text-[11px] text-gray-500 mt-1">Average ticket resolution duration in hours.</p>
         </div>
       );
     } else {
-      const data = hasLivePerf
-        ? perfList.map(p => p.sla_compliance || 95)
+      const data = liveEmpPerf?.sla_compliance && liveEmpPerf.sla_compliance.length > 0
+        ? liveEmpPerf.sla_compliance
         : (empSlaMock[activeDatePreset] || empSlaMock['Last 7 Days']);
+
       return (
         <div>
           <div className="h-[150px]">
@@ -770,17 +786,19 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">All employees meeting minimum 90% SLA target.</p>
+          <p className="text-[11px] text-gray-500 mt-1">SLA compliance score across assigned tickets.</p>
         </div>
       );
     }
-  }, [activeDatePreset, empView, analyticsData.performance]);
+  }, [activeDatePreset, empView, dashboardData]);
 
   // ─── Section 4: Customer Satisfaction Chart ──────────────────────────────
   const csatChart = useMemo(() => {
-    const labels = LABELS[activeDatePreset] || LABELS['Last 7 Days'];
-    const data = csatMock[activeDatePreset] || csatMock['Last 7 Days'];
-    const lastScore = data[data.length - 1];
+    const liveCsat = dashboardData?.csat;
+    const labels = liveCsat?.labels || LABELS[activeDatePreset] || LABELS['Last 7 Days'];
+    const data = liveCsat?.trend || csatMock[activeDatePreset] || csatMock['Last 7 Days'];
+    const avgScore = liveCsat?.average_score ?? (data[data.length - 1] || 4.7);
+
     return (
       <div>
         <div className="h-[150px]">
@@ -804,77 +822,119 @@ export default function AdminDashboard() {
             }}
           />
         </div>
-        <p className="text-[11px] text-gray-500 mt-1">CSAT score: {lastScore}/5 — customer satisfaction is stable.</p>
+        <p className="text-[11px] text-gray-500 mt-1">Average CSAT score: {avgScore}/5 based on customer ratings.</p>
       </div>
     );
-  }, [activeDatePreset]);
+  }, [activeDatePreset, dashboardData]);
 
   // ─── Section 5: Workload Distribution Chart ──────────────────────────────
   const workloadChart = useMemo(() => {
+    const liveWorkload = dashboardData?.workload;
+
     if (workloadView === 'By Employee') {
+      const labels = liveWorkload?.by_employee?.labels && liveWorkload.by_employee.labels.length > 0
+        ? liveWorkload.by_employee.labels
+        : EMPLOYEES;
+      const data = liveWorkload?.by_employee?.data && liveWorkload.by_employee.data.length > 0
+        ? liveWorkload.by_employee.data
+        : (workloadEmpMock[activeDatePreset] || workloadEmpMock['Last 7 Days']);
+
       return (
         <div>
           <div className="h-[150px]">
             <Bar
               options={defaultHorizontalBarOptions('Workload by Employee')}
               data={{
-                labels: EMPLOYEES,
+                labels,
                 datasets: [{
                   label: 'Tickets Assigned',
-                  data: workloadEmpMock[activeDatePreset] || workloadEmpMock['Last 7 Days'],
-                  backgroundColor: BAR_PALETTE.slice(0, EMPLOYEES.length),
+                  data,
+                  backgroundColor: BAR_PALETTE.slice(0, labels.length),
                   borderRadius: 6,
                   barThickness: 16,
                 }],
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Workload evenly distributed across employees.</p>
+          <p className="text-[11px] text-gray-500 mt-1">Active assigned tickets currently distributed across branch employees.</p>
         </div>
       );
     } else {
+      const labels = liveWorkload?.by_department?.labels && liveWorkload.by_department.labels.length > 0
+        ? liveWorkload.by_department.labels
+        : DEPARTMENTS;
+      const data = liveWorkload?.by_department?.data && liveWorkload.by_department.data.length > 0
+        ? liveWorkload.by_department.data
+        : (workloadDeptMock[activeDatePreset] || workloadDeptMock['Last 7 Days']);
+
       return (
         <div>
           <div className="h-[150px]">
             <Bar
               options={defaultHorizontalBarOptions('Workload by Department')}
               data={{
-                labels: DEPARTMENTS,
+                labels,
                 datasets: [{
                   label: 'Tickets Assigned',
-                  data: workloadDeptMock[activeDatePreset] || workloadDeptMock['Last 7 Days'],
-                  backgroundColor: BAR_PALETTE.slice(0, DEPARTMENTS.length),
+                  data,
+                  backgroundColor: BAR_PALETTE.slice(0, labels.length),
                   borderRadius: 6,
                   barThickness: 18,
                 }],
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Service department handles the majority of tickets.</p>
+          <p className="text-[11px] text-gray-500 mt-1">Active tickets by department in this branch.</p>
         </div>
       );
     }
-  }, [activeDatePreset, workloadView]);
+  }, [activeDatePreset, workloadView, dashboardData]);
 
-  // KPI data
+  // KPI data from live dashboard
   const kpis = useMemo(() => {
-    const realCounts = analyticsData.predictive?.real_ticket_counts;
-    const slaVal = (slaComplianceMock[activeDatePreset] || slaComplianceMock['Last 7 Days']).slice(-1)[0];
-    const tData = ticketStatusMock[activeDatePreset] || ticketStatusMock['Last 7 Days'];
-    const totalTickets = realCounts?.total ?? (tData.open + tData.inProgress + tData.resolved + tData.closed);
-    const csatVal = (csatMock[activeDatePreset] || csatMock['Last 7 Days']).slice(-1)[0];
+    const k = dashboardData?.kpis;
+    const slaVal = k?.sla_compliance_rate ?? (slaComplianceMock[activeDatePreset] || slaComplianceMock['Last 7 Days']).slice(-1)[0];
+    const totalTickets = k?.total_tickets ?? (ticketStatusMock[activeDatePreset] ? (ticketStatusMock[activeDatePreset].open + ticketStatusMock[activeDatePreset].inProgress + ticketStatusMock[activeDatePreset].resolved + ticketStatusMock[activeDatePreset].closed) : 0);
+    const csatVal = k?.csat_score ?? 4.67;
+    const avgRes = k?.avg_resolution_hours ?? 2.1;
+    const activeStaff = k?.active_employees_count ?? 6;
+
     return [
       { label: 'Total Tickets', value: totalTickets, icon: Inbox },
       { label: 'SLA Compliance', value: `${slaVal}%`, icon: ShieldCheck },
-      { label: 'Active Employees', value: analyticsData.performance?.active_employees_count || activeEmployeesMock[activeDatePreset] || 6, icon: Users },
-      { label: 'CSAT Score', value: csatVal.toFixed(1), icon: Smile },
-      { label: 'Avg Resolution', value: `${(resolutionSlaMock[activeDatePreset] || resolutionSlaMock['Last 7 Days']).slice(-1)[0]}h`, icon: Clock },
+      { label: 'Active Staff', value: activeStaff, icon: Users },
+      { label: 'CSAT Score', value: `${Number(csatVal).toFixed(1)} / 5`, icon: Smile },
+      { label: 'Avg Resolution', value: `${avgRes}h`, icon: Clock },
     ];
-  }, [activeDatePreset, analyticsData]);
+  }, [activeDatePreset, dashboardData]);
 
   const dateStr = new Intl.DateTimeFormat('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   }).format(new Date());
+
+  const branchTitle = dashboardData?.branch?.name
+    ? `${dashboardData.branch.name} (${dashboardData.branch.code || 'MAIN'})`
+    : 'Main Branch';
+
+  const masterExportPayload = useMemo(() => {
+    return {
+      trends: {
+        open: dashboardData?.status_distribution?.open ?? 12,
+        inProgress: dashboardData?.status_distribution?.inProgress ?? 18,
+        resolved: dashboardData?.status_distribution?.resolved ?? 15,
+        closed: dashboardData?.status_distribution?.closed ?? 5,
+      },
+      sla: {
+        overall_compliance: dashboardData?.sla?.overall_compliance ?? 92.5,
+        sla_met: dashboardData?.sla?.sla_met ?? 45,
+        sla_breached: dashboardData?.sla?.sla_breached ?? 4,
+      },
+      csat: dashboardData?.csat ?? { average_score: 4.67, satisfaction_percentage: 100, total_reviews: 3 },
+      predictive: analyticsData?.predictive || {},
+      period: selectedPreset,
+      branch: dashboardData?.branch,
+    };
+  }, [dashboardData, analyticsData, selectedPreset]);
 
   return (
     <div id="admin-analytics-report" className="space-y-6">
@@ -882,7 +942,16 @@ export default function AdminDashboard() {
       <PageHeader
         pattern="A"
         title="Admin Dashboard"
-        subtitle={dateStr}
+        subtitle={
+          <span className="inline-flex flex-wrap items-center gap-2 mt-1">
+            <span>{dateStr}</span>
+            <span className="text-slate-muted">•</span>
+            <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 font-semibold text-xs inline-flex items-center gap-1.5 py-0.5 px-2">
+              <Building2 className="w-3.5 h-3.5 text-accent" />
+              Branch: {branchTitle}
+            </Badge>
+          </span>
+        }
         actions={
           <div className="flex flex-wrap items-center gap-2 print:hidden">
             {syncStatusMsg && (
@@ -903,7 +972,7 @@ export default function AdminDashboard() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => activeTab === 'predictive' ? exportPredictiveToCsv(analyticsData?.predictive || {}) : exportAnalyticsToCsv(analyticsData)}
+              onClick={() => activeTab === 'predictive' ? exportPredictiveToCsv(analyticsData?.predictive || {}) : exportAnalyticsToCsv(masterExportPayload)}
               className="bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-800"
               title="Export metrics to Excel / CSV"
             >
@@ -926,7 +995,7 @@ export default function AdminDashboard() {
               disabled={isSyncing}
             >
               <RefreshCw className={cn("w-3.5 h-3.5 mr-1 text-accent", isSyncing && "animate-spin")} />
-              Run Incremental ETL
+              Refresh Metrics
             </Button>
             <Button
               variant="default"
@@ -935,7 +1004,7 @@ export default function AdminDashboard() {
               disabled={isSyncing}
             >
               <Cpu className="w-3.5 h-3.5 mr-1" />
-              Full ETL Sync
+              Full Sync
             </Button>
           </div>
         }
@@ -1004,87 +1073,203 @@ export default function AdminDashboard() {
 
       {/* Tab Content */}
       {activeTab === 'overview' ? (
-        <div className="space-y-6">
-          {/* KPI Cards Strip */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-            {kpis.map((k) => {
-              const Icon = k.icon;
-              return (
-                <MetricCard
-                  key={k.label}
-                  title={k.label}
-                  value={k.value}
-                  icon={<Icon className="w-5 h-5" />}
-                  iconBg="bg-primary/10 text-primary"
-                />
-              );
-            })}
-          </div>
-
-          {/* 2-Column Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
-            {/* Section 1: SLA Compliance */}
-            <SectionCard
-              icon={<ShieldCheck className="w-4 h-4 text-white" />}
-              title="SLA Compliance"
-              instruction="Adherence, breaches, resolution times"
-              subInstruction="and per-department performance"
-              viewOptions={['Compliance', 'Breaches', 'Resolution SLA', 'SLA by Dept']}
-              currentView={slaView}
-              onViewChange={setSlaView}
-            >
-              {slaChart}
-            </SectionCard>
-
-            {/* Section 2: Employee Performance */}
-            <SectionCard
-              icon={<Users className="w-4 h-4 text-white" />}
-              title="Employee Performance"
-              instruction="Metrics across tickets, response times, and SLA."
-              viewOptions={['Tickets Resolved', 'Avg Response Time', 'Avg Resolution Time', 'SLA Compliance']}
-              currentView={empView}
-              onViewChange={setEmpView}
-            >
-              {empChart}
-            </SectionCard>
-
-            {/* Section 3: Ticket Trends */}
-            <SectionCard
-              icon={<TrendingUp className="w-4 h-4 text-white" />}
-              title="Ticket Trends"
-              instruction="New vs resolved tickets and status distribution."
-              viewOptions={['Ticket Trends', 'Ticket Status']}
-              currentView={ticketView}
-              onViewChange={setTicketView}
-            >
-              {ticketChart}
-            </SectionCard>
-
-            {/* Section 4: Customer Satisfaction */}
-            <SectionCard
-              icon={<Smile className="w-4 h-4 text-white" />}
-              title="Customer Satisfaction"
-              instruction="CSAT score trends over time."
-            >
-              {csatChart}
-            </SectionCard>
-
-            {/* Section 5: Workload Distribution — Full Width */}
-            <div className="lg:col-span-2">
-              <SectionCard
-                icon={<Briefcase className="w-4 h-4 text-white" />}
-                title="Workload Distribution"
-                instruction="Ticket assignments across employees and departments."
-                viewOptions={['By Employee', 'By Department']}
-                currentView={workloadView}
-                onViewChange={setWorkloadView}
-              >
-                {workloadChart}
-              </SectionCard>
+        isLoading && !dashboardData ? (
+          <div className="space-y-6 animate-pulse">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="h-24 bg-card rounded-xl border border-border p-4 flex flex-col justify-between">
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-8 w-16" />
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="h-60 bg-card rounded-xl border border-border p-4 space-y-3">
+                  <Skeleton className="h-5 w-40" />
+                  <Skeleton className="h-44 w-full" />
+                </div>
+              ))}
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="space-y-6">
+            {/* KPI Cards Strip */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+              {kpis.map((k) => {
+                const Icon = k.icon;
+                return (
+                  <MetricCard
+                    key={k.label}
+                    title={k.label}
+                    value={k.value}
+                    icon={<Icon className="w-5 h-5" />}
+                    iconBg="bg-primary/10 text-primary"
+                  />
+                );
+              })}
+            </div>
+
+            {/* 2-Column Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+              {/* Section 1: SLA Compliance */}
+              <SectionCard
+                icon={<ShieldCheck className="w-4 h-4 text-white" />}
+                title="SLA Compliance"
+                instruction="Adherence, breaches, resolution times"
+                subInstruction="and per-department performance"
+                viewOptions={['Compliance', 'Breaches', 'Resolution SLA', 'SLA by Dept']}
+                currentView={slaView}
+                onViewChange={setSlaView}
+              >
+                {slaChart}
+              </SectionCard>
+
+              {/* Section 2: Employee Performance */}
+              <SectionCard
+                icon={<Users className="w-4 h-4 text-white" />}
+                title="Employee Performance"
+                instruction="Metrics across tickets, response times, and SLA."
+                viewOptions={['Tickets Resolved', 'Avg Response Time', 'Avg Resolution Time', 'SLA Compliance']}
+                currentView={empView}
+                onViewChange={setEmpView}
+              >
+                {empChart}
+              </SectionCard>
+
+              {/* Section 3: Ticket Trends */}
+              <SectionCard
+                icon={<TrendingUp className="w-4 h-4 text-white" />}
+                title="Ticket Trends"
+                instruction="New vs resolved tickets and status distribution."
+                viewOptions={['Ticket Trends', 'Ticket Status']}
+                currentView={ticketView}
+                onViewChange={setTicketView}
+              >
+                {ticketChart}
+              </SectionCard>
+
+              {/* Section 4: Customer Satisfaction */}
+              <SectionCard
+                icon={<Smile className="w-4 h-4 text-white" />}
+                title="Customer Satisfaction"
+                instruction="CSAT score trends over time."
+              >
+                {csatChart}
+              </SectionCard>
+
+              {/* Section 5: Recurring Issues (Categories & Equipment) */}
+              <div className="lg:col-span-2">
+                <SectionCard
+                  icon={<AlertTriangle className="w-4 h-4 text-white" />}
+                  title="Branch Recurring Issues & Equipment Faults"
+                  instruction="Top problem categories and machine failure frequencies within selected date range."
+                >
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-1">
+                    {/* Top Problem Categories */}
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-dark flex items-center gap-1.5">
+                          <Wrench className="w-3.5 h-3.5 text-accent" />
+                          Top Problem Categories
+                        </span>
+                        <span className="text-[11px] text-slate-muted">Volume & Frequency</span>
+                      </div>
+                      <div className="space-y-2">
+                        {dashboardData?.recurring_issues?.top_categories?.length > 0 ? (
+                          dashboardData.recurring_issues.top_categories.map((cat, idx) => (
+                            <div key={cat.name || idx} className="p-2.5 bg-page rounded-lg border border-border flex items-center justify-between text-xs">
+                              <span className="font-medium text-slate-dark truncate max-w-[200px]">{cat.name}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-primary">{cat.count} tickets</span>
+                                <Badge variant="outline" className="text-[10px] bg-blue-50 text-accent border-blue-200">
+                                  {cat.percentage}%
+                                </Badge>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="p-3 text-center text-xs text-slate-muted border border-dashed rounded-lg">
+                            No recurring problem categories in selected period.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Top Equipment / Machines */}
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-dark flex items-center gap-1.5">
+                          <Cpu className="w-3.5 h-3.5 text-rose-600" />
+                          Frequent Equipment Issues
+                        </span>
+                        <span className="text-[11px] text-slate-muted">Machine Failures</span>
+                      </div>
+                      <div className="space-y-2">
+                        {dashboardData?.recurring_issues?.top_equipment?.length > 0 ? (
+                          dashboardData.recurring_issues.top_equipment.map((eq, idx) => (
+                            <div key={eq.label || idx} className="p-2.5 bg-page rounded-lg border border-border flex items-center justify-between text-xs">
+                              <div className="truncate max-w-[220px]">
+                                <span className="font-medium text-slate-dark">{eq.name}</span>
+                                {eq.serial_number && (
+                                  <p className="text-[10px] text-slate-muted font-mono">{eq.serial_number}</p>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-rose-600">{eq.count} issues</span>
+                                <Badge variant="outline" className="text-[10px] bg-rose-50 text-rose-700 border-rose-200">
+                                  {eq.percentage}%
+                                </Badge>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="p-3 text-center text-xs text-slate-muted border border-dashed rounded-lg">
+                            No machine failure reports in selected period.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </SectionCard>
+              </div>
+
+              {/* Section 6: Workload Distribution — Full Width */}
+              <div className="lg:col-span-2">
+                <SectionCard
+                  icon={<Briefcase className="w-4 h-4 text-white" />}
+                  title="Workload Distribution"
+                  instruction="Ticket assignments across employees and departments."
+                  viewOptions={['By Employee', 'By Department']}
+                  currentView={workloadView}
+                  onViewChange={setWorkloadView}
+                >
+                  {workloadChart}
+                  {dashboardData?.workload?.details?.length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-border">
+                      <h4 className="text-xs font-semibold text-slate-muted mb-2">Branch Employee Assignment Breakdown</h4>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                        {dashboardData.workload.details.map((emp) => (
+                          <div key={emp.emp_id} className="p-2 bg-page rounded-lg border border-border text-xs">
+                            <p className="font-medium text-slate-dark truncate" title={emp.name}>{emp.name}</p>
+                            <p className="text-[10px] text-slate-muted truncate">{emp.department || 'Service'}</p>
+                            <div className="mt-1 flex items-center justify-between">
+                              <span className="text-[10px] text-slate-muted">Active:</span>
+                              <Badge variant="outline" className="h-4 px-1.5 text-[10px] bg-blue-50 text-accent font-bold">
+                                {emp.active_tickets}
+                              </Badge>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </SectionCard>
+              </div>
+            </div>
+          </div>
+        )
       ) : (
         <AnalyticsErrorBoundary>
           <PredictiveAnalytics selectedPreset={selectedPreset} analyticsData={analyticsData} />

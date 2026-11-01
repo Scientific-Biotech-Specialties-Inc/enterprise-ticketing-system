@@ -173,7 +173,12 @@ class EmployeeAssignmentController extends Controller
         }
 
         $tickets = $this->assignmentService->getEmployeeTickets($employeeEmail);
-        return response()->json(['tickets' => $tickets]);
+        $departmentSummary = $this->assignmentService->getDepartmentSummaryForEmployee($employeeEmail);
+
+        return response()->json([
+            'tickets' => $tickets,
+            'department_summary' => $departmentSummary,
+        ]);
     }
 
     public function internalTickets(Request $request)

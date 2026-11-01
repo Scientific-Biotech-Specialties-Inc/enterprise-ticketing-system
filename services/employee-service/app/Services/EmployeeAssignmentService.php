@@ -1199,6 +1199,94 @@ class EmployeeAssignmentService
     }
 
     /**
+     * Get department summary statistics for a department manager.
+     */
+    public function getDepartmentSummaryForEmployee(string $employeeEmail): ?array
+    {
+        $employeeId = DB::table('employees')->where('email', $employeeEmail)->value('emp_id');
+        if (!$employeeId) {
+            return null;
+        }
+
+        $emp = DB::table('employees')->where('emp_id', $employeeId)->first();
+        if (!$emp) {
+            return null;
+        }
+
+        $isManager = (
+            strtolower((string)($emp->position_level ?? '')) === 'manager' ||
+            str_contains(strtolower((string)($emp->role ?? '')), 'manager') ||
+            str_contains(strtolower((string)($emp->technical_role ?? '')), 'manager')
+        );
+
+        if (!$isManager) {
+            return null;
+        }
+
+        $dept = strtolower(trim((string)($emp->department ?? '')));
+        if ($dept === '') {
+            return null;
+        }
+
+        $breachedQuery = DB::table('tickets as t')
+            ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
+            ->leftJoin('machines as m', 'm.machine_ID', '=', 't.machine_ID')
+            ->leftJoin('clients as c', 'c.id', '=', 't.created_by')
+            ->whereNotIn('t.ticket_status_ID', [3, 4])
+            ->where(function ($d) use ($dept) {
+                if (str_contains($dept, 'service')) {
+                    $d->whereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%service%'])
+                      ->orWhereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%biomedical%'])
+                      ->orWhereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%machine%'])
+                      ->orWhereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%maintenance%']);
+                } elseif (str_contains($dept, 'it')) {
+                    $d->whereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%it%'])
+                      ->orWhereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%software%'])
+                      ->orWhereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%hardware%'])
+                      ->orWhereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%network%'])
+                      ->orWhereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%system%']);
+                } else {
+                    $d->whereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ["%{$dept}%"]);
+                }
+            })
+            ->where(function ($s) {
+                $s->where('t.sla_status', 'Breached')
+                  ->orWhere(function ($r) {
+                      $r->whereNotNull('t.resolution_due_at')->where('t.resolution_due_at', '<', now());
+                  });
+            });
+
+        $count = (clone $breachedQuery)->count();
+        $first = (clone $breachedQuery)
+            ->orderByDesc('t.updated_at')
+            ->select('t.ticket_ID', 't.title', 'm.machine_name', 'c.client_name', 't.sla_status', 't.resolution_due_at', 'pc.category_name')
+            ->first();
+
+        $sampleTicket = null;
+        if ($first) {
+            $sampleTicket = [
+                'id' => 'TKT-' . str_pad((string) $first->ticket_ID, 4, '0', STR_PAD_LEFT),
+                'ticket_ID' => $first->ticket_ID,
+                'title' => $first->title,
+                'category' => $first->category_name ?? 'General',
+                'facility' => $first->machine_name ?? $first->client_name ?? 'On-site',
+                'equipment' => $first->machine_name ?? null,
+                'sla_status' => 'Breached',
+                'slaStatus' => 'Breached',
+                'is_breached' => true,
+                'resolution_due_at' => $first->resolution_due_at,
+            ];
+        }
+
+        return [
+            'is_manager' => true,
+            'department' => $emp->department,
+            'sla_breached_count' => $count,
+            'sla_breached_ticket' => $sampleTicket,
+        ];
+    }
+
+    /**
      * Get tickets assigned to an employee.
      */
     public function getEmployeeTickets(string $employeeEmail): array
@@ -1208,16 +1296,52 @@ class EmployeeAssignmentService
             return [];
         }
 
-        $rows = DB::table('ticket_assignments as ta')
-            ->join('tickets as t', 't.ticket_ID', '=', 'ta.ticket_ID')
+        $emp = DB::table('employees')->where('emp_id', $employeeId)->first();
+        $isManager = $emp && (
+            strtolower((string)($emp->position_level ?? '')) === 'manager' ||
+            str_contains(strtolower((string)($emp->role ?? '')), 'manager') ||
+            str_contains(strtolower((string)($emp->technical_role ?? '')), 'manager')
+        );
+        $dept = strtolower(trim((string)($emp->department ?? '')));
+
+        $query = DB::table('tickets as t')
+            ->leftJoin('ticket_assignments as ta', function ($join) use ($employeeId) {
+                $join->on('ta.ticket_ID', '=', 't.ticket_ID')
+                     ->where('ta.employee_ID', '=', $employeeId);
+            })
             ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
             ->leftJoin('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
             ->leftJoin('ticket_priorities as tp', 'tp.priority_ID', '=', 't.priority_ID')
             ->leftJoin('machines as m', 'm.machine_ID', '=', 't.machine_ID')
             ->leftJoin('clients as c', 'c.id', '=', 't.created_by')
             ->leftJoin('ticket_types as tt', 'tt.ticket_type_ID', '=', 't.ticket_type_ID')
-            ->where('ta.employee_ID', $employeeId)
-            ->orderByDesc('ta.assigned_at')
+            ->where(function ($q) use ($employeeId, $isManager, $dept) {
+                $q->where('ta.employee_ID', $employeeId)
+                  ->orWhere('t.assigned_to', $employeeId);
+
+                if ($isManager && $dept !== '') {
+                    $q->orWhere(function ($sub) use ($dept) {
+                        $sub->where('t.ticket_status_ID', 5)
+                        ->where(function ($d) use ($dept) {
+                            if (str_contains($dept, 'service')) {
+                                $d->whereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%service%'])
+                                  ->orWhereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%biomedical%'])
+                                  ->orWhereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%machine%'])
+                                  ->orWhereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%maintenance%']);
+                            } elseif (str_contains($dept, 'it')) {
+                                $d->whereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%it%'])
+                                  ->orWhereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%software%'])
+                                  ->orWhereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%hardware%'])
+                                  ->orWhereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%network%'])
+                                  ->orWhereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%system%']);
+                            } else {
+                                $d->whereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ["%{$dept}%"]);
+                            }
+                        });
+                    });
+                }
+            })
+            ->orderByDesc('t.updated_at')
             ->select(
                 't.ticket_ID',
                 't.title',
@@ -1233,12 +1357,16 @@ class EmployeeAssignmentService
                 'm.machine_name',
                 'm.serial_number',
                 'c.client_name',
-                'ta.assignment_status',
+                DB::raw("COALESCE(ta.assignment_status, 'assigned') as assignment_status"),
                 't.proof_rejected',
                 't.rejection_reason',
+                't.hold_reason',
+                't.escalation_reason',
                 'tt.type_name as ticket_type'
             )
-            ->get();
+            ->distinct();
+
+        $rows = $query->get();
 
         $ticketIds = $rows->pluck('ticket_ID')->toArray();
         $pendingReassigns = collect();
@@ -1369,7 +1497,9 @@ class EmployeeAssignmentService
                 'is_paused' => $slaMetrics['is_paused'],
                 'lastUpdate' => $updatedAtObj ? $updatedAtObj->format('M d, Y') : ($createdAtObj ? $createdAtObj->format('M d, Y') : now()->format('M d, Y')),
                 'accepted' => $row->assignment_status === 'accepted',
-                'escalated' => false,
+                'escalated' => (strtolower((string)($row->status_name ?? '')) === 'escalated'),
+                'escalation_reason' => $row->escalation_reason ?? null,
+                'hold_reason' => $row->hold_reason ?? null,
                 'reassignmentRequested' => !empty($pendingReassign),
                 'reassignmentReason' => $pendingReassign ? $pendingReassign->reason : null,
                 'deniedReassignment' => empty($pendingReassign) && !empty($deniedReassign),

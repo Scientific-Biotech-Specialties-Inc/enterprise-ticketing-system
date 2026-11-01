@@ -307,6 +307,23 @@ export default function TicketDetailModal({
                   </p>
                 </div>
               )}
+              {(ticket.status === 'Escalated' || ticket.escalated || ticket.escalation_reason) && (
+                <div className="col-span-2 rounded-xl bg-rose-50 border border-rose-200 p-4 text-sm">
+                  <p className="text-xs font-bold uppercase tracking-wider text-rose-950 mb-0.5 flex items-center gap-1.5">
+                    <AlertTriangle className="w-4 h-4 text-rose-600" />
+                    <span>Escalated to Leadership</span>
+                  </p>
+                  <p className="text-xs text-rose-900 mt-1 leading-relaxed">
+                    This ticket has been escalated directly to department leadership.
+                  </p>
+                  {ticket.escalation_reason && (
+                    <div className="mt-2 bg-white/80 border border-rose-100 rounded-lg p-2.5 text-xs text-rose-950">
+                      <span className="font-semibold text-rose-900">Reason for Escalation:</span>{' '}
+                      <span className="italic">&quot;{ticket.escalation_reason}&quot;</span>
+                    </div>
+                  )}
+                </div>
+              )}
               {(ticket.last_reminder_sent_at || ticket.lastReminderSentAt) && (
                 <div className="col-span-2 rounded-xl bg-indigo-50 border border-indigo-200 p-4 text-sm">
                   <p className="text-xs font-bold uppercase tracking-wider text-indigo-950 mb-0.5 flex items-center gap-1.5">

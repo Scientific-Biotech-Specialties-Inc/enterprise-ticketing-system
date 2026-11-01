@@ -259,9 +259,11 @@ class TicketController extends Controller
         $validated = $request->validate([
             'ticket_status_ID' => ['nullable', 'integer', 'exists:ticket_statuses,ticket_status_ID'],
             'priority_ID' => ['nullable', 'integer', 'exists:ticket_priorities,priority_ID'],
+            'assigned_to' => ['nullable', 'integer', 'exists:employees,emp_id'],
             'assigned_by_email' => ['nullable', 'email'],
             'proof_rejected' => ['nullable', 'boolean'],
             'rejection_reason' => ['nullable', 'string'],
+            'escalation_reason' => ['nullable', 'string', 'max:1000'],
             'reason' => ['nullable', 'string', 'max:1000'],
             'title' => ['nullable', 'string', 'max:255', $this->ticketService->validateProperCasing()],
             'description' => ['nullable', 'string'],

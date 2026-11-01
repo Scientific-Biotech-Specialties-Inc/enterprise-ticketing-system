@@ -79,6 +79,11 @@ export default function EscalateTicketModal({
   const categoryName = ticket?.category || ticket?.category_name || '';
   const departmentName = ticket?.department || ticket?.department_name || '';
 
+  const isAlreadyEscalated =
+    String(ticket?.status || '').toLowerCase() === 'escalated' ||
+    Number(ticket?.ticket_status_ID) === 5 ||
+    Number(ticket?.status_id) === 5;
+
   const categoryType = useMemo(() => {
     return resolveCategoryType(categoryName, departmentName);
   }, [categoryName, departmentName]);
@@ -102,11 +107,27 @@ export default function EscalateTicketModal({
     return 'Service';
   }, [departmentName, categoryType]);
 
-  // Compute eligible candidates: strictly employees who have the "Manager" role in the ticket's department
+  const [selectedDept, setSelectedDept] = useState(resolvedDept);
+
+  useEffect(() => {
+    setSelectedDept(resolvedDept);
+  }, [resolvedDept, isOpen]);
+
+  const availableDepts = useMemo(() => {
+    const base = ['Service', 'IT', 'Customer Service'];
+    if (resolvedDept && !base.some(d => d.toLowerCase() === resolvedDept.toLowerCase())) {
+      return [resolvedDept, ...base];
+    }
+    return base;
+  }, [resolvedDept]);
+
+  const activeDept = selectedDept || resolvedDept || 'Service';
+
+  // Compute eligible candidates: strictly employees who have the "Manager" role in the active department
   const eligibleCandidates = useMemo(() => {
     if (!employees || employees.length === 0) return [];
 
-    const normDept = resolvedDept.toLowerCase();
+    const normDept = String(activeDept || '').toLowerCase();
 
     return employees.filter((emp) => {
       const level = String(emp.position_level || '').toLowerCase().trim();
@@ -140,9 +161,9 @@ export default function EscalateTicketModal({
 
       return empDept.includes(normDept);
     });
-  }, [employees, resolvedDept]);
+  }, [employees, activeDept]);
 
-  // Auto-select first eligible candidate when candidates load
+  // Auto-select first eligible candidate when candidates load or department switches
   useEffect(() => {
     if (eligibleCandidates.length > 0) {
       setSelectedTargetId(eligibleCandidates[0].id || eligibleCandidates[0].emp_id);
@@ -163,8 +184,12 @@ export default function EscalateTicketModal({
 
   const handleConfirm = async (e) => {
     e.preventDefault();
+    if (isAlreadyEscalated) {
+      setValidationError('This ticket is already escalated to department leadership. Re-escalation is not permitted.');
+      return;
+    }
     if (eligibleCandidates.length === 0) {
-      setValidationError(`Cannot escalate: No active Manager found in the ${resolvedDept} Department.`);
+      setValidationError(`Cannot escalate: No active Manager found in the ${activeDept} Department.`);
       return;
     }
     if (!selectedCandidate) {
@@ -177,10 +202,14 @@ export default function EscalateTicketModal({
     }
 
     setValidationError('');
+    const targetCategoryType = activeDept.toLowerCase() === 'it'
+      ? 'it'
+      : (activeDept.toLowerCase().includes('service') ? 'service' : 'others');
+
     await onConfirmEscalate({
       targetEmployee: selectedCandidate,
       reason: escalationReason.trim(),
-      categoryType,
+      categoryType: targetCategoryType,
       categoryName,
     });
   };
@@ -226,6 +255,32 @@ export default function EscalateTicketModal({
 
         {/* Modal Body */}
         <form onSubmit={handleConfirm} className="p-6 overflow-y-auto space-y-5 flex-1">
+          {/* Department Selection Tabs */}
+          <div className="space-y-1.5">
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+              Escalation Department Target
+            </label>
+            <div className="flex rounded-xl bg-slate-100 p-1 gap-1 border border-slate-200">
+              {availableDepts.map((dept) => {
+                const isActive = activeDept === dept;
+                return (
+                  <button
+                    key={dept}
+                    type="button"
+                    onClick={() => setSelectedDept(dept)}
+                    className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      isActive
+                        ? 'bg-white text-[#252578] shadow-xs border border-slate-200 font-bold'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
+                    }`}
+                  >
+                    {dept}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Department Manager Escalation Banner */}
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2.5">
             <div className="flex items-center justify-between">
@@ -233,13 +288,28 @@ export default function EscalateTicketModal({
                 Department Leadership Escalation
               </span>
               <Badge variant="outline" className="text-xs font-semibold bg-white border-slate-300 text-[#252578]">
-                {resolvedDept} Department Manager
+                {activeDept} Department Manager
               </Badge>
             </div>
             <p className="text-xs text-slate-600 leading-relaxed">
-              Ticket escalation elevates this ticket directly to the designated Manager of the {resolvedDept} Department for supervisory oversight and leadership assignment.
+              Ticket escalation elevates this ticket directly to the designated Manager of the {activeDept} Department for supervisory oversight and leadership assignment.
             </p>
           </div>
+
+          {/* Blocked Escalation Warning if Already Escalated */}
+          {isAlreadyEscalated && (
+            <div className="rounded-xl border border-rose-300 bg-rose-50 p-4 flex items-start gap-3 text-rose-900 shadow-xs">
+              <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <div className="text-xs space-y-1">
+                <p className="font-bold text-rose-900">
+                  Ticket Already Escalated
+                </p>
+                <p className="text-rose-700 leading-relaxed">
+                  This ticket has already been escalated to department leadership. Re-escalation is not permitted.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Blocked Escalation Warning if 0 Eligible Recipients */}
           {eligibleCandidates.length === 0 ? (
@@ -247,10 +317,10 @@ export default function EscalateTicketModal({
               <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
               <div className="text-xs space-y-1">
                 <p className="font-bold text-rose-900">
-                  Blocked Escalation: No {resolvedDept} Manager Found
+                  Blocked Escalation: No {activeDept} Manager Found
                 </p>
                 <p className="text-rose-700 leading-relaxed">
-                  Escalation is restricted exclusively to personnel with the Manager role in the {resolvedDept} Department. No active Manager was found in the directory for this department.
+                  Escalation is restricted exclusively to personnel with the Manager role in the {activeDept} Department. No active Manager was found in the directory for this department.
                 </p>
               </div>
             </div>
@@ -367,8 +437,8 @@ export default function EscalateTicketModal({
             </Button>
             <Button
               type="submit"
-              disabled={isEscalating || eligibleCandidates.length === 0}
-              className="bg-[#252578] hover:bg-[#1e1e60] text-white px-5 flex items-center gap-1.5"
+              disabled={isEscalating || isAlreadyEscalated || eligibleCandidates.length === 0}
+              className="bg-[#252578] hover:bg-[#1e1e60] text-white px-5 flex items-center gap-1.5 disabled:opacity-50"
             >
               {isEscalating ? (
                 <>

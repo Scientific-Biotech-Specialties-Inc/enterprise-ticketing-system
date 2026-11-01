@@ -661,6 +661,13 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
   const [currentPriority, setCurrentPriority] = useState(ticket?.priority || 'Low');
   const [currentStatus, setCurrentStatus] = useState(ticket?.status || 'Pending');
   const [currentHoldReason, setCurrentHoldReason] = useState(ticket?.hold_reason || '');
+  const [currentEscalationReason, setCurrentEscalationReason] = useState(ticket?.escalation_reason || '');
+
+  const isAlreadyEscalated =
+    currentStatus === 'Escalated' ||
+    String(ticket?.status || '').toLowerCase() === 'escalated' ||
+    Number(ticket?.ticket_status_ID) === 5 ||
+    Number(ticket?.status_id) === 5;
 
   const dynamicDepartmentManagers = useMemo(() => {
     const list = Array.isArray(employees) ? employees : [];
@@ -742,24 +749,17 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
       const ticketId = ticket.ticket_ID || ticket.id;
       const targetEmpId = targetEmployee?.id || targetEmployee?.emp_id;
 
-      // Update status to Escalated (status ID 5)
+      // Update status to Escalated (status ID 5) directly with target manager and reason
       await updateTicket({
         ticketId,
         statusId: 5,
+        assigned_to: targetEmpId,
+        escalation_reason: reason,
         assignedByEmail: user?.email,
       });
 
-      // Assign to the computed escalation target
-      if (targetEmpId) {
-        await acceptTicket({
-          ticketId,
-          employeeIds: [targetEmpId],
-          assignedByEmail: user?.email,
-        }).catch((e) => console.warn('Could not reassign on escalate:', e));
-      }
-
       // Add escalation handoff note to internal notes
-      const noteText = `[Escalation (${categoryType.toUpperCase()})]: Escalated to ${targetEmployee?.name || 'specialist'} (${targetEmployee?.role || 'Specialist'}, ${targetEmployee?.department || 'Operations'}). Reason: "${reason}"`;
+      const noteText = `[Escalation (${categoryType.toUpperCase()})]: Escalated to ${targetEmployee?.name || 'Manager'} (${targetEmployee?.role || 'Manager'}, ${targetEmployee?.department || 'Department'}). Reason: "${reason}"`;
       await addInternalNote(ticketId, noteText).catch(() => {});
 
       const refreshedNotes = await getInternalNotes(ticketId).catch(() => null);
@@ -768,14 +768,22 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
       }
 
       setCurrentStatus('Escalated');
-      setActionSuccessNotice(`Ticket successfully escalated to ${targetEmployee?.name || 'specialist'}.`);
+      setCurrentEscalationReason(reason);
+      ticket.status = 'Escalated';
+      ticket.escalation_reason = reason;
+      if (targetEmpId) {
+        ticket.assigned_to = targetEmpId;
+      }
+      setActionSuccessNotice(`Ticket successfully escalated to ${targetEmployee?.name || 'department leadership'}.`);
       setShowEscalateModal(false);
 
       if (typeof onStatusUpdate === 'function') {
         const timestamp = new Date().toLocaleString('en-US');
         onStatusUpdate({
           id: ticket.id,
+          ticket_ID: ticket.ticket_ID || ticket.id,
           status: 'Escalated',
+          escalation_reason: reason,
           assigned_to: targetEmpId,
           assigned: targetEmpId ? [targetEmpId] : [],
           timeline: [
@@ -791,7 +799,8 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
       }
     } catch (err) {
       console.error('Failed to escalate ticket:', err);
-      setEscalateError('Failed to escalate ticket. Please check your network connection and try again.');
+      const errMsg = err?.response?.data?.message || 'Failed to escalate ticket. Please check your network connection and try again.';
+      setEscalateError(errMsg);
     } finally {
       setIsEscalating(false);
     }
@@ -803,6 +812,7 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
     setCurrentPriority(ticket?.priority || 'Low');
     setCurrentStatus(ticket?.status || 'Pending');
     setCurrentHoldReason(ticket?.hold_reason || '');
+    setCurrentEscalationReason(ticket?.escalation_reason || '');
     setCurrentSlaDueDate(ticket?.resolution_due_at || ticket?.due_at || ticket?.sla_due_date || ticket?.sla?.resolution?.target || null);
     setCurrentSlaStatus(ticket?.sla_status || ticket?.slaStatus || ticket?.sla?.resolution?.status || (ticket?.status === 'On Hold' ? 'Paused' : null));
     setCurrentLastReminder(ticket?.last_reminder_sent_at || null);
@@ -1480,6 +1490,22 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                         Reassign
                       </Button>
                     )}
+                  </div>
+                )}
+
+                {/* Escalated banner */}
+                {(currentStatus === 'Escalated' || isAlreadyEscalated) && (
+                  <div className="bg-rose-50 border border-rose-300 rounded-xl p-3.5 mb-4 text-xs text-rose-900 flex items-start gap-2.5 shadow-xs">
+                    <div className="w-6 h-6 rounded-full bg-rose-200 text-rose-800 flex items-center justify-center shrink-0 mt-0.5">
+                      <ArrowUpRight className="w-3.5 h-3.5 text-rose-700" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-bold text-rose-900 mb-0.5">Ticket is Escalated to Department Leadership</p>
+                      <p className="text-rose-800 leading-relaxed">
+                        This ticket has been escalated and assigned directly to the department manager.
+                        {(currentEscalationReason || ticket?.escalation_reason) ? ` Reason: "${currentEscalationReason || ticket?.escalation_reason}"` : ''}
+                      </p>
+                    </div>
                   </div>
                 )}
 
@@ -2235,19 +2261,32 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
 
             {/* Escalate button (TS032) */}
             {currentStatus !== 'Closed' && currentStatus !== 'Resolved' && currentStatus !== 'Discarded' && (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={isProcessing || isEscalating}
-                onClick={() => {
-                  setEscalateError('');
-                  setShowEscalateModal(true);
-                }}
-                className="flex items-center gap-1.5 text-rose-700 border-rose-200 hover:bg-rose-50 cursor-pointer"
-              >
-                <ArrowUpRight className="w-3.5 h-3.5 text-rose-600" />
-                <span>Escalate Ticket</span>
-              </Button>
+              isAlreadyEscalated ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled
+                  title="This ticket has already been escalated to department leadership."
+                  className="flex items-center gap-1.5 text-rose-500 border-rose-200 bg-rose-50/60 cursor-not-allowed opacity-80"
+                >
+                  <ArrowUpRight className="w-3.5 h-3.5 text-rose-500" />
+                  <span>Already Escalated</span>
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isProcessing || isEscalating}
+                  onClick={() => {
+                    setEscalateError('');
+                    setShowEscalateModal(true);
+                  }}
+                  className="flex items-center gap-1.5 text-rose-700 border-rose-200 hover:bg-rose-50 cursor-pointer"
+                >
+                  <ArrowUpRight className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Escalate Ticket</span>
+                </Button>
+              )
             )}
 
             {!ticket.reassignmentRequested && ticket.status !== 'Closed' && ticket.status !== 'Resolved' && onEdit && (

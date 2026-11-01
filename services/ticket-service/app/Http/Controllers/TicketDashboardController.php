@@ -80,4 +80,46 @@ class TicketDashboardController extends Controller
         $data = $this->dashboardService->getCsFilterOptions();
         return response()->json($data);
     }
+
+    public function adminDashboard(Request $request)
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        $filters = [
+            'preset' => $request->query('preset') ?? $request->query('filter'),
+            'date_from' => $request->query('date_from'),
+            'date_to' => $request->query('date_to'),
+            'branch' => $request->query('branch'),
+            'branch_id' => $request->query('branch_id'),
+        ];
+
+        $forceRefresh = filter_var($request->query('forceRefresh', $request->query('force_refresh', false)), FILTER_VALIDATE_BOOLEAN);
+
+        $data = $this->dashboardService->getAdminDashboard($user, $filters, $forceRefresh);
+        return response()->json($data);
+    }
+
+    public function adminReports(Request $request)
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        $filters = [
+            'preset' => $request->query('preset') ?? $request->query('filter'),
+            'date_from' => $request->query('date_from'),
+            'date_to' => $request->query('date_to'),
+            'branch' => $request->query('branch'),
+            'branch_id' => $request->query('branch_id'),
+        ];
+
+        $forceRefresh = filter_var($request->query('forceRefresh', $request->query('force_refresh', false)), FILTER_VALIDATE_BOOLEAN);
+
+        $data = $this->dashboardService->getAdminReports($user, $filters, $forceRefresh);
+        return response()->json($data);
+    }
 }

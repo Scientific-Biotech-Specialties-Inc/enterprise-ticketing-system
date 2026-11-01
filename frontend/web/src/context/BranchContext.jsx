@@ -35,17 +35,28 @@ export function BranchProvider({ children }) {
   const [branches, setBranches] = useState(DEFAULT_BRANCHES);
   const [selectedBranchId, setSelectedBranchIdState] = useState(getStoredBranchId);
 
-  const isSuperOrAdmin = useMemo(() => {
+  const isSuperAdmin = useMemo(() => {
     if (!authUser) return false;
     const role = (authUser.role || '').toLowerCase();
     const email = (authUser.email || '').toLowerCase();
     return (
       role === 'superadmin' ||
-      role === 'admin' ||
-      email === 'superadmin@example.com' ||
-      email === 'admin@example.com'
+      role === 'super admin' ||
+      email === 'superadmin@example.com'
     );
   }, [authUser]);
+
+  const isSuperOrAdmin = useMemo(() => {
+    if (!authUser) return false;
+    const role = (authUser.role || '').toLowerCase();
+    const email = (authUser.email || '').toLowerCase();
+    return (
+      isSuperAdmin ||
+      role === 'admin' ||
+      role === 'systemadministrator' ||
+      email === 'admin@example.com'
+    );
+  }, [authUser, isSuperAdmin]);
 
   // Dynamically load live branches from ticket service on mount or role change
   useEffect(() => {
@@ -53,7 +64,7 @@ export function BranchProvider({ children }) {
 
     const loadBranches = async () => {
       try {
-        const fetcher = isSuperOrAdmin ? getBranches : getPublicBranches;
+        const fetcher = isSuperAdmin ? getBranches : getPublicBranches;
         const res = await fetcher();
         const data = Array.isArray(res) ? res : (res?.branches || res?.data || []);
         if (isMounted && Array.isArray(data) && data.length > 0) {
@@ -135,7 +146,7 @@ export function BranchProvider({ children }) {
   }, [setSelectedBranchId]);
 
   const selectedBranch = useMemo(() => {
-    if (!isSuperOrAdmin && (authUser?.branch_id || authUser?.branch)) {
+    if (!isSuperAdmin && (authUser?.branch_id || authUser?.branch)) {
       const assigned = branches.find(
         (b) => String(b.id) === String(authUser.branch_id) ||
                String(b.name).toLowerCase() === String(authUser.branch).toLowerCase() ||
@@ -159,7 +170,7 @@ export function BranchProvider({ children }) {
       (b) => String(b.id) === String(selectedBranchId) || String(b.slug) === String(selectedBranchId)
     );
     return match || GLOBAL_BRANCH;
-  }, [selectedBranchId, branches, isSuperOrAdmin, authUser]);
+  }, [selectedBranchId, branches, isSuperAdmin, authUser]);
 
   const isAllBranches = selectedBranchId === null || selectedBranchId === 'all';
 

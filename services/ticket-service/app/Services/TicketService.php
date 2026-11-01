@@ -113,7 +113,9 @@ class TicketService
                 't.first_response_at',
                 't.resolved_at',
                 't.response_sla_status',
-                't.resolution_sla_status'
+                't.resolution_sla_status',
+                't.hold_reason',
+                't.escalation_reason'
             )
             ->where('t.ticket_ID', $ticketId)
             ->first();
@@ -155,6 +157,8 @@ class TicketService
             'assigned' => $assignedIds,
             'reassignmentRequested' => !empty($pendingReassign),
             'reassignmentReason' => $pendingReassign ? $pendingReassign->reason : null,
+            'hold_reason' => $row->hold_reason ?? null,
+            'escalation_reason' => $row->escalation_reason ?? null,
             'type' => $row->ticket_type ?? 'External',
             'ticket_type' => $row->ticket_type ?? 'External',
             'is_internal' => (bool)$row->is_internal,
@@ -652,7 +656,9 @@ class TicketService
                 't.first_response_at',
                 't.response_sla_status',
                 't.resolution_sla_status',
-                't.last_reminder_sent_at'
+                't.last_reminder_sent_at',
+                't.hold_reason',
+                't.escalation_reason'
             )
             ->where('t.ticket_ID', $ticketId)
             ->first();
@@ -1313,6 +1319,17 @@ class TicketService
             ? (int) $validated['ticket_status_ID']
             : null;
 
+        // Reject re-escalation if already escalated
+        if ($statusToSet === 5 && (int)$ticket->ticket_status_ID === 5) {
+            return [
+                'status' => 422,
+                'data' => [
+                    'message' => 'This ticket is already escalated and cannot be escalated again.',
+                    'code' => 'ALREADY_ESCALATED',
+                ],
+            ];
+        }
+
         $isReopenAttempt = ($statusToSet === 8) || ($statusToSet === 2 && in_array((int)$ticket->ticket_status_ID, [3, 4], true));
         if ($isReopenAttempt) {
             $reason = $validated['reason'] ?? $validated['rejection_reason'] ?? null;
@@ -1499,6 +1516,16 @@ class TicketService
             }
         }
 
+        if (array_key_exists('assigned_to', $validated) && $validated['assigned_to'] !== null) {
+            if ($ticket->assigned_to != $validated['assigned_to']) {
+                $changes[] = ['field' => 'assigned_to', 'old' => $ticket->assigned_to, 'new' => $validated['assigned_to']];
+            }
+        }
+
+        if (array_key_exists('escalation_reason', $validated) && $validated['escalation_reason'] !== null) {
+            $changes[] = ['field' => 'escalation_reason', 'old' => $ticket->escalation_reason ?? null, 'new' => $validated['escalation_reason']];
+        }
+
         if (empty($changes)) {
             return ['status' => 200, 'data' => ['message' => 'No changes to update.']];
         }
@@ -1513,6 +1540,27 @@ class TicketService
                     $update['in_progress_owner'] = !empty($ticket->assigned_to) ? TicketStateMachine::OWNER_EMPLOYEE : TicketStateMachine::OWNER_CS;
                 } elseif (in_array($statusToSet, [3, 4, 9, 10], true)) {
                     $update['in_progress_owner'] = null;
+                } elseif ($statusToSet === 5) {
+                    $update['in_progress_owner'] = null;
+                    $escReason = $validated['escalation_reason'] ?? $validated['reason'] ?? null;
+                    if ($escReason) {
+                        $update['escalation_reason'] = $escReason;
+                    }
+                    if (!empty($validated['assigned_to'])) {
+                        $newAssignedTo = (int) $validated['assigned_to'];
+                        $update['assigned_to'] = $newAssignedTo;
+
+                        DB::table('ticket_assignments')->where('ticket_ID', $ticketId)->delete();
+                        DB::table('ticket_assignments')->insert([
+                            'ticket_ID' => $ticketId,
+                            'employee_ID' => $newAssignedTo,
+                            'assigned_by' => $assignedBy,
+                            'assignment_status' => 'assigned',
+                            'assigned_at' => now(),
+                            'created_at' => now(),
+                            'updated_at' => now(),
+                        ]);
+                    }
                 }
                 
                 if ($statusToSet == 3 || $statusToSet == 4) {
@@ -1571,6 +1619,12 @@ class TicketService
             if (array_key_exists('machine_ID', $validated) && $validated['machine_ID'] !== null) {
                 $update['machine_ID'] = $validated['machine_ID'];
             }
+            if (array_key_exists('assigned_to', $validated) && $validated['assigned_to'] !== null && empty($update['assigned_to'])) {
+                $update['assigned_to'] = (int) $validated['assigned_to'];
+            }
+            if (array_key_exists('escalation_reason', $validated) && $validated['escalation_reason'] !== null && empty($update['escalation_reason'])) {
+                $update['escalation_reason'] = $validated['escalation_reason'];
+            }
 
             DB::table('tickets')->where('ticket_ID', $ticketId)->update($update);
 
@@ -1601,6 +1655,67 @@ class TicketService
                 ]);
             }
         });
+
+        if ($statusToSet === 5) {
+            $assignedManagerId = $validated['assigned_to'] ?? $ticket->assigned_to ?? null;
+            $escReason = $validated['escalation_reason'] ?? $validated['reason'] ?? 'Escalated by Customer Service for supervisory review.';
+            $ticketRef = TicketNumberGeneratorService::refFor($ticketId);
+            $ticketTitle = $ticket->title ?? "Ticket #{$ticketId}";
+
+            if ($assignedManagerId) {
+                $mgrTitle = "Urgent: Ticket Escalated - {$ticketRef}";
+                $mgrMessage = "Manager Alert: Ticket {$ticketRef}: \"{$ticketTitle}\" has been escalated to you. Reason: \"{$escReason}\". Immediate departmental intervention required.";
+
+                try {
+                    $this->notificationService->notifyRecipient(
+                        (int) $assignedManagerId,
+                        'employee',
+                        $mgrTitle,
+                        $mgrMessage,
+                        $ticketId,
+                        [
+                            'ticket_id' => $ticketId,
+                            'ticket_ref' => $ticketRef,
+                            'type' => 'ticket_escalated',
+                            'escalation_reason' => $escReason,
+                            'is_manager_alert' => true,
+                        ],
+                        'ticket_escalated'
+                    );
+
+                    $catNameEsc = DB::table('problem_categories')->where('problem_category_ID', $ticket->problem_category_ID)->value('category_name') ?? '';
+                    $prioNameEsc = DB::table('ticket_priorities')->where('priority_ID', $ticket->priority_ID ?? 1)->value('priority_name') ?? '';
+
+                    $this->notificationService->sendTicketEmail(
+                        (int) $assignedManagerId,
+                        $mgrTitle,
+                        $mgrMessage,
+                        $ticketId,
+                        $ticketTitle,
+                        $catNameEsc,
+                        $prioNameEsc,
+                        'ticket_escalated',
+                        [
+                            'escalation_reason' => $escReason,
+                        ]
+                    );
+                } catch (\Throwable $e) {
+                    Log::warning("Failed to dispatch manager escalation notification for ticket #{$ticketId}: " . $e->getMessage());
+                }
+            }
+
+            try {
+                $this->notificationService->broadcastTicketChange('escalated', $ticketId, [
+                    'ticket_id' => $ticketId,
+                    'status' => 'Escalated',
+                    'status_id' => 5,
+                    'assigned_to' => $assignedManagerId,
+                    'escalation_reason' => $escReason,
+                ]);
+            } catch (\Throwable $e) {
+                Log::warning("Failed to broadcast ticket escalation change: " . $e->getMessage());
+            }
+        }
 
         if (array_key_exists('proof_rejected', $validated) && $validated['proof_rejected']) {
             $assignedEmployeeId = $ticket->assigned_to;
