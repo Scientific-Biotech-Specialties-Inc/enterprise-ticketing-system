@@ -74,8 +74,8 @@ export default function TicketInfoModal({ ticket, onClose, onReassignSuccess }) 
             <span className="text-xs font-bold text-[#252578] bg-blue-50 px-3 py-1 rounded-full">{ticket.id}</span>
             <span className={`text-xs font-semibold px-3 py-1 rounded-full ${statusColors[ticket.status] ?? 'bg-gray-100 text-gray-700'}`}>{ticket.status}</span>
             <span className={`text-xs font-semibold px-3 py-1 rounded-full ${priorityColors[ticket.priority] ?? 'bg-gray-100 text-gray-700'}`}>{ticket.priority}</span>
-            {(ticket.escalated && ticket.status !== 'Escalated') && (
-              <span className="text-xs font-bold px-3 py-1 bg-rose-100 text-rose-800 rounded-full border border-rose-200">
+            {ticket.escalated && (
+              <span className="text-xs font-bold px-3 py-1 bg-orange-100 text-orange-800 rounded-full border border-orange-200">
                 Escalated
               </span>
             )}
@@ -162,26 +162,6 @@ export default function TicketInfoModal({ ticket, onClose, onReassignSuccess }) 
           )}
 
           {/* Customer Service Reminder Prompt Alert */}
-          {(currentTicket.status === 'Escalated' || currentTicket.escalated || currentTicket.escalation_reason) && (
-            <div className="flex items-start gap-3 bg-rose-50 border border-rose-200 rounded-xl p-3.5 text-xs text-rose-900 shadow-2xs">
-              <div className="w-6 h-6 rounded-full bg-rose-200 text-rose-800 flex items-center justify-center shrink-0 mt-0.5">
-                <AlertTriangle className="w-3.5 h-3.5 text-rose-700" />
-              </div>
-              <div className="flex-1">
-                <span className="font-bold text-rose-950 block text-xs">Escalated to Leadership</span>
-                <p className="text-rose-800 text-xs mt-0.5 leading-relaxed">
-                  This ticket has been escalated directly to department leadership.
-                </p>
-                {currentTicket.escalation_reason && (
-                  <div className="mt-2 bg-white/80 border border-rose-100 rounded-lg p-2.5 text-xs text-rose-950">
-                    <span className="font-semibold text-rose-900">Reason for Escalation:</span>{' '}
-                    <span className="italic">&quot;{currentTicket.escalation_reason}&quot;</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
           {(currentTicket.last_reminder_sent_at || currentTicket.lastReminderSentAt) && (
             <div className="flex items-start gap-3 bg-indigo-50 border border-indigo-200 rounded-xl p-3.5 text-xs text-indigo-900 shadow-2xs">
               <div className="w-6 h-6 rounded-full bg-indigo-200 text-indigo-800 flex items-center justify-center shrink-0 mt-0.5">

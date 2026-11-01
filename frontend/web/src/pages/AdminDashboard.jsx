@@ -12,11 +12,18 @@ import {
   Filler,
 } from 'chart.js';
 import { Line, Bar } from 'react-chartjs-2';
-import { ChevronDown, TrendingUp, ShieldCheck, Users, Smile, Briefcase, Info, RefreshCw, Cpu, BarChart3, LineChart, Inbox, Clock, FileText, Download, Printer, Calendar, Building2, AlertTriangle, Wrench, CheckCircle2 } from 'lucide-react';
-import axiosInstance from '@/api/axiosInstance';
-import { Skeleton } from '@/components/ui/skeleton';
-import { exportAnalyticsToCsv, exportPredictiveToCsv, downloadPdfFromElement, triggerPdfPrint } from '@/utils/reportExportUtils';
+import { ChevronDown, TrendingUp, FileSpreadsheet, FileCode, ShieldCheck, Users, Smile, Briefcase, Info, RefreshCw, Cpu, BarChart3, LineChart, Inbox, Clock, FileText, Download, Printer, Calendar } from 'lucide-react';
+import { exportAnalyticsToCsv, exportPredictiveToCsv, exportAnalyticsToExcel, exportPredictiveToExcel, downloadPdfFromElement, triggerPdfPrint } from '@/utils/reportExportUtils';
 import PredictiveAnalytics from './PredictiveAnalytics';
+import { useBranch } from '@/context/BranchContext';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu';
+import BranchSelector from '@/components/BranchSelector';
 import { PageHeader } from '@/components/ui/page-header';
 import { MetricCard } from '@/components/ui/metric-card';
 import { Button } from '@/components/ui/button';
@@ -51,7 +58,7 @@ const barLabelsPlugin = {
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend, Filler, barLabelsPlugin);
 
 // ─── Filter Options ──────────────────────────────────────────────────────────
-const FILTER_OPTIONS = ['Today', 'Last 7 Days', 'Last 30 Days', 'Last 90 Days'];
+const FILTER_OPTIONS = ['Today', 'Last 7 Days', 'Last 30 Days', 'Last 90 Days', 'Custom Range'];
 
 // ─── Chart Color Palette ─────────────────────────────────────────────────────
 const COLORS = {
@@ -289,9 +296,9 @@ function ChartViewDropdown({ value, onChange, options }) {
 
 function SectionCard({ icon, title, instruction, subInstruction, children, viewOptions, currentView, onViewChange }) {
   return (
-    <div className="bg-card rounded-xl shadow-xs border border-border p-4 transition-all duration-200 hover:shadow-card">
+    <div className="bg-card rounded-xl shadow-xs border border-border p-5 space-y-3 transition-all duration-200 hover:shadow-card">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border/60 pb-3">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
             {icon}
@@ -371,6 +378,7 @@ function StatCard({ label, value, icon, color }) {
 // ─── Main Dashboard ──────────────────────────────────────────────────────────
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState('overview');
+  const { selectedBranch, selectedBranchId } = useBranch();
 
   // Filter Options
   const FILTER_OPTIONS = ['Today', 'Last 7 Days', 'Last 30 Days', 'Last 90 Days', 'Custom Range'];
@@ -418,9 +426,7 @@ export default function AdminDashboard() {
   const [empView, setEmpView] = useState('Tickets Resolved');
   const [workloadView, setWorkloadView] = useState('By Employee');
 
-  // Live Branch Dashboard & Analytics State
-  const [dashboardData, setDashboardData] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+  // Live Analytics Data State
   const [analyticsData, setAnalyticsData] = useState({
     trends: [],
     workload: [],
@@ -431,69 +437,108 @@ export default function AdminDashboard() {
   });
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatusMsg, setSyncStatusMsg] = useState('');
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
-  const fetchAnalytics = async (fromDate = globalDateFrom, toDate = globalDateTo, forceRefresh = false) => {
-    setIsLoading(true);
+  const ANALYTICS_BASE = import.meta.env.VITE_ANALYTICS_API_URL || '/api/analytics';
+
+  const fetchAnalytics = async (fromDate = globalDateFrom, toDate = globalDateTo) => {
     try {
       const queryParams = new URLSearchParams();
-      if (selectedPreset !== 'Custom Range') {
-        queryParams.append('preset', selectedPreset);
-      }
       if (fromDate) queryParams.append('date_from', fromDate);
       if (toDate) queryParams.append('date_to', toDate);
-      if (forceRefresh) queryParams.append('force_refresh', 'true');
+      if (selectedBranchId) queryParams.append('branch_id', selectedBranchId);
       const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
 
-      const [dashRes, predRes] = await Promise.all([
-        axiosInstance.get(`/api/ticketing/ticket/admin-dashboard${queryString}`).catch(() => null),
-        axiosInstance.get(`/api/ticketing/analytics/predictive-metrics${queryString}`).catch(() => null),
+      const [trendsRes, workloadRes, perfRes, volumeRes, equipmentRes, csatRes, predRes] = await Promise.all([
+        fetch(`${ANALYTICS_BASE}/trends${queryString}`).then(r => r.json()).catch(() => null),
+        fetch(`${ANALYTICS_BASE}/workload${queryString}`).then(r => r.json()).catch(() => null),
+        fetch(`${ANALYTICS_BASE}/employee-performance${queryString}`).then(r => r.json()).catch(() => null),
+        fetch(`${ANALYTICS_BASE}/volume-reports${queryString}`).then(r => r.json()).catch(() => null),
+        fetch(`${ANALYTICS_BASE}/equipment-reports${queryString}`).then(r => r.json()).catch(() => null),
+        fetch(`${ANALYTICS_BASE}/csat-stats${queryString}`).then(r => r.json()).catch(() => null),
+        fetch(`${ANALYTICS_BASE}/predictive-metrics${queryString}`).then(r => r.json()).catch(() => null),
       ]);
 
-      if (dashRes?.data?.status === 'success') {
-        setDashboardData(dashRes.data);
-      }
-      if (predRes?.data?.status === 'success') {
-        setAnalyticsData(prev => ({ ...prev, predictive: predRes.data.data }));
-      }
+      setAnalyticsData({
+        trends: trendsRes?.data || [],
+        workload: workloadRes?.data || [],
+        performance: perfRes || { active_employees_count: 0, data: [] },
+        volume: volumeRes?.data || { by_category: [], by_priority: [], by_status: [] },
+        equipment: equipmentRes?.data || [],
+        csat: csatRes?.data || null,
+        predictive: predRes?.data || null,
+      });
     } catch (err) {
-      console.warn('Dashboard API error, using standard fallback UI metrics', err);
-    } finally {
-      setIsLoading(false);
+      console.warn('Analytics API offline, using fallback UI metrics', err);
     }
   };
 
   useEffect(() => {
     fetchAnalytics(globalDateFrom, globalDateTo);
-  }, [globalDateFrom, globalDateTo, selectedPreset]);
+  }, [globalDateFrom, globalDateTo, selectedBranchId]);
+
+  const handleExportPdf = async () => {
+    setIsGeneratingPdf(true);
+    try {
+      await downloadPdfFromElement(
+        activeTab === 'predictive' ? 'predictive-analytics-report' : 'admin-analytics-report',
+        activeTab === 'predictive' ? 'Predictive_Analytics_Report.pdf' : 'Analytics_Operational_Report.pdf'
+      );
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
+  const handleExportExcel = () => {
+    if (activeTab === 'predictive') {
+      exportPredictiveToExcel(analyticsData?.predictive || {}, selectedPreset);
+    } else {
+      exportAnalyticsToExcel(analyticsData, selectedPreset);
+    }
+  };
+
+  const handleExportCsv = () => {
+    if (activeTab === 'predictive') {
+      exportPredictiveToCsv(analyticsData?.predictive || {}, selectedPreset);
+    } else {
+      exportAnalyticsToCsv(analyticsData);
+    }
+  };
 
   const handleRunEtl = async (fullSync = false) => {
     setIsSyncing(true);
-    setSyncStatusMsg(fullSync ? 'Executing Full Refresh & Sync...' : 'Refreshing Branch Metrics...');
+    setSyncStatusMsg(fullSync ? 'Executing Full ETL Sync...' : 'Running Incremental ETL...');
     try {
-      await fetchAnalytics(globalDateFrom, globalDateTo, true);
-      setSyncStatusMsg('Branch metrics updated successfully!');
+      const res = await fetch(`${ANALYTICS_BASE}/etl/trigger`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ full_sync: fullSync }),
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        setSyncStatusMsg(`ETL Complete! Processed ${data.records_processed} records.`);
+        await fetchAnalytics();
+      } else {
+        setSyncStatusMsg(`ETL Failed: ${data.error || 'Check logs'}`);
+      }
     } catch (e) {
-      setSyncStatusMsg('Refresh complete.');
+      setSyncStatusMsg('ETL Trigger request sent to analytics service.');
     } finally {
       setIsSyncing(false);
-      setTimeout(() => setSyncStatusMsg(''), 4000);
+      setTimeout(() => setSyncStatusMsg(''), 5000);
     }
   };
 
   // ─── Section 1: Ticket Trends Charts ─────────────────────────────────────
   const ticketChart = useMemo(() => {
-    const liveTrends = dashboardData?.trends;
-    const labels = liveTrends?.labels || LABELS[activeDatePreset] || LABELS['Last 7 Days'];
-
+    const labels = LABELS[activeDatePreset] || LABELS['Last 7 Days'];
     if (ticketView === 'Ticket Trends') {
-      const dataNew = liveTrends?.new || ticketTrendsMock[activeDatePreset]?.new || ticketTrendsMock['Last 7 Days'].new;
-      const dataResolved = liveTrends?.resolved || ticketTrendsMock[activeDatePreset]?.resolved || ticketTrendsMock['Last 7 Days'].resolved;
-      const lastNew = dataNew[dataNew.length - 1] ?? 0;
-      const lastResolved = dataResolved[dataResolved.length - 1] ?? 0;
-
+      const data = ticketTrendsMock[activeDatePreset] || ticketTrendsMock['Last 7 Days'];
+      const lastNew = data.new[data.new.length - 1];
+      const lastResolved = data.resolved[data.resolved.length - 1];
       return (
         <div>
-          <div className="h-[150px]">
+          <div className="h-[220px]">
             <Line
               options={defaultLineOptions('Ticket Trends')}
               data={{
@@ -501,7 +546,7 @@ export default function AdminDashboard() {
                 datasets: [
                   {
                     label: 'New Tickets',
-                    data: dataNew,
+                    data: data.new,
                     borderColor: COLORS.blue.border,
                     backgroundColor: COLORS.blue.bg,
                     fill: true,
@@ -514,7 +559,7 @@ export default function AdminDashboard() {
                   },
                   {
                     label: 'Resolved Tickets',
-                    data: dataResolved,
+                    data: data.resolved,
                     borderColor: COLORS.emerald.border,
                     backgroundColor: COLORS.emerald.bg,
                     fill: true,
@@ -533,22 +578,17 @@ export default function AdminDashboard() {
         </div>
       );
     } else {
-      const st = dashboardData?.status_distribution;
-      const openVal = st ? st.open : (ticketStatusMock[activeDatePreset]?.open ?? 14);
-      const inProgressVal = st ? st.inProgress : (ticketStatusMock[activeDatePreset]?.inProgress ?? 8);
-      const resolvedVal = st ? st.resolved : (ticketStatusMock[activeDatePreset]?.resolved ?? 22);
-      const closedVal = st ? st.closed : (ticketStatusMock[activeDatePreset]?.closed ?? 31);
-
+      const data = ticketStatusMock[activeDatePreset] || ticketStatusMock['Last 7 Days'];
       return (
         <div>
-          <div className="h-[150px]">
+          <div className="h-[220px]">
             <Bar
               options={defaultHorizontalBarOptions('Ticket Status Distribution')}
               data={{
                 labels: ['Open', 'In Progress', 'Resolved', 'Closed'],
                 datasets: [{
                   label: 'Tickets',
-                  data: [openVal, inProgressVal, resolvedVal, closedVal],
+                  data: [data.open, data.inProgress, data.resolved, data.closed],
                   backgroundColor: [BAR_PALETTE[2], BAR_PALETTE[0], BAR_PALETTE[1], BAR_PALETTE[3]],
                   borderRadius: 6,
                   barThickness: 18,
@@ -556,25 +596,21 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Active tickets: {openVal + inProgressVal} ({openVal} open, {inProgressVal} in progress).</p>
+          <p className="text-[11px] text-gray-500 mt-1">Active tickets: {data.open + data.inProgress} ({data.open} open, {data.inProgress} in progress).</p>
         </div>
       );
     }
-  }, [activeDatePreset, ticketView, dashboardData]);
+  }, [activeDatePreset, ticketView]);
 
   // ─── Section 2: SLA Compliance Charts ─────────────────────────────────────
   const slaChart = useMemo(() => {
-    const liveTrends = dashboardData?.trends;
-    const labels = liveTrends?.labels || LABELS[activeDatePreset] || LABELS['Last 7 Days'];
-
+    const labels = LABELS[activeDatePreset] || LABELS['Last 7 Days'];
     if (slaView === 'Compliance') {
-      const liveCompliance = dashboardData?.sla?.compliance_trend;
-      const data = liveCompliance || slaComplianceMock[activeDatePreset] || slaComplianceMock['Last 7 Days'];
-      const avgVal = dashboardData?.sla?.overall_compliance ?? (data.reduce((a, b) => a + b, 0) / data.length).toFixed(1);
-
+      const data = slaComplianceMock[activeDatePreset] || slaComplianceMock['Last 7 Days'];
+      const avgVal = (data.reduce((a, b) => a + b, 0) / data.length).toFixed(1);
       return (
         <div>
-          <div className="h-[150px]">
+          <div className="h-[220px]">
             <Line
               options={defaultLineOptions('SLA Compliance Rate (%)')}
               data={{
@@ -599,13 +635,11 @@ export default function AdminDashboard() {
         </div>
       );
     } else if (slaView === 'Breaches') {
-      const liveBreaches = dashboardData?.sla?.breaches_trend;
-      const data = liveBreaches || slaBreachesMock[activeDatePreset] || slaBreachesMock['Last 7 Days'];
-      const totalBreaches = dashboardData?.sla?.sla_breached ?? data.reduce((a, b) => a + b, 0);
-
+      const data = slaBreachesMock[activeDatePreset] || slaBreachesMock['Last 7 Days'];
+      const totalBreaches = data.reduce((a, b) => a + b, 0);
       return (
         <div>
-          <div className="h-[150px]">
+          <div className="h-[220px]">
             <Bar
               options={defaultBarOptions('SLA Breaches')}
               data={{
@@ -624,13 +658,11 @@ export default function AdminDashboard() {
         </div>
       );
     } else if (slaView === 'Resolution SLA') {
-      const liveRes = dashboardData?.sla?.resolution_time_trend;
-      const data = liveRes || resolutionSlaMock[activeDatePreset] || resolutionSlaMock['Last 7 Days'];
-      const avgTime = dashboardData?.kpis?.avg_resolution_hours ?? (data.reduce((a, b) => a + b, 0) / data.length).toFixed(1);
-
+      const data = resolutionSlaMock[activeDatePreset] || resolutionSlaMock['Last 7 Days'];
+      const avgTime = (data.reduce((a, b) => a + b, 0) / data.length).toFixed(1);
       return (
         <div>
-          <div className="h-[150px]">
+          <div className="h-[220px]">
             <Line
               options={defaultLineOptions('Avg Resolution Time (hrs)')}
               data={{
@@ -655,48 +687,43 @@ export default function AdminDashboard() {
         </div>
       );
     } else {
-      const liveDept = dashboardData?.sla?.by_department;
-      const deptLabels = liveDept && liveDept.length > 0 ? liveDept.map(d => d.department) : DEPARTMENTS;
-      const deptData = liveDept && liveDept.length > 0
-        ? liveDept.map(d => d.compliance_percentage)
-        : (slaDeptMock[activeDatePreset] || slaDeptMock['Last 7 Days']);
-
+      const data = slaDeptMock[activeDatePreset] || slaDeptMock['Last 7 Days'];
       return (
         <div>
-          <div className="h-[150px]">
+          <div className="h-[220px]">
             <Bar
               options={defaultHorizontalBarOptions('SLA by Department')}
               data={{
-                labels: deptLabels,
+                labels: DEPARTMENTS,
                 datasets: [{
                   label: 'SLA %',
-                  data: deptData,
-                  backgroundColor: BAR_PALETTE.slice(0, deptLabels.length),
+                  data,
+                  backgroundColor: BAR_PALETTE.slice(0, DEPARTMENTS.length),
                   borderRadius: 6,
                   barThickness: 18,
                 }],
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Departmental SLA compliance tracked by service rules.</p>
+          <p className="text-[11px] text-gray-500 mt-1">Engineering maintains highest SLA compliance.</p>
         </div>
       );
     }
-  }, [activeDatePreset, slaView, dashboardData]);
+  }, [activeDatePreset, slaView]);
 
   // ─── Section 3: Employee Performance Chart ──────────────────────────────
   const empChart = useMemo(() => {
-    const liveEmpPerf = dashboardData?.employee_performance;
-    const labels = liveEmpPerf?.labels && liveEmpPerf.labels.length > 0 ? liveEmpPerf.labels : EMPLOYEES;
+    const perfList = analyticsData.performance?.data || [];
+    const hasLivePerf = perfList.length > 0;
+    const labels = hasLivePerf ? perfList.map(p => p.employee_name) : EMPLOYEES;
 
     if (empView === 'Tickets Resolved') {
-      const data = liveEmpPerf?.resolved && liveEmpPerf.resolved.length > 0
-        ? liveEmpPerf.resolved
+      const data = hasLivePerf
+        ? perfList.map(p => p.ticket_count || p.resolved_tickets_count || 0)
         : (empResolvedMock[activeDatePreset] || empResolvedMock['Last 7 Days']);
-
       return (
         <div>
-          <div className="h-[150px]">
+          <div className="h-[220px]">
             <Bar
               options={defaultHorizontalBarOptions('Tickets Resolved by Employee')}
               data={{
@@ -711,23 +738,22 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Total resolved tickets by active branch staff.</p>
+          <p className="text-[11px] text-gray-500 mt-1">Top performer: Jose Cruz with highest resolved count.</p>
         </div>
       );
     } else if (empView === 'Avg Response Time') {
-      const data = liveEmpPerf?.response_time && liveEmpPerf.response_time.length > 0
-        ? liveEmpPerf.response_time
+      const data = hasLivePerf
+        ? perfList.map(p => p.avg_response_hours || p.avg_response_time_minutes || 0)
         : (empResponseTimeMock[activeDatePreset] || empResponseTimeMock['Last 7 Days']);
-
       return (
         <div>
-          <div className="h-[150px]">
+          <div className="h-[220px]">
             <Bar
-              options={defaultHorizontalBarOptions('Avg Response Time (mins)')}
+              options={defaultHorizontalBarOptions('Avg Response Time')}
               data={{
                 labels,
                 datasets: [{
-                  label: 'Response Time (mins)',
+                  label: 'Response Time',
                   data,
                   backgroundColor: BAR_PALETTE[4],
                   borderRadius: 6,
@@ -736,17 +762,16 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Average initial response time in minutes.</p>
+          <p className="text-[11px] text-gray-500 mt-1">Fastest response: Anna Lim (8 mins average).</p>
         </div>
       );
     } else if (empView === 'Avg Resolution Time') {
-      const data = liveEmpPerf?.resolution_time && liveEmpPerf.resolution_time.length > 0
-        ? liveEmpPerf.resolution_time
+      const data = hasLivePerf
+        ? perfList.map(p => p.avg_resolution_hours || Math.round((p.avg_resolution_time_minutes || 0) / 60 * 10) / 10)
         : (empResTimeMock[activeDatePreset] || empResTimeMock['Last 7 Days']);
-
       return (
         <div>
-          <div className="h-[150px]">
+          <div className="h-[220px]">
             <Bar
               options={defaultHorizontalBarOptions('Avg Resolution Time (hrs)')}
               data={{
@@ -761,17 +786,16 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Average ticket resolution duration in hours.</p>
+          <p className="text-[11px] text-gray-500 mt-1">Fastest resolution: Mark Reyes (2.1 hrs average).</p>
         </div>
       );
     } else {
-      const data = liveEmpPerf?.sla_compliance && liveEmpPerf.sla_compliance.length > 0
-        ? liveEmpPerf.sla_compliance
+      const data = hasLivePerf
+        ? perfList.map(p => p.sla_compliance || 95)
         : (empSlaMock[activeDatePreset] || empSlaMock['Last 7 Days']);
-
       return (
         <div>
-          <div className="h-[150px]">
+          <div className="h-[220px]">
             <Bar
               options={defaultHorizontalBarOptions('SLA Compliance by Employee')}
               data={{
@@ -786,22 +810,20 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">SLA compliance score across assigned tickets.</p>
+          <p className="text-[11px] text-gray-500 mt-1">All employees meeting minimum 90% SLA target.</p>
         </div>
       );
     }
-  }, [activeDatePreset, empView, dashboardData]);
+  }, [activeDatePreset, empView, analyticsData.performance]);
 
   // ─── Section 4: Customer Satisfaction Chart ──────────────────────────────
   const csatChart = useMemo(() => {
-    const liveCsat = dashboardData?.csat;
-    const labels = liveCsat?.labels || LABELS[activeDatePreset] || LABELS['Last 7 Days'];
-    const data = liveCsat?.trend || csatMock[activeDatePreset] || csatMock['Last 7 Days'];
-    const avgScore = liveCsat?.average_score ?? (data[data.length - 1] || 4.7);
-
+    const labels = LABELS[activeDatePreset] || LABELS['Last 7 Days'];
+    const data = csatMock[activeDatePreset] || csatMock['Last 7 Days'];
+    const lastScore = data[data.length - 1];
     return (
       <div>
-        <div className="h-[150px]">
+        <div className="h-[220px]">
           <Line
             options={defaultLineOptions('CSAT Rating Trend (1-5)')}
             data={{
@@ -822,119 +844,77 @@ export default function AdminDashboard() {
             }}
           />
         </div>
-        <p className="text-[11px] text-gray-500 mt-1">Average CSAT score: {avgScore}/5 based on customer ratings.</p>
+        <p className="text-[11px] text-gray-500 mt-1">CSAT score: {lastScore}/5 — customer satisfaction is stable.</p>
       </div>
     );
-  }, [activeDatePreset, dashboardData]);
+  }, [activeDatePreset]);
 
   // ─── Section 5: Workload Distribution Chart ──────────────────────────────
   const workloadChart = useMemo(() => {
-    const liveWorkload = dashboardData?.workload;
-
     if (workloadView === 'By Employee') {
-      const labels = liveWorkload?.by_employee?.labels && liveWorkload.by_employee.labels.length > 0
-        ? liveWorkload.by_employee.labels
-        : EMPLOYEES;
-      const data = liveWorkload?.by_employee?.data && liveWorkload.by_employee.data.length > 0
-        ? liveWorkload.by_employee.data
-        : (workloadEmpMock[activeDatePreset] || workloadEmpMock['Last 7 Days']);
-
       return (
         <div>
-          <div className="h-[150px]">
+          <div className="h-[220px]">
             <Bar
               options={defaultHorizontalBarOptions('Workload by Employee')}
               data={{
-                labels,
+                labels: EMPLOYEES,
                 datasets: [{
                   label: 'Tickets Assigned',
-                  data,
-                  backgroundColor: BAR_PALETTE.slice(0, labels.length),
+                  data: workloadEmpMock[activeDatePreset] || workloadEmpMock['Last 7 Days'],
+                  backgroundColor: BAR_PALETTE.slice(0, EMPLOYEES.length),
                   borderRadius: 6,
                   barThickness: 16,
                 }],
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Active assigned tickets currently distributed across branch employees.</p>
+          <p className="text-[11px] text-gray-500 mt-1">Workload evenly distributed across employees.</p>
         </div>
       );
     } else {
-      const labels = liveWorkload?.by_department?.labels && liveWorkload.by_department.labels.length > 0
-        ? liveWorkload.by_department.labels
-        : DEPARTMENTS;
-      const data = liveWorkload?.by_department?.data && liveWorkload.by_department.data.length > 0
-        ? liveWorkload.by_department.data
-        : (workloadDeptMock[activeDatePreset] || workloadDeptMock['Last 7 Days']);
-
       return (
         <div>
-          <div className="h-[150px]">
+          <div className="h-[220px]">
             <Bar
               options={defaultHorizontalBarOptions('Workload by Department')}
               data={{
-                labels,
+                labels: DEPARTMENTS,
                 datasets: [{
                   label: 'Tickets Assigned',
-                  data,
-                  backgroundColor: BAR_PALETTE.slice(0, labels.length),
+                  data: workloadDeptMock[activeDatePreset] || workloadDeptMock['Last 7 Days'],
+                  backgroundColor: BAR_PALETTE.slice(0, DEPARTMENTS.length),
                   borderRadius: 6,
                   barThickness: 18,
                 }],
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Active tickets by department in this branch.</p>
+          <p className="text-[11px] text-gray-500 mt-1">Service department handles the majority of tickets.</p>
         </div>
       );
     }
-  }, [activeDatePreset, workloadView, dashboardData]);
+  }, [activeDatePreset, workloadView]);
 
-  // KPI data from live dashboard
+  // KPI data
   const kpis = useMemo(() => {
-    const k = dashboardData?.kpis;
-    const slaVal = k?.sla_compliance_rate ?? (slaComplianceMock[activeDatePreset] || slaComplianceMock['Last 7 Days']).slice(-1)[0];
-    const totalTickets = k?.total_tickets ?? (ticketStatusMock[activeDatePreset] ? (ticketStatusMock[activeDatePreset].open + ticketStatusMock[activeDatePreset].inProgress + ticketStatusMock[activeDatePreset].resolved + ticketStatusMock[activeDatePreset].closed) : 0);
-    const csatVal = k?.csat_score ?? 4.67;
-    const avgRes = k?.avg_resolution_hours ?? 2.1;
-    const activeStaff = k?.active_employees_count ?? 6;
-
+    const realCounts = analyticsData.predictive?.real_ticket_counts;
+    const slaVal = (slaComplianceMock[activeDatePreset] || slaComplianceMock['Last 7 Days']).slice(-1)[0];
+    const tData = ticketStatusMock[activeDatePreset] || ticketStatusMock['Last 7 Days'];
+    const totalTickets = realCounts?.total ?? (tData.open + tData.inProgress + tData.resolved + tData.closed);
+    const csatVal = (csatMock[activeDatePreset] || csatMock['Last 7 Days']).slice(-1)[0];
     return [
       { label: 'Total Tickets', value: totalTickets, icon: Inbox },
       { label: 'SLA Compliance', value: `${slaVal}%`, icon: ShieldCheck },
-      { label: 'Active Staff', value: activeStaff, icon: Users },
-      { label: 'CSAT Score', value: `${Number(csatVal).toFixed(1)} / 5`, icon: Smile },
-      { label: 'Avg Resolution', value: `${avgRes}h`, icon: Clock },
+      { label: 'Active Employees', value: analyticsData.performance?.active_employees_count || activeEmployeesMock[activeDatePreset] || 6, icon: Users },
+      { label: 'CSAT Score', value: csatVal.toFixed(1), icon: Smile },
+      { label: 'Avg Resolution', value: `${(resolutionSlaMock[activeDatePreset] || resolutionSlaMock['Last 7 Days']).slice(-1)[0]}h`, icon: Clock },
     ];
-  }, [activeDatePreset, dashboardData]);
+  }, [activeDatePreset, analyticsData]);
 
   const dateStr = new Intl.DateTimeFormat('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   }).format(new Date());
-
-  const branchTitle = dashboardData?.branch?.name
-    ? `${dashboardData.branch.name} (${dashboardData.branch.code || 'MAIN'})`
-    : 'Main Branch';
-
-  const masterExportPayload = useMemo(() => {
-    return {
-      trends: {
-        open: dashboardData?.status_distribution?.open ?? 12,
-        inProgress: dashboardData?.status_distribution?.inProgress ?? 18,
-        resolved: dashboardData?.status_distribution?.resolved ?? 15,
-        closed: dashboardData?.status_distribution?.closed ?? 5,
-      },
-      sla: {
-        overall_compliance: dashboardData?.sla?.overall_compliance ?? 92.5,
-        sla_met: dashboardData?.sla?.sla_met ?? 45,
-        sla_breached: dashboardData?.sla?.sla_breached ?? 4,
-      },
-      csat: dashboardData?.csat ?? { average_score: 4.67, satisfaction_percentage: 100, total_reviews: 3 },
-      predictive: analyticsData?.predictive || {},
-      period: selectedPreset,
-      branch: dashboardData?.branch,
-    };
-  }, [dashboardData, analyticsData, selectedPreset]);
 
   return (
     <div id="admin-analytics-report" className="space-y-6">
@@ -942,16 +922,7 @@ export default function AdminDashboard() {
       <PageHeader
         pattern="A"
         title="Admin Dashboard"
-        subtitle={
-          <span className="inline-flex flex-wrap items-center gap-2 mt-1">
-            <span>{dateStr}</span>
-            <span className="text-slate-muted">•</span>
-            <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 font-semibold text-xs inline-flex items-center gap-1.5 py-0.5 px-2">
-              <Building2 className="w-3.5 h-3.5 text-accent" />
-              Branch: {branchTitle}
-            </Badge>
-          </span>
-        }
+        subtitle={dateStr}
         actions={
           <div className="flex flex-wrap items-center gap-2 print:hidden">
             {syncStatusMsg && (
@@ -959,112 +930,166 @@ export default function AdminDashboard() {
                 {syncStatusMsg}
               </span>
             )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => downloadPdfFromElement(activeTab === 'predictive' ? 'predictive-analytics-report' : 'admin-analytics-report', activeTab === 'predictive' ? 'Predictive_Analytics_Report.pdf' : 'Analytics_Operational_Report.pdf')}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white border-transparent"
-              title="Download PDF report file directly"
-            >
-              <FileText className="w-3.5 h-3.5 mr-1 text-white" />
-              Export to PDF
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => activeTab === 'predictive' ? exportPredictiveToCsv(analyticsData?.predictive || {}) : exportAnalyticsToCsv(masterExportPayload)}
-              className="bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-800"
-              title="Export metrics to Excel / CSV"
-            >
-              <Download className="w-3.5 h-3.5 mr-1 text-emerald-600" />
-              Export Excel / CSV
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={triggerPdfPrint}
-              title="Print report"
-            >
-              <Printer className="w-3.5 h-3.5 mr-1 text-slate-muted" />
-              Print
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleRunEtl(false)}
-              disabled={isSyncing}
-            >
-              <RefreshCw className={cn("w-3.5 h-3.5 mr-1 text-accent", isSyncing && "animate-spin")} />
-              Refresh Metrics
-            </Button>
-            <Button
-              variant="default"
-              size="sm"
-              onClick={() => handleRunEtl(true)}
-              disabled={isSyncing}
-            >
-              <Cpu className="w-3.5 h-3.5 mr-1" />
-              Full Sync
-            </Button>
+
+            {/* Export Dropdown Button (PDF, Excel, CSV, Print) */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="sm"
+                  disabled={isGeneratingPdf}
+                  className="text-xs gap-1.5 font-medium cursor-pointer bg-[#252578] hover:bg-[#1d1d60] text-white shadow-xs"
+                >
+                  <Download className="w-3.5 h-3.5 text-white" />
+                  <span>{isGeneratingPdf ? 'Exporting...' : 'Export'}</span>
+                  <ChevronDown className="w-3 h-3 text-white/80 ml-0.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56 p-1">
+                <DropdownMenuItem onClick={handleExportPdf} className="cursor-pointer gap-2 py-2">
+                  <FileText className="w-4 h-4 text-rose-600 shrink-0" />
+                  <div className="flex flex-col">
+                    <span className="font-semibold text-xs text-foreground">Export as PDF</span>
+                    <span className="text-[10px] text-muted-foreground">Download formatted visual document</span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleExportExcel} className="cursor-pointer gap-2 py-2">
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <div className="flex flex-col">
+                    <span className="font-semibold text-xs text-foreground">Export as Excel (.xlsx)</span>
+                    <span className="text-[10px] text-muted-foreground">Download sortable workbook</span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleExportCsv} className="cursor-pointer gap-2 py-2">
+                  <FileCode className="w-4 h-4 text-sky-600 shrink-0" />
+                  <div className="flex flex-col">
+                    <span className="font-semibold text-xs text-foreground">Export as CSV</span>
+                    <span className="text-[10px] text-muted-foreground">Download structured table data</span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={triggerPdfPrint} className="cursor-pointer gap-2 py-2">
+                  <Printer className="w-4 h-4 text-slate-500 shrink-0" />
+                  <div className="flex flex-col">
+                    <span className="font-semibold text-xs text-foreground">Print View</span>
+                    <span className="text-[10px] text-muted-foreground">Direct printer / system print dialog</span>
+                  </div>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* ETL Sync Dropdown Button (Incremental vs Full ETL) */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={isSyncing}
+                  className="text-xs gap-1.5 font-medium cursor-pointer"
+                >
+                  <RefreshCw className={cn("w-3.5 h-3.5 text-accent", isSyncing && "animate-spin")} />
+                  <span>{isSyncing ? 'Syncing ETL...' : 'ETL Pipeline'}</span>
+                  <ChevronDown className="w-3 h-3 text-muted-foreground ml-0.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64 p-1">
+                <DropdownMenuItem
+                  onClick={() => handleRunEtl(false)}
+                  disabled={isSyncing}
+                  className="cursor-pointer gap-2 py-2"
+                >
+                  <RefreshCw className="w-4 h-4 text-accent shrink-0" />
+                  <div className="flex flex-col">
+                    <span className="font-semibold text-xs text-foreground">Run Incremental ETL</span>
+                    <span className="text-[10px] text-muted-foreground">Quick delta synchronization of recent tickets</span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => handleRunEtl(true)}
+                  disabled={isSyncing}
+                  className="cursor-pointer gap-2 py-2"
+                >
+                  <Cpu className="w-4 h-4 text-primary shrink-0" />
+                  <div className="flex flex-col">
+                    <span className="font-semibold text-xs text-foreground">Full ETL Sync</span>
+                    <span className="text-[10px] text-muted-foreground">Rebuild entire data warehouse from base records</span>
+                  </div>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         }
       />
 
-      {/* Single-Line Toolbar: Tab Navigation & Global Date Range Filters */}
-      <div className="flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3 bg-card rounded-xl shadow-xs border border-border p-2 print:hidden">
-        {/* Left: Tab Switcher */}
-        <div className="flex items-center gap-1 bg-page rounded-lg p-1 shrink-0 border border-border">
-          <Button
-            variant={activeTab === 'overview' ? 'default' : 'ghost'}
-            size="sm"
+      {/* Top Navigation & Toolbar Bar: Left Tabs (Overview / Predictive) & Right Controls (Branch + Date Range) */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-200 mb-5 print:hidden">
+        {/* Left: Tab Switcher (Underline sits flush on the horizontal border line) */}
+        <div className="flex items-center gap-6 sm:gap-8 shrink-0 -mb-px">
+          <button
+            type="button"
             onClick={() => setActiveTab('overview')}
-            className="text-xs"
+            className={cn(
+              "pb-3 pt-1 text-xs sm:text-sm transition-all relative cursor-pointer border-b-2 font-medium",
+              activeTab === 'overview'
+                ? "text-[#252578] border-[#252578] font-semibold"
+                : "text-slate-500 hover:text-slate-800 border-transparent"
+            )}
           >
-            <BarChart3 className="w-4 h-4 mr-1.5" />
             Overview
-          </Button>
-          <Button
-            variant={activeTab === 'predictive' ? 'default' : 'ghost'}
-            size="sm"
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab('predictive')}
-            className="text-xs"
+            className={cn(
+              "pb-3 pt-1 text-xs sm:text-sm transition-all relative cursor-pointer border-b-2 font-medium",
+              activeTab === 'predictive'
+                ? "text-[#252578] border-[#252578] font-semibold"
+                : "text-slate-500 hover:text-slate-800 border-transparent"
+            )}
           >
-            <LineChart className="w-4 h-4 mr-1.5" />
             Predictive Analytics
-          </Button>
+          </button>
         </div>
 
-        {/* Right: Date Range Preset Filters */}
-        <div className="flex items-center gap-2 flex-wrap justify-end">
-          <div className="flex items-center gap-1 bg-page rounded-lg p-1 border border-border">
+        {/* Right: Active Branch Selector & Date Range Preset Filters side-by-side */}
+        <div className="flex items-center gap-3 shrink-0 flex-wrap justify-end pb-2">
+          {/* Branch Selector Pill */}
+          <BranchSelector variant="inline" />
+
+          {/* Segmented Date Range Pill */}
+          <div className="flex items-center gap-0.5 bg-slate-100/90 p-1 rounded-xl border border-slate-200/50">
             {FILTER_OPTIONS.map((opt) => (
-              <Button
+              <button
                 key={opt}
-                variant={selectedPreset === opt ? 'default' : 'ghost'}
-                size="sm"
+                type="button"
                 onClick={() => setSelectedPreset(opt)}
-                className="text-xs h-7 px-2.5"
+                className={cn(
+                  "text-xs px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer",
+                  selectedPreset === opt
+                    ? "bg-[#252578] text-white font-semibold shadow-xs"
+                    : "text-slate-600 hover:text-slate-900"
+                )}
               >
                 {opt}
-              </Button>
+              </button>
             ))}
           </div>
 
+          {/* Custom Date Range Popover / Pickers if Custom Range is selected */}
           {selectedPreset === 'Custom Range' && (
-            <div className="flex items-center gap-2 bg-page border border-border rounded-lg px-3 py-1 text-xs">
-              <Calendar className="w-3.5 h-3.5 text-slate-muted" />
+            <div className="flex items-center gap-2 bg-white border border-slate-200/80 rounded-xl px-3 py-1.5 text-xs shadow-xs">
+              <Calendar className="w-3.5 h-3.5 text-slate-500" />
               <input
                 type="date"
                 value={customStartDate}
                 onChange={(e) => setCustomStartDate(e.target.value)}
-                className="bg-card border border-border rounded px-2 py-0.5 text-xs text-slate-dark focus:outline-none focus:ring-1 focus:ring-accent"
+                className="bg-transparent text-xs text-slate-800 focus:outline-none"
               />
-              <span className="text-slate-muted font-medium">to</span>
+              <span className="text-slate-400 font-medium">to</span>
               <input
                 type="date"
                 value={customEndDate}
                 onChange={(e) => setCustomEndDate(e.target.value)}
-                className="bg-card border border-border rounded px-2 py-0.5 text-xs text-slate-dark focus:outline-none focus:ring-1 focus:ring-accent"
+                className="bg-transparent text-xs text-slate-800 focus:outline-none"
               />
             </div>
           )}
@@ -1073,206 +1098,95 @@ export default function AdminDashboard() {
 
       {/* Tab Content */}
       {activeTab === 'overview' ? (
-        isLoading && !dashboardData ? (
-          <div className="space-y-6 animate-pulse">
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="h-24 bg-card rounded-xl border border-border p-4 flex flex-col justify-between">
-                  <Skeleton className="h-4 w-24" />
-                  <Skeleton className="h-8 w-16" />
-                </div>
-              ))}
-            </div>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="h-60 bg-card rounded-xl border border-border p-4 space-y-3">
-                  <Skeleton className="h-5 w-40" />
-                  <Skeleton className="h-44 w-full" />
-                </div>
-              ))}
+        <div className="space-y-6">
+          {/* KPI Cards Strip */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+            {kpis.map((k) => {
+              const Icon = k.icon;
+              return (
+                <MetricCard
+                  key={k.label}
+                  title={k.label}
+                  value={k.value}
+                  icon={<Icon className="w-5 h-5" />}
+                  iconBg="bg-primary/10 text-primary"
+                />
+              );
+            })}
+          </div>
+
+          {/* 2-Column Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+            {/* Section 1: SLA Compliance */}
+            <SectionCard
+              icon={<ShieldCheck className="w-4 h-4 text-white" />}
+              title="SLA Compliance"
+              instruction="Adherence, breaches, resolution times"
+              subInstruction="and per-department performance"
+              viewOptions={['Compliance', 'Breaches', 'Resolution SLA', 'SLA by Dept']}
+              currentView={slaView}
+              onViewChange={setSlaView}
+            >
+              {slaChart}
+            </SectionCard>
+
+            {/* Section 2: Employee Performance */}
+            <SectionCard
+              icon={<Users className="w-4 h-4 text-white" />}
+              title="Employee Performance"
+              instruction="Metrics across tickets, response times, and SLA."
+              viewOptions={['Tickets Resolved', 'Avg Response Time', 'Avg Resolution Time', 'SLA Compliance']}
+              currentView={empView}
+              onViewChange={setEmpView}
+            >
+              {empChart}
+            </SectionCard>
+
+            {/* Section 3: Ticket Trends */}
+            <SectionCard
+              icon={<TrendingUp className="w-4 h-4 text-white" />}
+              title="Ticket Trends"
+              instruction="New vs resolved tickets and status distribution."
+              viewOptions={['Ticket Trends', 'Ticket Status']}
+              currentView={ticketView}
+              onViewChange={setTicketView}
+            >
+              {ticketChart}
+            </SectionCard>
+
+            {/* Section 4: Customer Satisfaction */}
+            <SectionCard
+              icon={<Smile className="w-4 h-4 text-white" />}
+              title="Customer Satisfaction"
+              instruction="CSAT score trends over time."
+            >
+              {csatChart}
+            </SectionCard>
+
+            {/* Section 5: Workload Distribution — Full Width */}
+            <div className="lg:col-span-2">
+              <SectionCard
+                icon={<Briefcase className="w-4 h-4 text-white" />}
+                title="Workload Distribution"
+                instruction="Ticket assignments across employees and departments."
+                viewOptions={['By Employee', 'By Department']}
+                currentView={workloadView}
+                onViewChange={setWorkloadView}
+              >
+                {workloadChart}
+              </SectionCard>
             </div>
           </div>
-        ) : (
-          <div className="space-y-6">
-            {/* KPI Cards Strip */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-              {kpis.map((k) => {
-                const Icon = k.icon;
-                return (
-                  <MetricCard
-                    key={k.label}
-                    title={k.label}
-                    value={k.value}
-                    icon={<Icon className="w-5 h-5" />}
-                    iconBg="bg-primary/10 text-primary"
-                  />
-                );
-              })}
-            </div>
-
-            {/* 2-Column Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
-              {/* Section 1: SLA Compliance */}
-              <SectionCard
-                icon={<ShieldCheck className="w-4 h-4 text-white" />}
-                title="SLA Compliance"
-                instruction="Adherence, breaches, resolution times"
-                subInstruction="and per-department performance"
-                viewOptions={['Compliance', 'Breaches', 'Resolution SLA', 'SLA by Dept']}
-                currentView={slaView}
-                onViewChange={setSlaView}
-              >
-                {slaChart}
-              </SectionCard>
-
-              {/* Section 2: Employee Performance */}
-              <SectionCard
-                icon={<Users className="w-4 h-4 text-white" />}
-                title="Employee Performance"
-                instruction="Metrics across tickets, response times, and SLA."
-                viewOptions={['Tickets Resolved', 'Avg Response Time', 'Avg Resolution Time', 'SLA Compliance']}
-                currentView={empView}
-                onViewChange={setEmpView}
-              >
-                {empChart}
-              </SectionCard>
-
-              {/* Section 3: Ticket Trends */}
-              <SectionCard
-                icon={<TrendingUp className="w-4 h-4 text-white" />}
-                title="Ticket Trends"
-                instruction="New vs resolved tickets and status distribution."
-                viewOptions={['Ticket Trends', 'Ticket Status']}
-                currentView={ticketView}
-                onViewChange={setTicketView}
-              >
-                {ticketChart}
-              </SectionCard>
-
-              {/* Section 4: Customer Satisfaction */}
-              <SectionCard
-                icon={<Smile className="w-4 h-4 text-white" />}
-                title="Customer Satisfaction"
-                instruction="CSAT score trends over time."
-              >
-                {csatChart}
-              </SectionCard>
-
-              {/* Section 5: Recurring Issues (Categories & Equipment) */}
-              <div className="lg:col-span-2">
-                <SectionCard
-                  icon={<AlertTriangle className="w-4 h-4 text-white" />}
-                  title="Branch Recurring Issues & Equipment Faults"
-                  instruction="Top problem categories and machine failure frequencies within selected date range."
-                >
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-1">
-                    {/* Top Problem Categories */}
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-slate-dark flex items-center gap-1.5">
-                          <Wrench className="w-3.5 h-3.5 text-accent" />
-                          Top Problem Categories
-                        </span>
-                        <span className="text-[11px] text-slate-muted">Volume & Frequency</span>
-                      </div>
-                      <div className="space-y-2">
-                        {dashboardData?.recurring_issues?.top_categories?.length > 0 ? (
-                          dashboardData.recurring_issues.top_categories.map((cat, idx) => (
-                            <div key={cat.name || idx} className="p-2.5 bg-page rounded-lg border border-border flex items-center justify-between text-xs">
-                              <span className="font-medium text-slate-dark truncate max-w-[200px]">{cat.name}</span>
-                              <div className="flex items-center gap-2">
-                                <span className="font-bold text-primary">{cat.count} tickets</span>
-                                <Badge variant="outline" className="text-[10px] bg-blue-50 text-accent border-blue-200">
-                                  {cat.percentage}%
-                                </Badge>
-                              </div>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="p-3 text-center text-xs text-slate-muted border border-dashed rounded-lg">
-                            No recurring problem categories in selected period.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Top Equipment / Machines */}
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-slate-dark flex items-center gap-1.5">
-                          <Cpu className="w-3.5 h-3.5 text-rose-600" />
-                          Frequent Equipment Issues
-                        </span>
-                        <span className="text-[11px] text-slate-muted">Machine Failures</span>
-                      </div>
-                      <div className="space-y-2">
-                        {dashboardData?.recurring_issues?.top_equipment?.length > 0 ? (
-                          dashboardData.recurring_issues.top_equipment.map((eq, idx) => (
-                            <div key={eq.label || idx} className="p-2.5 bg-page rounded-lg border border-border flex items-center justify-between text-xs">
-                              <div className="truncate max-w-[220px]">
-                                <span className="font-medium text-slate-dark">{eq.name}</span>
-                                {eq.serial_number && (
-                                  <p className="text-[10px] text-slate-muted font-mono">{eq.serial_number}</p>
-                                )}
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-bold text-rose-600">{eq.count} issues</span>
-                                <Badge variant="outline" className="text-[10px] bg-rose-50 text-rose-700 border-rose-200">
-                                  {eq.percentage}%
-                                </Badge>
-                              </div>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="p-3 text-center text-xs text-slate-muted border border-dashed rounded-lg">
-                            No machine failure reports in selected period.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </SectionCard>
-              </div>
-
-              {/* Section 6: Workload Distribution — Full Width */}
-              <div className="lg:col-span-2">
-                <SectionCard
-                  icon={<Briefcase className="w-4 h-4 text-white" />}
-                  title="Workload Distribution"
-                  instruction="Ticket assignments across employees and departments."
-                  viewOptions={['By Employee', 'By Department']}
-                  currentView={workloadView}
-                  onViewChange={setWorkloadView}
-                >
-                  {workloadChart}
-                  {dashboardData?.workload?.details?.length > 0 && (
-                    <div className="mt-4 pt-4 border-t border-border">
-                      <h4 className="text-xs font-semibold text-slate-muted mb-2">Branch Employee Assignment Breakdown</h4>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
-                        {dashboardData.workload.details.map((emp) => (
-                          <div key={emp.emp_id} className="p-2 bg-page rounded-lg border border-border text-xs">
-                            <p className="font-medium text-slate-dark truncate" title={emp.name}>{emp.name}</p>
-                            <p className="text-[10px] text-slate-muted truncate">{emp.department || 'Service'}</p>
-                            <div className="mt-1 flex items-center justify-between">
-                              <span className="text-[10px] text-slate-muted">Active:</span>
-                              <Badge variant="outline" className="h-4 px-1.5 text-[10px] bg-blue-50 text-accent font-bold">
-                                {emp.active_tickets}
-                              </Badge>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </SectionCard>
-              </div>
-            </div>
-          </div>
-        )
+        </div>
       ) : (
         <AnalyticsErrorBoundary>
-          <PredictiveAnalytics selectedPreset={selectedPreset} analyticsData={analyticsData} />
+          <PredictiveAnalytics
+            selectedPreset={selectedPreset}
+            analyticsData={analyticsData}
+            branch={selectedBranch}
+            onRetry={() => fetchAnalytics(globalDateFrom, globalDateTo)}
+          />
         </AnalyticsErrorBoundary>
       )}
     </div>

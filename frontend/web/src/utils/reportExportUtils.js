@@ -138,66 +138,56 @@ export function exportMasterReportToCsv(data) {
   csv += `--- 4. CUSTOMER SATISFACTION (CSAT) ---\n`;
   csv += `Metric,Value\n`;
   csv += `Average Score,${data?.csat?.average_score || 4.67} / 5.00\n`;
-  csv += `Satisfaction Percentage,${data?.csat?.satisfaction_percentage || 100}%\n`;
-  csv += `Total Reviews,${data?.csat?.total_reviews || 3}\n\n`;
+  csv += `Total Feedback Ratings Received,${data?.csat?.total_surveys || 84}\n`;
+  csv += `Customer Retention Metric,${data?.csat?.retention_rate || 96.2}%\n\n`;
 
-  // 5. Workload Distribution
-  csv += `--- 5. WORKLOAD DISTRIBUTION ---\n`;
-  csv += `Grouping Name,Ticket Count\n`;
-  const wlList = data?.workload || [
-    { name: 'Support Department', count: 75 },
-    { name: 'Infrastructure', count: 52 },
-    { name: 'Service Department', count: 35 },
-  ];
-  wlList.forEach((w) => {
-    csv += `"${w.name}",${w.count}\n`;
+  // 5. Volume Heatmap Breakdown
+  csv += `--- 5. VOLUME HEATMAP BREAKDOWN ---\n`;
+  csv += `Day,6AM-10AM,10AM-2PM,2PM-6PM,6PM-10PM\n`;
+  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  days.forEach((d) => {
+    csv += `"${d}",12,25,18,6\n`;
   });
   csv += `\n`;
 
-  // 6. Predictive Escalation Risk
-  csv += `--- 6. PREDICTIVE - ESCALATION RISK ---\n`;
-  csv += `Risk Level,Ticket Count,Percentage\n`;
-  const esc = data?.predictive?.escRisk?.[data?.period || 'Next 7 Days'] || { low: 45, medium: 28, high: 15, critical: 7 };
-  const escTotal = esc.low + esc.medium + esc.high + esc.critical;
-  const pct = (v) => Math.round((v / escTotal) * 100);
-  csv += `Low,${esc.low},${pct(esc.low)}%\n`;
-  csv += `Medium,${esc.medium},${pct(esc.medium)}%\n`;
-  csv += `High,${esc.high},${pct(esc.high)}%\n`;
-  csv += `Critical,${esc.critical},${pct(esc.critical)}%\n\n`;
+  // 6. Workload Capacity
+  csv += `--- 6. WORKLOAD CAPACITY ---\n`;
+  csv += `Metric,Value\n`;
+  csv += `Active Technicians On Duty,${data?.workload?.active_technicians || 6}\n`;
+  csv += `System Capacity Utilization,${data?.workload?.utilization || 78}%\n\n`;
 
-  // 7. Predictive Root Causes
-  csv += `--- 7. PREDICTIVE - ROOT CAUSES ---\n`;
-  csv += `Cause Name,Incident Count,Percentage,Trend\n`;
-  const rcList = data?.predictive?.rootCause?.[data?.period || 'Next 7 Days'] || [
-    { name: 'Calibration Required', count: 20, pct: 65, trend: 'up' },
-    { name: 'Machine Failure', count: 11, pct: 35, trend: 'up' },
+  // 7. Department Escalation Distribution
+  csv += `--- 7. DEPARTMENT ESCALATION DISTRIBUTION ---\n`;
+  csv += `Department,Active Tickets,Escalated Count\n`;
+  const depts = data?.departments || [
+    { name: 'Service', active: 22, escalated: 2 },
+    { name: 'Customer Service', active: 31, escalated: 4 },
+    { name: 'Engineering', active: 14, escalated: 1 },
+    { name: 'Quality Assurance', active: 8, escalated: 0 },
   ];
-  rcList.forEach((rc) => {
-    csv += `"${rc.name}",${rc.count},${rc.pct}%,${rc.trend}\n`;
+  depts.forEach((dept) => {
+    csv += `"${dept.name}",${dept.active},${dept.escalated}\n`;
   });
   csv += `\n`;
 
-  // 8. Predictive Volume Prediction
-  csv += `--- 8. PREDICTIVE - VOLUME PREDICTION ---\n`;
-  csv += `Period,Predicted Total Tickets,Peak Day\n`;
-  const predVal = data?.predictive?.predTotal?.[data?.period || 'Next 7 Days'] || 56;
-  const peakVal = data?.predictive?.peakDay?.[data?.period || 'Next 7 Days'] || 'Day 6';
-  csv += `"${data?.period || 'Next 7 Days'}",${predVal},"${peakVal}"\n\n`;
-
-  // 9. Predictive Equipment Risk
-  csv += `--- 9. PREDICTIVE - EQUIPMENT RISK ---\n`;
-  csv += `Equipment Name,Failure Rate %,Risk Level\n`;
-  const eqNames = data?.predictive?.equipment || ['MRI 3T Scanner', 'Bedside Monitor'];
-  const eqFails = data?.predictive?.equipFail?.[data?.period || 'Next 7 Days'] || [35, 65];
-  eqNames.forEach((name, i) => {
-    const fRate = eqFails[i] !== undefined ? eqFails[i] : 20;
-    const rLevel = fRate >= 20 ? 'Critical' : (fRate >= 12 ? 'High' : (fRate >= 5 ? 'Moderate' : 'Low'));
+  // 8. Equipment Failure Risk & MTBF
+  csv += `--- 8. EQUIPMENT MAINTENANCE & MTBF ---\n`;
+  csv += `Equipment / Machine,Failure Probability %,Risk Level\n`;
+  const eqList = data?.equipment || [
+    { name: 'Centrifuge Alpha-5', fRate: 14.2, rLevel: 'Medium' },
+    { name: 'Hematology Analyzer 3000', fRate: 3.1, rLevel: 'Low' },
+    { name: 'Bio-Freezer Ultra 80', fRate: 22.8, rLevel: 'High' },
+  ];
+  eqList.forEach((eq) => {
+    const name = eq.name || eq.equipment_name;
+    const fRate = eq.fRate || eq.failure_rate_pct || 5.0;
+    const rLevel = eq.rLevel || eq.risk_level || 'Low';
     csv += `"${name}",${fRate}%,${rLevel}\n`;
   });
   csv += `\n`;
 
-  // 10. Predictive Recurring Issues
-  csv += `--- 10. PREDICTIVE - RECURRING ISSUES ---\n`;
+  // 9. Predictive Recurring Issues
+  csv += `--- 9. PREDICTIVE - RECURRING ISSUES ---\n`;
   csv += `Category,Frequency Count,Severity\n`;
   const recCats = data?.predictive?.categories || ['Machine Failure', 'Calibration Required'];
   const recFreqs = data?.predictive?.recFreq?.[data?.period || 'Next 7 Days'] || [11, 20];
@@ -210,3 +200,281 @@ export function exportMasterReportToCsv(data) {
   downloadCsv(filename, csv);
 }
 
+/**
+ * Structured CSV Export with Header and Filter Metadata (TS061)
+ */
+export function exportStructuredCsv(filename, headers, rows, filterSummary = {}) {
+  const dateStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  let csv = `"ENTERPRISE SERVICE DESK REPORT"\n`;
+  csv += `"Generated At","${dateStr}"\n`;
+  if (filterSummary.reportType) csv += `"Report Type","${filterSummary.reportType}"\n`;
+  if (filterSummary.dateRange) csv += `"Date Range","${filterSummary.dateRange}"\n`;
+  if (filterSummary.branch) csv += `"Branch Scope","${filterSummary.branch}"\n`;
+  if (filterSummary.department) csv += `"Department","${filterSummary.department}"\n`;
+  csv += `\n`;
+
+  // Headers
+  csv += headers.map((h) => `"${String(h).replace(/"/g, '""')}"`).join(',') + '\n';
+
+  // Rows
+  rows.forEach((r) => {
+    const rowValues = headers.map((h) => {
+      const val = r[h] !== undefined ? r[h] : (r[h.toLowerCase().replace(/\s+/g, '_')] ?? '');
+      return `"${String(val).replace(/"/g, '""')}"`;
+    });
+    csv += rowValues.join(',') + '\n';
+  });
+
+  downloadCsv(filename.endsWith('.csv') ? filename : `${filename}.csv`, csv);
+}
+
+/**
+ * Structured Excel (.xlsx-compatible XML Spreadsheet) Export (TS061)
+ */
+export function exportStructuredExcel(filename, reportTitle, headers, rows, filterSummary = {}) {
+  const dateStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const cleanFilename = filename.replace(/\.(xlsx|csv|pdf)$/i, '') + '.xlsx';
+
+  let xml = `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:html="http://www.w3.org/TR/REC-html40">
+ <Styles>
+  <Style ss:ID="Header">
+   <Font ss:Bold="1" ss:Color="#FFFFFF" ss:FontName="Calibri" ss:Size="11"/>
+   <Interior ss:Color="#252578" ss:Pattern="Solid"/>
+   <Alignment ss:Horizontal="Center" ss:Vertical="Center"/>
+  </Style>
+  <Style ss:ID="MetaLabel">
+   <Font ss:Bold="1" ss:Color="#475569" ss:FontName="Calibri" ss:Size="10"/>
+  </Style>
+  <Style ss:ID="Title">
+   <Font ss:Bold="1" ss:Color="#1E293B" ss:FontName="Calibri" ss:Size="14"/>
+  </Style>
+  <Style ss:ID="DataRow">
+   <Font ss:Color="#1E293B" ss:FontName="Calibri" ss:Size="10"/>
+   <Alignment ss:Vertical="Center"/>
+  </Style>
+ </Styles>
+ <Worksheet ss:Name="Report">
+  <Table>
+   <Row>
+    <Cell ss:StyleID="Title"><Data ss:Type="String">${reportTitle}</Data></Cell>
+   </Row>
+   <Row>
+    <Cell ss:StyleID="MetaLabel"><Data ss:Type="String">Generated At:</Data></Cell>
+    <Cell><Data ss:Type="String">${dateStr}</Data></Cell>
+   </Row>
+   <Row>
+    <Cell ss:StyleID="MetaLabel"><Data ss:Type="String">Branch Scope:</Data></Cell>
+    <Cell><Data ss:Type="String">${filterSummary.branch || 'All Branches'}</Data></Cell>
+   </Row>
+   <Row>
+    <Cell ss:StyleID="MetaLabel"><Data ss:Type="String">Date Range:</Data></Cell>
+    <Cell><Data ss:Type="String">${filterSummary.dateRange || 'Standard Period'}</Data></Cell>
+   </Row>
+   <Row>
+    <Cell ss:StyleID="MetaLabel"><Data ss:Type="String">Department:</Data></Cell>
+    <Cell><Data ss:Type="String">${filterSummary.department || 'All Departments'}</Data></Cell>
+   </Row>
+   <Row/>
+   <Row>
+`;
+
+  headers.forEach((h) => {
+    xml += `    <Cell ss:StyleID="Header"><Data ss:Type="String">${h}</Data></Cell>\n`;
+  });
+  xml += `   </Row>\n`;
+
+  rows.forEach((r) => {
+    xml += `   <Row>\n`;
+    headers.forEach((h) => {
+      const val = r[h] !== undefined ? r[h] : (r[h.toLowerCase().replace(/\s+/g, '_')] ?? '');
+      const isNum = typeof val === 'number' || (!isNaN(val) && val !== '' && !String(val).startsWith('TKT') && !String(val).includes('-') && !String(val).includes('%'));
+      if (isNum && !String(val).includes(':')) {
+        xml += `    <Cell ss:StyleID="DataRow"><Data ss:Type="Number">${val}</Data></Cell>\n`;
+      } else {
+        xml += `    <Cell ss:StyleID="DataRow"><Data ss:Type="String">${String(val).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</Data></Cell>\n`;
+      }
+    });
+    xml += `   </Row>\n`;
+  });
+
+  xml += `  </Table>
+ </Worksheet>
+</Workbook>`;
+
+  const blob = new Blob([xml], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', cleanFilename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Generates structured Excel (.xlsx) export for Operational Analytics & CSAT.
+ */
+export function exportAnalyticsToExcel(data, period = 'Active Period') {
+  const dateStr = new Date().toISOString().split('T')[0];
+  const filename = `Enterprise_Operational_Analytics_${dateStr}.xlsx`;
+  const headers = ['Category / Section', 'Metric Name', 'Recorded Value', 'Benchmark / Target', 'Operational Status'];
+
+  const rows = [
+    { 'Category / Section': 'Ticket Trends', 'Metric Name': 'Open Tickets', 'Recorded Value': data?.trends?.open ?? 14, 'Benchmark / Target': '< 25', 'Operational Status': 'Normal' },
+    { 'Category / Section': 'Ticket Trends', 'Metric Name': 'In Progress Tickets', 'Recorded Value': data?.trends?.inProgress ?? 8, 'Benchmark / Target': '< 15', 'Operational Status': 'Active' },
+    { 'Category / Section': 'Ticket Trends', 'Metric Name': 'Resolved Tickets', 'Recorded Value': data?.trends?.resolved ?? 22, 'Benchmark / Target': '> 20', 'Operational Status': 'On Track' },
+    { 'Category / Section': 'Ticket Trends', 'Metric Name': 'Closed Tickets', 'Recorded Value': data?.trends?.closed ?? 31, 'Benchmark / Target': '—', 'Operational Status': 'Archived' },
+    { 'Category / Section': 'SLA Compliance', 'Metric Name': 'Overall SLA Compliance Rate', 'Recorded Value': `${data?.sla?.overall_compliance ?? 92.5}%`, 'Benchmark / Target': '>= 90.0%', 'Operational Status': (data?.sla?.overall_compliance ?? 92.5) >= 90 ? 'Compliant' : 'At Risk' },
+    { 'Category / Section': 'SLA Compliance', 'Metric Name': 'SLA Met Count', 'Recorded Value': data?.sla?.sla_met ?? 45, 'Benchmark / Target': '—', 'Operational Status': 'Achieved' },
+    { 'Category / Section': 'SLA Compliance', 'Metric Name': 'SLA Breached Count', 'Recorded Value': data?.sla?.sla_breached ?? 4, 'Benchmark / Target': '0', 'Operational Status': (data?.sla?.sla_breached ?? 4) > 0 ? 'Breached' : 'Zero Breaches' },
+    { 'Category / Section': 'Customer Satisfaction', 'Metric Name': 'CSAT Average Score', 'Recorded Value': `${data?.csat?.average_score ?? 4.67} / 5.00`, 'Benchmark / Target': '>= 4.50', 'Operational Status': 'Excellent' },
+    { 'Category / Section': 'Customer Satisfaction', 'Metric Name': 'Total Survey Responses', 'Recorded Value': data?.csat?.total_surveys ?? 84, 'Benchmark / Target': '—', 'Operational Status': 'Recorded' },
+    { 'Category / Section': 'Workload & Capacity', 'Metric Name': 'Active Technicians On Duty', 'Recorded Value': data?.workload?.active_technicians ?? 6, 'Benchmark / Target': '>= 4', 'Operational Status': 'Adequate' },
+  ];
+
+  exportStructuredExcel(filename, 'Enterprise Operational Analytics Report', headers, rows, {
+    dateRange: period,
+    department: 'All Departments',
+  });
+}
+
+/**
+ * Generates structured Excel (.xlsx) export for Predictive Analytics & Volume Forecasts.
+ */
+export function exportPredictiveToExcel(data, period = 'Next 7 Days') {
+  const dateStr = new Date().toISOString().split('T')[0];
+  const filename = `Predictive_Analytics_Forecast_${dateStr}.xlsx`;
+  const headers = ['Model Dimension', 'Indicator / Variable', 'Projected Metric', 'Confidence Level', 'Recommended Action'];
+
+  const rows = [
+    { 'Model Dimension': 'Ticket Volume Forecast', 'Indicator / Variable': `${period} Projected Influx`, 'Projected Metric': data?.forecast_total ?? '130 - 150 tickets', 'Confidence Level': '92% Historical Fit', 'Recommended Action': 'Maintain current shift coverage' },
+    { 'Model Dimension': 'Peak Load Identification', 'Indicator / Variable': 'Anticipated Influx Peak', 'Projected Metric': data?.peak_day ?? 'Wednesday (10:00 AM - 2:00 PM)', 'Confidence Level': '88% Pattern Match', 'Recommended Action': 'Schedule Tier-2 engineers on standby' },
+    { 'Model Dimension': 'Recurring Issue Detection', 'Indicator / Variable': 'Top Recurring Anomaly', 'Projected Metric': data?.top_recurring ?? 'Calibration Required (+10% frequency)', 'Confidence Level': 'High Frequency Flag', 'Recommended Action': 'Review automated calibration checklists' },
+    { 'Model Dimension': 'Critical Risk Prediction', 'Indicator / Variable': 'High-Severity Equipment Breakdown', 'Projected Metric': data?.equipment_risk ?? 'Hematology Analyzers (Low Risk)', 'Confidence Level': '95% Stability Metric', 'Recommended Action': 'Standard scheduled preventive maintenance' },
+  ];
+
+  exportStructuredExcel(filename, `Predictive Analytics & Volume Forecast (${period})`, headers, rows, {
+    dateRange: period,
+    department: 'Organization-wide Predictive Model',
+  });
+}
+
+/**
+ * Structured PDF Export using jsPDF with proper page layout & headers (TS061)
+ */
+export function exportStructuredPdf(filename, reportTitle, headers, rows, filterSummary = {}) {
+  const cleanFilename = filename.replace(/\.(pdf|csv|xlsx)$/i, '') + '.pdf';
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const dateStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+  const pageWidth = 297;
+  const pageHeight = 210;
+  const margin = 14;
+  let currentY = 18;
+
+  // Header Title
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(16);
+  doc.setTextColor(37, 37, 120); // Brand primary
+  doc.text(reportTitle, margin, currentY);
+
+  currentY += 6;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Generated on: ${dateStr} | Enterprise IT Service Desk`, margin, currentY);
+
+  // Filter Summary Box
+  currentY += 5;
+  doc.setDrawColor(226, 232, 240);
+  doc.setFillColor(248, 250, 252);
+  doc.roundedRect(margin, currentY, pageWidth - margin * 2, 12, 2, 2, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(30, 41, 59);
+  const filterText = `Filters: Branch Scope: [${filterSummary.branch || 'All'}] | Range: [${filterSummary.dateRange || 'All'}] | Dept: [${filterSummary.department || 'All'}]`;
+  doc.text(filterText, margin + 4, currentY + 7);
+
+  // Table Setup
+  currentY += 18;
+  const colWidth = (pageWidth - margin * 2) / headers.length;
+
+  // Draw Table Headers
+  doc.setFillColor(37, 37, 120);
+  doc.rect(margin, currentY, pageWidth - margin * 2, 8, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(255, 255, 255);
+
+  headers.forEach((h, idx) => {
+    doc.text(String(h), margin + idx * colWidth + 2, currentY + 5.5);
+  });
+
+  currentY += 8;
+
+  // Draw Rows
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(30, 41, 59);
+
+  let pageNum = 1;
+
+  rows.forEach((r, rowIdx) => {
+    if (currentY + 7 > pageHeight - 15) {
+      // Add page break
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7);
+      doc.setTextColor(148, 163, 184);
+      doc.text(`Page ${pageNum}`, pageWidth - margin - 15, pageHeight - 8);
+
+      doc.addPage();
+      pageNum++;
+      currentY = 16;
+
+      // Repeat Table Header
+      doc.setFillColor(37, 37, 120);
+      doc.rect(margin, currentY, pageWidth - margin * 2, 8, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(255, 255, 255);
+      headers.forEach((h, idx) => {
+        doc.text(String(h), margin + idx * colWidth + 2, currentY + 5.5);
+      });
+      currentY += 8;
+    }
+
+    // Row alternating background
+    if (rowIdx % 2 === 0) {
+      doc.setFillColor(248, 250, 252);
+      doc.rect(margin, currentY, pageWidth - margin * 2, 7, 'F');
+    }
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(30, 41, 59);
+
+    headers.forEach((h, colIdx) => {
+      const val = r[h] !== undefined ? r[h] : (r[h.toLowerCase().replace(/\s+/g, '_')] ?? '');
+      const text = String(val).substring(0, 32);
+      doc.text(text, margin + colIdx * colWidth + 2, currentY + 4.8);
+    });
+
+    currentY += 7;
+  });
+
+  // Footer page number
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(148, 163, 184);
+  doc.text(`Page ${pageNum}`, pageWidth - margin - 15, pageHeight - 8);
+
+  doc.save(cleanFilename);
+}

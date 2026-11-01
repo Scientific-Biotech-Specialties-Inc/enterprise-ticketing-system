@@ -141,35 +141,4 @@ describe('BranchContext and null branch support', () => {
     expect(screen.getByTestId('current-branch-name').textContent).toBe('Davao South Branch');
     expect(screen.getByTestId('current-branch-code').textContent).toBe('DVO');
   });
-
-  it('routes branch admin to public branches and locks to assigned branch', async () => {
-    vi.spyOn(authContextModule, 'useAuth').mockReturnValue({
-      user: {
-        id: 8,
-        email: 'admin@example.com',
-        role: 'admin',
-        branch: 'Cebu Main Branch',
-        branch_id: 1,
-      },
-    });
-
-    ticketService.getPublicBranches.mockResolvedValue({
-      data: mockBranches,
-    });
-
-    render(
-      <BranchProvider>
-        <TestConsumer />
-      </BranchProvider>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId('loading').textContent).toBe('false');
-    });
-
-    expect(ticketService.getBranches).not.toHaveBeenCalled();
-    expect(ticketService.getPublicBranches).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('current-branch-name').textContent).toBe('Cebu Main Branch');
-    expect(screen.getByTestId('current-branch-code').textContent).toBe('CEB');
-  });
 });

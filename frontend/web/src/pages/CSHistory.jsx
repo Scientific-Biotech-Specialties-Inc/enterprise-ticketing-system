@@ -77,7 +77,7 @@ const buildTicketSearchString = (t) => {
     .toLowerCase();
 };
 
-export default function CSHistory() {
+export default function CSHistory({ roleContext = 'cs' }) {
   const navigate = useNavigate();
 
   const [tickets, setTickets] = useState([]);
@@ -218,7 +218,8 @@ export default function CSHistory() {
 
   const handleRowAction = (t) => {
     const ticketId = t.ticket_ID || Number(String(t.id).replace(/\D/g, ''));
-    navigate(`/cs/history/${ticketId}`, { state: { ticket: t, backPath: '/cs/history' } });
+    const basePath = roleContext === 'it_manager' ? '/it-manager' : '/cs';
+    navigate(`${basePath}/history/${ticketId}`, { state: { ticket: t, backPath: `${basePath}/history` } });
   };
 
   return (

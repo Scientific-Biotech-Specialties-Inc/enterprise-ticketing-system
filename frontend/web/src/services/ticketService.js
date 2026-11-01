@@ -826,10 +826,9 @@ const fetchEmployeeAssignedTickets = async ({ employeeEmail }) => {
       },
     });
     const tickets = response.data?.tickets ?? [];
-    const departmentSummary = response.data?.department_summary ?? null;
 
     const overrides = getEmployeeOverrides();
-    const mapped = tickets.map((t) => {
+    return tickets.map((t) => {
       const { status: _overrideStatus, ...overrideFields } = overrides[t.id] || {};
 
       return {
@@ -837,12 +836,6 @@ const fetchEmployeeAssignedTickets = async ({ employeeEmail }) => {
         ...overrideFields,
       };
     });
-
-    if (departmentSummary) {
-      mapped.department_summary = departmentSummary;
-    }
-
-    return mapped;
   } catch (error) {
     console.warn('Failed to fetch assigned tickets from ticket-service:', error);
     throw error;
@@ -1299,6 +1292,21 @@ export const deleteSuperAdminPriority = async (id) => {
 
 export const getSuperAdminAuditLogs = async () => {
   const response = await ticketClient.get('/superadmin/audit-logs');
+  return response.data;
+};
+
+export const getAuditLogRetentionConfig = async () => {
+  const response = await ticketClient.get('/superadmin/audit-logs/retention');
+  return response.data;
+};
+
+export const updateAuditLogRetentionConfig = async (retentionDays) => {
+  const response = await ticketClient.post('/superadmin/audit-logs/retention', { retention_days: retentionDays });
+  return response.data;
+};
+
+export const purgeAuditLogs = async (retentionDays) => {
+  const response = await ticketClient.post('/superadmin/audit-logs/purge', { retention_days: retentionDays });
   return response.data;
 };
 

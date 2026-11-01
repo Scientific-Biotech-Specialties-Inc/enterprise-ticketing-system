@@ -49,6 +49,11 @@ const SuperAdminSettings = React.lazy(() => import('./pages/SuperAdminSettings.j
 const SuperAdminDevLogin = React.lazy(() => import('./pages/SuperAdminDevLogin.jsx'));
 const LandingPage = React.lazy(() => import('./pages/LandingPage.jsx'));
 
+// Lazy loaded IT Manager components
+const ITManagerLayout = React.lazy(() => import('./components/ITManagerLayout.jsx'));
+const ITManagerDashboard = React.lazy(() => import('./pages/ITManagerDashboard.jsx'));
+const ITManagerTickets = React.lazy(() => import('./pages/ITManagerTickets.jsx'));
+
 // Lazy loaded Admin page and layout components
 const AdminLayout = React.lazy(() => import('./components/AdminLayout.jsx'));
 const AdminDashboard = React.lazy(() => import('./pages/AdminDashboard.jsx'));
@@ -84,11 +89,23 @@ const checkIsAdmin = (user) => {
   const dept = resolveUserDepartment(user).toLowerCase();
   return role === 'admin' || role === 'it admin' || (dept === 'admin' && role !== 'superadmin' && role !== 'super admin');
 };
+const checkIsItManager = (user) => {
+  if (!user) return false;
+  const role = resolveUserRole(user).toLowerCase();
+  const dept = resolveUserDepartment(user).toLowerCase();
+  return (
+    role === 'it_manager' ||
+    role === 'it manager' ||
+    role === 'it department manager' ||
+    (dept.includes('it') && role.includes('manager'))
+  );
+};
 const checkIsEmployee = (user) => {
   if (!user) return false;
   if (checkIsCS(user)) return false;
   if (checkIsAdmin(user)) return false;
   if (checkIsSuperAdmin(user)) return false;
+  if (checkIsItManager(user)) return false;
   const dept = resolveUserDepartment(user).toLowerCase();
   const role = resolveUserRole(user).toLowerCase();
   if (dept === 'service' || dept.includes('engineer')) return true;
@@ -123,11 +140,13 @@ function EmployeePortalGate() {
   const isSuperAdmin = checkIsSuperAdmin(user);
   const isAdmin      = checkIsAdmin(user);
   const isCS         = checkIsCS(user);
+  const isItManager  = checkIsItManager(user);
   const isEmployee   = checkIsEmployee(user);
 
   if (isSuperAdmin) return <Navigate to="/superadmin/config" replace />;
   if (isAdmin)      return <Navigate to="/admin/dashboard" replace />;
   if (isCS)         return <Navigate to="/cs/dashboard" replace />;
+  if (isItManager)  return <Navigate to="/it-manager/dashboard" replace />;
   if (isEmployee)   return <Navigate to="/employee/dashboard" replace />;
 
   // Unknown role on the employee portal → back to auth module
@@ -281,6 +300,27 @@ function App() {
                 }
               />
 
+              {/* IT Manager Routes (Strictly role: it_manager) */}
+              <Route
+                path="/it-manager"
+                element={
+                  <PrivateRoute role="it_manager">
+                    <ITManagerLayout />
+                  </PrivateRoute>
+                }
+              >
+                <Route index element={<Navigate to="dashboard" replace />} />
+                <Route path="dashboard" element={<ITManagerDashboard />} />
+                <Route path="tickets" element={<ITManagerTickets />} />
+                <Route path="breached" element={<Navigate to="/it-manager/dashboard" replace />} />
+                <Route path="history" element={<CSHistory roleContext="it_manager" />} />
+                <Route path="history/:ticketId" element={<EmployeeHistoryDetail />} />
+                <Route path="my-tickets" element={<EmployeeMyTickets roleContext="it_manager" />} />
+                <Route path="messages" element={<MessagingPage />} />
+                <Route path="profile" element={<Profile />} />
+                <Route path="notifications" element={<Notifications />} />
+              </Route>
+
               {/* Customer Service (CS) Routes */}
               <Route
                 path="/cs"
@@ -318,7 +358,8 @@ function App() {
                 <Route path="ticket-config" element={<Navigate to="/superadmin/config" replace />} />
                 <Route path="ticket-config/:group" element={<SuperAdminTicketConfig />} />
                 <Route path="ticket-config/:group/:subtab" element={<SuperAdminTicketConfig />} />
-                <Route path="audit-logs" element={<SuperAdminAuditLogs />} />
+                <Route path="audit-logs" element={<SuperAdminAuditLogs defaultTab="logs" />} />
+                <Route path="log-retention" element={<SuperAdminAuditLogs defaultTab="retention" />} />
                 <Route path="history" element={<SuperAdminHistory />} />
                 <Route path="knowledge-base" element={<AIKnowledgeBase />} />
                 <Route path="settings" element={<SuperAdminSettings />} />

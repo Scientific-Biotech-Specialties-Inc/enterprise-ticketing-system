@@ -24,6 +24,7 @@ import FilePreviewModal from './FilePreviewModal';
 import FeedbackModal from './feedback/FeedbackModal';
 import TicketFeedbackSection from './feedback/TicketFeedbackSection';
 import InternalTicketMessageThread from './InternalTicketMessageThread';
+import TicketActivityTimeline from './TicketActivityTimeline';
 import ReassignmentDisapprovalBanner from './employee/ReassignmentDisapprovalBanner';
 import { formatDisplayDate } from '@/utils/dateUtils';
 import { hasFeedbackBeenSubmitted, isFeedbackFormEnabled, setFeedbackFormEnabled, fetchFeedbackForTicket } from '@/data/mockFeedbackData';
@@ -781,84 +782,13 @@ export default function CustomerTicketDetailModal({
               </div>
             )}
 
-            {/* Timeline */}
-            <div className="md:col-span-2 border-t border-border pt-4 mt-2">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-muted">
-                  Ticket Timeline &amp; History
-                </h3>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setTimelineSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-                  className="h-7 text-xs"
-                >
-                  <ArrowUpDown className="h-3 w-3 mr-1" />
-                  {timelineSortOrder === 'asc' ? 'Oldest First' : 'Newest First'}
-                </Button>
-              </div>
-
-              {sortedTimelineEvents.length === 0 ? (
-                <p className="text-xs italic text-slate-muted">No timeline events recorded.</p>
-              ) : (
-                <div className="relative ml-3 space-y-4 border-l-2 border-border py-1.5 pl-6">
-                  {sortedTimelineEvents.map((evt, idx) => {
-                    const isReminder = evt.type === 'reminder';
-                    const dotColor =
-                      isReminder
-                        ? 'bg-indigo-600 ring-2 ring-indigo-200'
-                        : evt.type === 'system'
-                        ? 'bg-primary'
-                        : evt.type === 'status'
-                          ? 'bg-accent'
-                          : evt.type === 'internal_note'
-                            ? 'bg-destructive'
-                            : evt.type === 'remark'
-                              ? 'bg-emerald-500'
-                              : evt.type === 'reassign'
-                                ? 'bg-amber-500'
-                                : 'bg-slate-400';
-
-                    return (
-                      <div key={evt.id || idx} className="relative text-xs">
-                        <div className={`absolute top-1 h-3 w-3 rounded-full border-2 border-white shadow ${dotColor}`} style={{ left: '-31px' }} />
-                        <div className="mb-0.5 flex items-center justify-between text-slate-muted">
-                          <span className={`text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 ${
-                            isReminder ? 'text-indigo-600' : 'text-primary'
-                          }`}>
-                            {isReminder && <Bell className="w-3 h-3 text-indigo-600 inline" />}
-                            {isReminder
-                              ? 'CS Reminder'
-                              : evt.type === 'system'
-                              ? 'System'
-                              : evt.type === 'status'
-                                ? 'Status Update'
-                                : evt.type === 'internal_note'
-                                  ? 'Internal Note'
-                                  : evt.type === 'remark'
-                                    ? 'Remark'
-                                    : evt.type === 'reassign'
-                                      ? 'Reassignment'
-                                      : evt.type || 'Update'}
-                          </span>
-                          <span className="text-[10px] text-slate-muted">{formatDisplayDate(evt.timestamp)}</span>
-                        </div>
-                        <p
-                          className={`rounded-lg border p-2.5 leading-relaxed break-words whitespace-pre-wrap max-w-full overflow-hidden ${
-                            isReminder
-                              ? 'bg-indigo-50/80 border-indigo-200 text-indigo-950 font-medium'
-                              : 'border-border bg-page font-medium text-slate-dark'
-                          }`}
-                          style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
-                        >
-                          {evt.text}
-                        </p>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+            {/* Activity Timeline & History (TS086) */}
+            <div className="md:col-span-2 pt-2">
+              <TicketActivityTimeline
+                ticket={effectiveTicket}
+                userRole="employee"
+                pageSize={6}
+              />
             </div>
 
             {(effectiveTicket.is_internal || effectiveTicket.ticket_type === 'Internal' || effectiveTicket.type === 'Internal' || effectiveTicket.title?.startsWith('[Internal]')) && (

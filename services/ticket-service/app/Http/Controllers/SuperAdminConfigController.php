@@ -662,77 +662,97 @@ class SuperAdminConfigController extends Controller
         ]);
     }
 
-    public function getSuperAdminHistory(Request $request)
+    /**
+     * TS088: Get log retention policy configuration.
+     */
+    public function getLogRetentionConfig(Request $request)
     {
         if ($err = $this->checkSuperAdmin($request)) {
             return $err;
         }
 
-        $logs = DB::table('ticket_audit_logs as tal')
-            ->leftJoin('employees as e', function ($join) {
-                $join->on('e.emp_id', '=', 'tal.action_by_ID')
-                    ->whereIn('tal.actor_type', ['superadmin', 'admin', 'employee', 'cs', 'customerservice']);
-            })
-            ->leftJoin('clients as c', function ($join) {
-                $join->on('c.id', '=', 'tal.action_by_ID')
-                    ->where('tal.actor_type', '=', 'customer');
-            })
-            ->select('tal.*', 'e.first_name', 'e.last_name', 'e.role', 'c.client_name')
-            ->where(function ($q) {
-                $q->where('tal.actor_type', 'superadmin')
-                    ->orWhere('tal.action_type', 'like', 'config_%');
-            })
-            ->orderBy('tal.created_at', 'desc')
-            ->get();
+        $retentionDays = (int) \Illuminate\Support\Facades\Cache::get('superadmin_log_retention_days', 365);
+        $threshold = \Illuminate\Support\Carbon::now()->subDays($retentionDays);
+        $affectedCount = DB::table('ticket_audit_logs')
+            ->where('created_at', '<', $threshold)
+            ->count();
 
-        $formattedLogs = $logs->map(function ($log) {
-            $userFullName = 'System';
-            $role = 'Super Admin';
+        return response()->json([
+            'retention_days' => $retentionDays,
+            'threshold_date' => $threshold->toIso8601String(),
+            'affected_records_count' => $affectedCount,
+            'schedule' => 'Nightly at 02:00 UTC',
+            'last_purged_at' => \Illuminate\Support\Facades\Cache::get('superadmin_last_log_purge_at'),
+        ]);
+    }
 
-            if ($log->actor_type === 'customer') {
-                $role = 'Customer';
-                $userFullName = $log->client_name ?? 'Customer';
-            } elseif ($log->actor_type === 'system' || (int)$log->action_by_ID === 0) {
-                $userFullName = 'System';
-                $role = 'System';
-            } else {
-                $userFullName = trim(($log->first_name ?? '') . ' ' . ($log->last_name ?? '')) ?: 'Super Admin';
-                $role = ($log->actor_type === 'superadmin') ? 'Super Admin' : ($log->role ? ucwords($log->role) : 'Employee');
-            }
-            $action = 'Updated';
-            $module = 'System';
-            $target = 'System';
-            $details = $log->details;
+    /**
+     * TS088: Update log retention policy configuration.
+     */
+    public function updateLogRetentionConfig(Request $request)
+    {
+        if ($err = $this->checkSuperAdmin($request)) {
+            return $err;
+        }
 
-            $detailsDecoded = json_decode($log->details, true);
-            if ($detailsDecoded) {
-                $module = $detailsDecoded['module'] ?? 'System';
-                $target = $detailsDecoded['target'] ?? 'System';
-                $details = $detailsDecoded['text'] ?? '';
-            }
+        $validated = $request->validate([
+            'retention_days' => 'required|integer|min:7|max:1825',
+        ]);
 
-            if (str_contains($log->action_type, 'create')) {
-                $action = 'Created';
-            } elseif (str_contains($log->action_type, 'delete')) {
-                $action = 'Deleted';
-            } else {
-                $action = 'Updated';
-            }
+        \Illuminate\Support\Facades\Cache::forever('superadmin_log_retention_days', $validated['retention_days']);
 
-            return [
-                'id' => $log->log_ID,
-                'timestamp' => $log->created_at,
-                'user' => $userFullName,
-                'role' => $role,
-                'action' => $action,
-                'module' => $module,
-                'target' => $target,
-                'details' => $details,
-            ];
-        });
+        return response()->json([
+            'message' => 'Log retention policy updated successfully.',
+            'retention_days' => $validated['retention_days'],
+        ]);
+    }
+
+    /**
+     * TS088: Permanently purge audit logs older than retention threshold.
+     */
+    public function purgeAuditLogs(Request $request)
+    {
+        if ($err = $this->checkSuperAdmin($request)) {
+            return $err;
+        }
+
+        $retentionDays = (int) ($request->input('retention_days') ?? \Illuminate\Support\Facades\Cache::get('superadmin_log_retention_days', 365));
+        $threshold = \Illuminate\Support\Carbon::now()->subDays($retentionDays);
+
+        $deletedCount = DB::table('ticket_audit_logs')
+            ->where('created_at', '<', $threshold)
+            ->delete();
+
+        \Illuminate\Support\Facades\Cache::forever('superadmin_last_log_purge_at', \Illuminate\Support\Carbon::now()->toIso8601String());
+
+        // Write an audit log entry for the purge action itself
+        try {
+            DB::table('ticket_audit_logs')->insert([
+                'action_type' => 'config_purge',
+                'action_by_ID' => $request->user()->emp_id ?? 0,
+                'actor_type' => 'superadmin',
+                'details' => json_encode([
+                    'module' => 'System',
+                    'target' => 'Audit Logs',
+                    'text' => "Permanently purged {$deletedCount} historical audit log records older than {$retentionDays} days.",
+                ]),
+                'created_at' => \Illuminate\Support\Carbon::now(),
+            ]);
+        } catch (\Exception $e) {
+            // Ignore if insert fails
+        }
+
+        return response()->json([
+            'message' => "Successfully purged {$deletedCount} expired audit log records.",
+            'purged_count' => $deletedCount,
+            'threshold_date' => $threshold->toIso8601String(),
+            'purged_at' => \Illuminate\Support\Carbon::now()->toIso8601String(),
+        ]);
+    });
 
         return response()->json($formattedLogs);
     }
+
 
     /**
      * Retrieve the system-wide max-open-ticket configuration.

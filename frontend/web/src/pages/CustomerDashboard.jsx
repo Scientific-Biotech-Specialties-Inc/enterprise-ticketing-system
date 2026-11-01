@@ -417,7 +417,19 @@ export default function CustomerDashboard() {
         </div>
 
         {dashboardLoading ? (
-          <DataTableSkeleton columns={4} rows={4} />
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-32">Ticket ID</TableHead>
+                <TableHead>Title & Equipment</TableHead>
+                <TableHead className="w-36">Status</TableHead>
+                <TableHead className="w-20 text-center">Action</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <DataTableSkeleton columns={4} rows={4} />
+            </TableBody>
+          </Table>
         ) : recentTickets.length === 0 ? (
           <div className="text-center py-10 text-muted-slate text-xs">
             No tickets found. Submit a support ticket to get started.

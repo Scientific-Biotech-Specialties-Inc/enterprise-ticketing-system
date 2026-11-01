@@ -61,6 +61,101 @@ export default function BranchSelector({
 
   const branchList = [GLOBAL_BRANCH, ...branches.filter((b) => b.id !== null && b.slug !== 'all')];
 
+  if (variant === 'inline') {
+    return (
+      <div ref={dropdownRef} className={`relative inline-block text-left ${className}`}>
+        <button
+          type="button"
+          onClick={() => setIsOpen((prev) => !prev)}
+          aria-haspopup="listbox"
+          aria-expanded={isOpen}
+          className="inline-flex items-center gap-2 rounded-xl border border-slate-200/90 bg-white px-3 py-1.5 text-xs text-slate-700 shadow-xs hover:border-slate-300 transition-all cursor-pointer"
+          title={`Active Branch: ${selectedBranch?.name || activeBranch.name} (${selectedBranch?.region || activeBranch.region || ''})`}
+        >
+          <Building2 size={14} className="text-slate-700 shrink-0" />
+          <span className="text-slate-500 font-normal">Branch</span>
+          <span className="font-semibold text-slate-900">{selectedBranch?.name || activeBranch.name}</span>
+          <span className="rounded-md bg-indigo-100/80 px-1.5 py-0.5 text-[10px] font-bold text-indigo-800">
+            {selectedBranch?.code || activeBranch.code}
+          </span>
+          <ChevronDown
+            size={14}
+            className={`text-slate-400 transition-transform duration-150 ${
+              isOpen ? 'rotate-180 text-slate-700' : ''
+            }`}
+          />
+        </button>
+
+        {/* Dropdown Menu */}
+        {isOpen && (
+          <div className="absolute right-0 mt-2 z-50 w-72 sm:w-80 rounded-2xl border border-gray-100 bg-white p-2 shadow-xl animate-fade-slide-in">
+            <div className="px-3 py-2 border-b border-gray-100 mb-1">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                  Select Branch Scope
+                </p>
+                <span className="rounded bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-800">
+                  {selectedBranch?.code || activeBranch.code}
+                </span>
+              </div>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Metrics and forecasts are scoped strictly to this facility.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-1 max-h-64 overflow-y-auto" role="listbox">
+              {branches.map((branch) => {
+                const isSelected = branch.id === (selectedBranch?.id || activeBranch.id);
+                return (
+                  <button
+                    key={branch.id}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => handleSelectBranch(branch.id)}
+                    className={`flex items-start justify-between gap-3 rounded-xl px-3 py-2 text-left transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-[#252578]/10 text-[#252578]'
+                        : 'hover:bg-gray-50 text-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <Building2
+                        size={15}
+                        className={`shrink-0 mt-0.5 ${
+                          isSelected ? 'text-[#252578]' : 'text-gray-400'
+                        }`}
+                      />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-xs font-bold truncate">
+                            {branch.name}
+                          </span>
+                          <span className="rounded bg-gray-100 px-1.5 py-0.2 text-[10px] font-semibold text-gray-600">
+                            {branch.code}
+                          </span>
+                        </div>
+                        {showDescription && (
+                          <p className="text-[11px] text-gray-500 mt-0.5 line-clamp-1">
+                            {branch.description}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {isSelected && (
+                      <Check size={15} className="text-[#252578] shrink-0 mt-0.5" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   if (variant === 'banner') {
     return (
       <div

@@ -70,7 +70,12 @@ class PredictiveAnalyticsController extends Controller
             $predTotal[$period] = $snap->predicted_total;
         }
 
-        return compact('volume', 'peakDay', 'pred_total' ) + ['pred_total' => $predTotal];
+        return [
+            'volume'     => $volume,
+            'peak_day'   => $peakDay,
+            'peakDay'    => $peakDay,
+            'pred_total' => $predTotal,
+        ];
     }
 
     // ─── Employee Performance ─────────────────────────────────────────────────

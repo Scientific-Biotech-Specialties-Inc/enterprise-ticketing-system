@@ -119,8 +119,8 @@ const checkIsEmployee = (user) => {
 const normalizeUser = (userData) => {
   if (!userData) return null;
 
-  let firstName = userData.first_name || userData.profile?.first_name || '';
-  let lastName = userData.last_name || userData.profile?.last_name || '';
+  let firstName = userData.first_name || userData.profile?.first_name;
+  let lastName = userData.last_name || userData.profile?.last_name;
 
   if (!firstName && userData.client_name) {
     const parts = userData.client_name.split(' ');
@@ -128,14 +128,8 @@ const normalizeUser = (userData) => {
     lastName = parts.slice(1).join(' ');
   }
 
-  const fullName = (userData.name && userData.name !== 'User')
-    ? userData.name
-    : [firstName, lastName].filter(Boolean).join(' ') || userData.email?.split('@')[0] || '';
-
   const role = resolveUserRole(userData);
   const department = resolveUserDepartment(userData);
-  const positionLevel = userData.position_level || userData.profile?.position_level || userData.position || '';
-  const technicalRole = userData.technical_role || userData.profile?.technical_role || '';
 
   const branchName = userData.branch || userData.profile?.branch?.name || userData.branch_details?.name || null;
   const branchId = userData.branch_id || userData.profile?.branch_id || userData.branch_details?.id || null;
@@ -147,11 +141,8 @@ const normalizeUser = (userData) => {
 
   return {
     ...userData,
-    name: fullName,
     first_name: firstName || userData.name || '',
     last_name: lastName || '',
-    position_level: positionLevel,
-    technical_role: technicalRole,
     phone: userData.phone || userData.contact_number || userData.profile?.phone || '',
     department,
     role,

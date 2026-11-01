@@ -273,36 +273,7 @@ export default function Header({ sidebarHovered }) {
     return 'Ticketing System';
   };
 
-  const displayName = (() => {
-    if (user?.name && user.name !== 'User') return user.name;
-    const parts = [user?.first_name, user?.last_name].filter(Boolean).join(' ');
-    if (parts) return parts;
-    try {
-      const stored = JSON.parse(sessionStorage.getItem('user') || localStorage.getItem('user') || '{}');
-      if (stored?.name && stored.name !== 'User') return stored.name;
-      const storedParts = [stored?.first_name, stored?.last_name].filter(Boolean).join(' ');
-      if (storedParts) return storedParts;
-    } catch {}
-    return user?.email?.split('@')[0] || 'User';
-  })();
-
-  const userInitial = (displayName || 'U').charAt(0).toUpperCase();
-
-  const displayRole = (() => {
-    const rawPos = (user?.position_level || user?.profile?.position_level || '').trim();
-    const rawTech = (user?.technical_role || user?.profile?.technical_role || '').trim();
-    const rawRole = (user?.role || '').trim();
-    const dept = (user?.department || user?.profile?.department || '').trim();
-
-    // If position level or role is Manager, prominently show Manager
-    if (rawPos.toLowerCase() === 'manager' || rawRole.toLowerCase().includes('manager') || rawTech.toLowerCase().includes('manager')) {
-      return dept ? `${dept} Manager` : 'Department Manager';
-    }
-    if (rawTech) return rawTech;
-    if (rawPos) return rawPos;
-    if (rawRole && rawRole.toLowerCase() !== 'service') return rawRole;
-    return dept ? `${dept} Specialist` : 'Service Engineer';
-  })();
+  const userInitial = user?.name?.charAt(0)?.toUpperCase() || 'U';
 
   return (
     <>
@@ -367,8 +338,8 @@ export default function Header({ sidebarHovered }) {
                 {userInitial}
               </div>
               <div className="flex flex-col items-start leading-tight text-left">
-                <span className="text-sm font-semibold text-dark-slate">{displayName}</span>
-                <span className="text-xs text-muted-slate capitalize">{displayRole}</span>
+                <span className="text-sm font-semibold text-dark-slate">{user?.name || 'User'}</span>
+                <span className="text-xs text-muted-slate capitalize">{user?.role || ''}</span>
               </div>
               <ChevronDown className="w-4 h-4 text-muted-slate ml-1" />
             </button>

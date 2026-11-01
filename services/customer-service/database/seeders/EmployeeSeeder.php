@@ -56,6 +56,42 @@ class EmployeeSeeder extends Seeder
                 'department' => 'Admin',
                 'password_change_at' => now(),
             ],
+            [
+                'email' => 'itmanager@example.com',
+                'password_hash' => Hash::make('password'),
+                'first_name' => 'Arthur',
+                'last_name' => 'Pendleton',
+                'role' => 'it_manager',
+                'department' => 'IT Department',
+                'password_change_at' => now(),
+            ],
+            [
+                'email' => 'david.miller@example.com',
+                'password_hash' => Hash::make('password'),
+                'first_name' => 'David',
+                'last_name' => 'Miller',
+                'role' => 'service',
+                'department' => 'IT Department',
+                'password_change_at' => now(),
+            ],
+            [
+                'email' => 'sarah.connor@example.com',
+                'password_hash' => Hash::make('password'),
+                'first_name' => 'Sarah',
+                'last_name' => 'Connor',
+                'role' => 'service',
+                'department' => 'IT Department',
+                'password_change_at' => now(),
+            ],
+            [
+                'email' => 'alex.chen@example.com',
+                'password_hash' => Hash::make('password'),
+                'first_name' => 'Alex',
+                'last_name' => 'Chen',
+                'role' => 'service',
+                'department' => 'IT Department',
+                'password_change_at' => now(),
+            ],
         ];
 
         foreach ($employees as $employee) {

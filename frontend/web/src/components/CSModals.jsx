@@ -661,46 +661,6 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
   const [currentPriority, setCurrentPriority] = useState(ticket?.priority || 'Low');
   const [currentStatus, setCurrentStatus] = useState(ticket?.status || 'Pending');
   const [currentHoldReason, setCurrentHoldReason] = useState(ticket?.hold_reason || '');
-  const [currentEscalationReason, setCurrentEscalationReason] = useState(ticket?.escalation_reason || '');
-
-  const isAlreadyEscalated =
-    currentStatus === 'Escalated' ||
-    String(ticket?.status || '').toLowerCase() === 'escalated' ||
-    Number(ticket?.ticket_status_ID) === 5 ||
-    Number(ticket?.status_id) === 5;
-
-  const dynamicDepartmentManagers = useMemo(() => {
-    const list = Array.isArray(employees) ? employees : [];
-    const serviceMgr = list.find(e =>
-      String(e.department || '').toLowerCase() === 'service' &&
-      (String(e.position_level || '').toLowerCase() === 'manager' || String(e.role || '').toLowerCase().includes('manager'))
-    );
-    const itMgr = list.find(e =>
-      String(e.department || '').toLowerCase() === 'it' &&
-      (String(e.position_level || '').toLowerCase() === 'manager' || String(e.role || '').toLowerCase().includes('manager'))
-    );
-    const csMgr = list.find(e =>
-      (String(e.department || '').toLowerCase().includes('customer service') || String(e.department || '').toLowerCase() === 'cs') &&
-      (String(e.position_level || '').toLowerCase() === 'manager' || String(e.role || '').toLowerCase().includes('manager'))
-    );
-    return {
-      service: serviceMgr ? {
-        name: serviceMgr.name,
-        role: serviceMgr.technical_role || 'Service Manager',
-        email: serviceMgr.email || '',
-      } : null,
-      it: itMgr ? {
-        name: itMgr.name,
-        role: itMgr.technical_role || 'IT Manager',
-        email: itMgr.email || '',
-      } : null,
-      cs: csMgr ? {
-        name: csMgr.name,
-        role: csMgr.technical_role || 'Customer Service Manager',
-        email: csMgr.email || '',
-      } : null,
-    };
-  }, [employees]);
 
   // Dynamic SLA Due Date & SLA Status states for instant in-place reflection
   const [currentSlaDueDate, setCurrentSlaDueDate] = useState(
@@ -749,17 +709,24 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
       const ticketId = ticket.ticket_ID || ticket.id;
       const targetEmpId = targetEmployee?.id || targetEmployee?.emp_id;
 
-      // Update status to Escalated (status ID 5) directly with target manager and reason
+      // Update status to Escalated (status ID 5)
       await updateTicket({
         ticketId,
         statusId: 5,
-        assigned_to: targetEmpId,
-        escalation_reason: reason,
         assignedByEmail: user?.email,
       });
 
+      // Assign to the computed escalation target
+      if (targetEmpId) {
+        await acceptTicket({
+          ticketId,
+          employeeIds: [targetEmpId],
+          assignedByEmail: user?.email,
+        }).catch((e) => console.warn('Could not reassign on escalate:', e));
+      }
+
       // Add escalation handoff note to internal notes
-      const noteText = `[Escalation (${categoryType.toUpperCase()})]: Escalated to ${targetEmployee?.name || 'Manager'} (${targetEmployee?.role || 'Manager'}, ${targetEmployee?.department || 'Department'}). Reason: "${reason}"`;
+      const noteText = `[Escalation (${categoryType.toUpperCase()})]: Escalated to ${targetEmployee?.name || 'specialist'} (${targetEmployee?.role || 'Specialist'}, ${targetEmployee?.department || 'Operations'}). Reason: "${reason}"`;
       await addInternalNote(ticketId, noteText).catch(() => {});
 
       const refreshedNotes = await getInternalNotes(ticketId).catch(() => null);
@@ -768,22 +735,14 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
       }
 
       setCurrentStatus('Escalated');
-      setCurrentEscalationReason(reason);
-      ticket.status = 'Escalated';
-      ticket.escalation_reason = reason;
-      if (targetEmpId) {
-        ticket.assigned_to = targetEmpId;
-      }
-      setActionSuccessNotice(`Ticket successfully escalated to ${targetEmployee?.name || 'department leadership'}.`);
+      setActionSuccessNotice(`Ticket successfully escalated to ${targetEmployee?.name || 'specialist'}.`);
       setShowEscalateModal(false);
 
       if (typeof onStatusUpdate === 'function') {
         const timestamp = new Date().toLocaleString('en-US');
         onStatusUpdate({
           id: ticket.id,
-          ticket_ID: ticket.ticket_ID || ticket.id,
           status: 'Escalated',
-          escalation_reason: reason,
           assigned_to: targetEmpId,
           assigned: targetEmpId ? [targetEmpId] : [],
           timeline: [
@@ -799,8 +758,7 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
       }
     } catch (err) {
       console.error('Failed to escalate ticket:', err);
-      const errMsg = err?.response?.data?.message || 'Failed to escalate ticket. Please check your network connection and try again.';
-      setEscalateError(errMsg);
+      setEscalateError('Failed to escalate ticket. Please check your network connection and try again.');
     } finally {
       setIsEscalating(false);
     }
@@ -812,7 +770,6 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
     setCurrentPriority(ticket?.priority || 'Low');
     setCurrentStatus(ticket?.status || 'Pending');
     setCurrentHoldReason(ticket?.hold_reason || '');
-    setCurrentEscalationReason(ticket?.escalation_reason || '');
     setCurrentSlaDueDate(ticket?.resolution_due_at || ticket?.due_at || ticket?.sla_due_date || ticket?.sla?.resolution?.target || null);
     setCurrentSlaStatus(ticket?.sla_status || ticket?.slaStatus || ticket?.sla?.resolution?.status || (ticket?.status === 'On Hold' ? 'Paused' : null));
     setCurrentLastReminder(ticket?.last_reminder_sent_at || null);
@@ -1493,22 +1450,6 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                   </div>
                 )}
 
-                {/* Escalated banner */}
-                {(currentStatus === 'Escalated' || isAlreadyEscalated) && (
-                  <div className="bg-rose-50 border border-rose-300 rounded-xl p-3.5 mb-4 text-xs text-rose-900 flex items-start gap-2.5 shadow-xs">
-                    <div className="w-6 h-6 rounded-full bg-rose-200 text-rose-800 flex items-center justify-center shrink-0 mt-0.5">
-                      <ArrowUpRight className="w-3.5 h-3.5 text-rose-700" />
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-bold text-rose-900 mb-0.5">Ticket is Escalated to Department Leadership</p>
-                      <p className="text-rose-800 leading-relaxed">
-                        This ticket has been escalated and assigned directly to the department manager.
-                        {(currentEscalationReason || ticket?.escalation_reason) ? ` Reason: "${currentEscalationReason || ticket?.escalation_reason}"` : ''}
-                      </p>
-                    </div>
-                  </div>
-                )}
-
                 {/* On Hold banner */}
                 {currentStatus === 'On Hold' && (
                   <div className="bg-amber-50 border border-amber-300 rounded-xl p-3.5 mb-4 text-xs text-amber-900 flex items-start gap-2.5 shadow-xs">
@@ -1707,21 +1648,21 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             <div className="bg-amber-50/60 border border-amber-200/60 rounded-lg p-2 text-[11px]">
                               <div className="font-bold text-slate-800">Service Department</div>
-                              <div className="text-slate-700 font-medium mt-0.5">{dynamicDepartmentManagers?.service?.name || 'Unassigned'}</div>
-                              <div className="text-[10px] text-slate-500">{dynamicDepartmentManagers?.service?.role || 'Service Manager'}</div>
-                              <div className="text-[10px] text-primary truncate mt-0.5 font-mono">{dynamicDepartmentManagers?.service?.email || 'N/A'}</div>
+                              <div className="text-slate-700 font-medium mt-0.5">Carlos Mendoza</div>
+                              <div className="text-[10px] text-slate-500">Lead Service Engineer</div>
+                              <div className="text-[10px] text-primary truncate mt-0.5 font-mono">carlos.mendoza@hospital.com</div>
                             </div>
                             <div className="bg-amber-50/60 border border-amber-200/60 rounded-lg p-2 text-[11px]">
                               <div className="font-bold text-slate-800">IT Department</div>
-                              <div className="text-slate-700 font-medium mt-0.5">{dynamicDepartmentManagers?.it?.name || 'Unassigned'}</div>
-                              <div className="text-[10px] text-slate-500">{dynamicDepartmentManagers?.it?.role || 'IT Manager'}</div>
-                              <div className="text-[10px] text-primary truncate mt-0.5 font-mono">{dynamicDepartmentManagers?.it?.email || 'N/A'}</div>
+                              <div className="text-slate-700 font-medium mt-0.5">Michael Scott</div>
+                              <div className="text-[10px] text-slate-500">IT Systems Specialist</div>
+                              <div className="text-[10px] text-primary truncate mt-0.5 font-mono">michael.scott@hospital.com</div>
                             </div>
                             <div className="bg-amber-50/60 border border-amber-200/60 rounded-lg p-2 text-[11px]">
                               <div className="font-bold text-slate-800">Customer Support</div>
-                              <div className="text-slate-700 font-medium mt-0.5">{dynamicDepartmentManagers?.cs?.name || 'Unassigned'}</div>
-                              <div className="text-[10px] text-slate-500">{dynamicDepartmentManagers?.cs?.role || 'Customer Service Manager'}</div>
-                              <div className="text-[10px] text-primary truncate mt-0.5 font-mono">{dynamicDepartmentManagers?.cs?.email || 'N/A'}</div>
+                              <div className="text-slate-700 font-medium mt-0.5">Ava Santos</div>
+                              <div className="text-[10px] text-slate-500">Customer Support Lead</div>
+                              <div className="text-[10px] text-primary truncate mt-0.5 font-mono">cs@gmail.com</div>
                             </div>
                           </div>
                         </div>
@@ -2261,32 +2202,19 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
 
             {/* Escalate button (TS032) */}
             {currentStatus !== 'Closed' && currentStatus !== 'Resolved' && currentStatus !== 'Discarded' && (
-              isAlreadyEscalated ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled
-                  title="This ticket has already been escalated to department leadership."
-                  className="flex items-center gap-1.5 text-rose-500 border-rose-200 bg-rose-50/60 cursor-not-allowed opacity-80"
-                >
-                  <ArrowUpRight className="w-3.5 h-3.5 text-rose-500" />
-                  <span>Already Escalated</span>
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={isProcessing || isEscalating}
-                  onClick={() => {
-                    setEscalateError('');
-                    setShowEscalateModal(true);
-                  }}
-                  className="flex items-center gap-1.5 text-rose-700 border-rose-200 hover:bg-rose-50 cursor-pointer"
-                >
-                  <ArrowUpRight className="w-3.5 h-3.5 text-rose-600" />
-                  <span>Escalate Ticket</span>
-                </Button>
-              )
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isProcessing || isEscalating}
+                onClick={() => {
+                  setEscalateError('');
+                  setShowEscalateModal(true);
+                }}
+                className="flex items-center gap-1.5 text-rose-700 border-rose-200 hover:bg-rose-50 cursor-pointer"
+              >
+                <ArrowUpRight className="w-3.5 h-3.5 text-rose-600" />
+                <span>Escalate Ticket</span>
+              </Button>
             )}
 
             {!ticket.reassignmentRequested && ticket.status !== 'Closed' && ticket.status !== 'Resolved' && onEdit && (
@@ -2939,13 +2867,13 @@ export function AssignModal({ ticket, employees, departments, priorityOptions, o
                         Service Department
                       </div>
                       <p className="text-xs font-bold text-slate-dark">
-                        {departmentManagers?.service?.name || 'Unassigned'}
+                        {departmentManagers?.service?.name || 'Carlos Mendoza'}
                       </p>
                       <p className="text-[11px] text-slate-muted">Manager</p>
                       <div className="mt-2 pt-2 border-t border-border/60 text-[10px] space-y-1 text-slate-600">
                         <div className="flex items-center gap-1.5 truncate">
                           <Mail className="w-3 h-3 text-slate-muted shrink-0" />
-                          <span>{departmentManagers?.service?.email || 'N/A'}</span>
+                          <span>{departmentManagers?.service?.email || 'carlos.mendoza@hospital.com'}</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <Phone className="w-3 h-3 text-slate-muted shrink-0" />
@@ -2961,13 +2889,13 @@ export function AssignModal({ ticket, employees, departments, priorityOptions, o
                         IT Department
                       </div>
                       <p className="text-xs font-bold text-slate-dark">
-                        {departmentManagers?.it?.name || 'Unassigned'}
+                        {departmentManagers?.it?.name || 'Michael Scott'}
                       </p>
                       <p className="text-[11px] text-slate-muted">Manager</p>
                       <div className="mt-2 pt-2 border-t border-border/60 text-[10px] space-y-1 text-slate-600">
                         <div className="flex items-center gap-1.5 truncate">
                           <Mail className="w-3 h-3 text-slate-muted shrink-0" />
-                          <span>{departmentManagers?.it?.email || 'N/A'}</span>
+                          <span>{departmentManagers?.it?.email || 'michael.scott@hospital.com'}</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <Phone className="w-3 h-3 text-slate-muted shrink-0" />
@@ -2983,13 +2911,13 @@ export function AssignModal({ ticket, employees, departments, priorityOptions, o
                         Customer Service
                       </div>
                       <p className="text-xs font-bold text-slate-dark">
-                        {departmentManagers?.cs?.name || 'Unassigned'}
+                        {departmentManagers?.cs?.name || 'Ava Santos'}
                       </p>
                       <p className="text-[11px] text-slate-muted">Manager</p>
                       <div className="mt-2 pt-2 border-t border-border/60 text-[10px] space-y-1 text-slate-600">
                         <div className="flex items-center gap-1.5 truncate">
                           <Mail className="w-3 h-3 text-slate-muted shrink-0" />
-                          <span>{departmentManagers?.cs?.email || 'N/A'}</span>
+                          <span>{departmentManagers?.cs?.email || 'cs@gmail.com'}</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <Phone className="w-3 h-3 text-slate-muted shrink-0" />

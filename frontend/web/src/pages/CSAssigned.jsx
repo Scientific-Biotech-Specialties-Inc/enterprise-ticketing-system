@@ -209,7 +209,7 @@ export default function CSAssigned() {
       // Assigned page: show tickets with assigned / in progress / evaluation / resolved / closed / reassigned / on hold
       const assignedTickets = incoming.filter(t =>
         t.reassignmentRequested === true ||
-        ['Pending Assignment', 'In Progress', 'Pending Evaluation', 'Resolved', 'Pending', 'Closed', 'On Hold', 'Escalated'].includes(t.status) ||
+        ['Pending Assignment', 'In Progress', 'Pending Evaluation', 'Resolved', 'Pending', 'Closed', 'On Hold'].includes(t.status) ||
         (t.assigned && t.assigned.length > 0)
       );
       
@@ -239,8 +239,6 @@ export default function CSAssigned() {
       setEmployees(
         assignees.map((row) => ({
           id: Number(row.id ?? row.emp_id),
-          emp_id: Number(row.id ?? row.emp_id),
-          email: row.email || '',
           name: row.name || `${row.first_name || ''} ${row.last_name || ''}`.trim() || row.email || `Employee #${row.id ?? row.emp_id}`,
           role: row.role || '',
           status: row.is_active ? 'active' : 'inactive',
@@ -499,7 +497,7 @@ export default function CSAssigned() {
         const incoming = await getCSIncomingTickets({ limit: 100, forceRefresh: true });
         const assignedTickets = incoming.filter(t =>
           t.reassignmentRequested === true ||
-          ['Pending Assignment', 'In Progress', 'Pending Evaluation', 'Resolved', 'Pending', 'Closed', 'On Hold', 'Escalated'].includes(t.status) ||
+          ['Pending Assignment', 'In Progress', 'Pending Evaluation', 'Resolved', 'Pending', 'Closed', 'On Hold'].includes(t.status) ||
           (t.assigned && t.assigned.length > 0)
         );
         setTickets(assignedTickets);
@@ -1050,12 +1048,12 @@ export default function CSAssigned() {
 
             // If the status is 'On Hold', resumed, or classification updated,
             // the dedicated endpoint (POST /hold, POST /resume, or PATCH /classification) was already executed directly in TicketSummary.
-            if (updatedFields.status === 'On Hold' || updatedFields.status === 'Escalated' || updatedFields.hold_reason !== undefined || updatedFields.category || updatedFields.priority) {
+            if (updatedFields.status === 'On Hold' || updatedFields.hold_reason !== undefined || updatedFields.category || updatedFields.priority) {
               try {
                 const incoming = await getCSIncomingTickets({ limit: 100, forceRefresh: true });
                 const assignedTickets = incoming.filter(t =>
                   t.reassignmentRequested === true ||
-                  ['Pending Assignment', 'In Progress', 'Pending Evaluation', 'Resolved', 'Pending', 'Closed', 'On Hold', 'Escalated'].includes(t.status) ||
+                  ['Pending Assignment', 'In Progress', 'Pending Evaluation', 'Resolved', 'Pending', 'Closed', 'On Hold'].includes(t.status) ||
                   (t.assigned && t.assigned.length > 0)
                 );
                 setTickets(assignedTickets);
@@ -1110,7 +1108,7 @@ export default function CSAssigned() {
               const incoming = await getCSIncomingTickets({ limit: 100, forceRefresh: true });
               const assignedTickets = incoming.filter(t =>
                 t.reassignmentRequested === true ||
-                ['Pending Assignment', 'In Progress', 'Pending Evaluation', 'Resolved', 'Pending', 'Closed', 'On Hold', 'Escalated'].includes(t.status) ||
+                ['Pending Assignment', 'In Progress', 'Pending Evaluation', 'Resolved', 'Pending', 'Closed', 'On Hold'].includes(t.status) ||
                 (t.assigned && t.assigned.length > 0)
               );
               setTickets(assignedTickets);

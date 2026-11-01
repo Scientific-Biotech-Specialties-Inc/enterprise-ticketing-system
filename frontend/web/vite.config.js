@@ -14,6 +14,8 @@ export default defineConfig({
     host: '0.0.0.0',
     port: process.env.VITE_PORT ? parseInt(process.env.VITE_PORT) : 5005,
     strictPort: true,
+    cors: true,
+    allowedHosts: true,
     watch: {
       usePolling: true,
       interval: 100,

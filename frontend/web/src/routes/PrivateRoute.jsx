@@ -33,11 +33,24 @@ export const checkIsAdmin = (user) => {
   return role === 'admin' || role === 'it admin' || (dept === 'admin' && role !== 'superadmin' && role !== 'super admin');
 };
 
+export const checkIsItManager = (user) => {
+  if (!user) return false;
+  const role = resolveUserRole(user).toLowerCase();
+  const dept = resolveUserDepartment(user).toLowerCase();
+  return (
+    role === 'it_manager' ||
+    role === 'it manager' ||
+    role === 'it department manager' ||
+    (dept.includes('it') && role.includes('manager'))
+  );
+};
+
 export const checkIsEmployee = (user) => {
   if (!user) return false;
   if (checkIsCS(user)) return false;
   if (checkIsAdmin(user)) return false;
   if (checkIsSuperAdmin(user)) return false;
+  if (checkIsItManager(user)) return false;
   const dept = resolveUserDepartment(user).toLowerCase();
   const role = resolveUserRole(user).toLowerCase();
   if (dept === 'service' || dept.includes('engineer')) return true;
@@ -146,7 +159,8 @@ export default function PrivateRoute({ children, role }) {
   const isAdmin       = checkIsAdmin(user);
   const isEmployee    = checkIsEmployee(user);
   const isSuperAdmin  = checkIsSuperAdmin(user);
-  const isCustomer    = !isCS && !isEmployee && !isSuperAdmin && !isAdmin;
+  const isItManager   = checkIsItManager(user);
+  const isCustomer    = !isCS && !isEmployee && !isSuperAdmin && !isAdmin && !isItManager;
 
   // ── Customer portal (port 5006) ──────────────────────────────────────────
   if (isCustomerSite) {
@@ -167,6 +181,15 @@ export default function PrivateRoute({ children, role }) {
       }
       if (isAdmin && normalizedRole !== 'admin') {
         return <Navigate to="/admin/dashboard" replace />;
+      }
+      if (isItManager && normalizedRole !== 'it_manager' && normalizedRole !== 'it manager') {
+        return <Navigate to="/it-manager/dashboard" replace />;
+      }
+      if ((normalizedRole === 'it_manager' || normalizedRole === 'it manager') && !isItManager) {
+        if (isSuperAdmin) return <Navigate to="/superadmin/config" replace />;
+        if (isAdmin) return <Navigate to="/admin/dashboard" replace />;
+        if (isCS) return <Navigate to="/cs/dashboard" replace />;
+        return <Navigate to="/employee/dashboard" replace />;
       }
       if (normalizedRole === 'customer') {
         if (isSuperAdmin) {

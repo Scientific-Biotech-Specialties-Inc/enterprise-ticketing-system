@@ -340,8 +340,8 @@ export default function EmployeeMyTickets({ roleContext }) {
 
   const handleViewTicket = (t) => {
     const ticketId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
-    const basePath = roleContext === 'cs' ? '/cs' : '/employee';
-    const backPath = roleContext === 'cs' ? '/cs/my-tickets' : '/employee/my-tickets';
+    const basePath = roleContext === 'cs' ? '/cs' : roleContext === 'it_manager' ? '/it-manager' : '/employee';
+    const backPath = roleContext === 'cs' ? '/cs/my-tickets' : roleContext === 'it_manager' ? '/it-manager/my-tickets' : '/employee/my-tickets';
     navigate(`${basePath}/history/${ticketId}`, { state: { ticket: t, backPath } });
   };
 
@@ -659,7 +659,7 @@ export default function EmployeeMyTickets({ roleContext }) {
               onClick={() => {
                 const ticketId = confirmCreated.ticket_ID || confirmCreated.id;
                 setConfirmCreated(null);
-                const targetPath = roleContext === 'cs' ? '/cs/messages' : '/employee/messages';
+                const targetPath = roleContext === 'cs' ? '/cs/messages' : roleContext === 'it_manager' ? '/it-manager/messages' : '/employee/messages';
                 navigate(targetPath, { state: { selectedTicketId: ticketId } });
               }}
             >

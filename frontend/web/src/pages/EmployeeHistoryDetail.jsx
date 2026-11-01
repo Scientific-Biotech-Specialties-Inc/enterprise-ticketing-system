@@ -20,6 +20,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Clock, AlertCircle, ShieldAlert } from 'lucide-react';
 import TicketFeedbackSection from '@/components/feedback/TicketFeedbackSection';
 import InternalTicketMessageThread from '@/components/InternalTicketMessageThread';
+import TicketActivityTimeline from '@/components/TicketActivityTimeline';
 
 export default function EmployeeHistoryDetail() {
   const navigate = useNavigate();
@@ -30,7 +31,7 @@ export default function EmployeeHistoryDetail() {
   const [ticket, setTicket] = useState(state?.ticket || null);
   const [loading, setLoading] = useState(!state?.ticket);
   const [error, setError] = useState(null);
-  const backPath = state?.backPath ?? '/employee/progress';
+  const backPath = state?.backPath ?? (window.location.pathname.startsWith('/it-manager') ? '/it-manager/history' : window.location.pathname.startsWith('/cs') ? '/cs/history' : '/employee/progress');
   const [previewFile, setPreviewFile] = useState(null);
   const [timelineSortOrder, setTimelineSortOrder] = useState('asc'); // 'asc' or 'desc'
   const [now, setNow] = useState(Date.now());
@@ -763,78 +764,12 @@ export default function EmployeeHistoryDetail() {
         </div>
       )}
 
-      {/* Chronological Timeline */}
-      <div className="rounded-xl border border-border bg-card p-6 shadow-xs">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">
-            Ticket Timeline &amp; History
-          </h3>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setTimelineSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-            className="gap-1.5 text-xs text-primary"
-          >
-            <ArrowUpDown className="h-3.5 w-3.5" />
-            {timelineSortOrder === 'asc' ? 'Oldest First' : 'Newest First'}
-          </Button>
-        </div>
-
-        {sortedTimelineEvents.length === 0 ? (
-          <p className="text-sm text-muted-foreground italic">No timeline events recorded.</p>
-        ) : (
-          <div className="relative pl-6 space-y-4 border-l border-border ml-3 py-1.5">
-            {sortedTimelineEvents.map((evt, idx) => {
-              const dotBg =
-                evt.type === 'system_autoclose'
-                  ? 'bg-slate-700'
-                  : evt.type === 'system'
-                  ? 'bg-primary'
-                  : evt.type === 'status'
-                  ? 'bg-accent'
-                  : evt.type === 'internal_note'
-                  ? 'bg-destructive'
-                  : evt.type === 'remark'
-                  ? 'bg-emerald-600'
-                  : evt.type === 'reassign'
-                  ? 'bg-amber-500'
-                  : 'bg-muted-foreground';
-
-              const isAutoCloseEvt = evt.type === 'system_autoclose' || /closed automatically|auto-closed/i.test(evt.text || '');
-
-              return (
-                <div key={evt.id || idx} className="relative text-sm">
-                  <div
-                    className={`absolute -left-[31px] top-1.5 w-2.5 h-2.5 rounded-full border-2 border-card shadow-xs ${dotBg}`}
-                  />
-                  <div className="flex justify-between items-center text-xs text-muted-foreground mb-1">
-                    <span className="font-bold text-primary uppercase text-[10px] tracking-wider">
-                      {isAutoCloseEvt
-                        ? 'Closed Automatically'
-                        : evt.type === 'system'
-                        ? 'System'
-                        : evt.type === 'status'
-                        ? 'Status Update'
-                        : evt.type === 'internal_note'
-                        ? 'Internal Note'
-                        : evt.type === 'remark'
-                        ? 'Remark'
-                        : evt.type === 'reassign'
-                        ? 'Reassignment'
-                        : evt.type || 'Update'}
-                    </span>
-                    <span>{formatDisplayDate(evt.timestamp)}</span>
-                  </div>
-                  <p className="text-foreground leading-relaxed font-normal bg-muted/30 p-2.5 rounded-lg border border-border break-words whitespace-pre-wrap">
-                    {evt.text}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      {/* Chronological Activity Timeline (TS086) */}
+      <TicketActivityTimeline
+        ticket={ticket}
+        userRole={user?.role || 'cs'}
+        pageSize={8}
+      />
 
       {previewFile && (
         <FilePreviewModal
