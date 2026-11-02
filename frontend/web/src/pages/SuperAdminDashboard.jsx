@@ -57,6 +57,7 @@ import {
   getSystemDashboardData,
   METRIC_DEFINITIONS,
 } from '@/services/dashboardAnalyticsService';
+import { triggerEtlSync } from '@/services/ticketService';
 import { formatRelativeTime, formatDisplayDate } from '@/utils/dateUtils';
 import { cn } from '@/lib/utils';
 
@@ -91,23 +92,15 @@ export default function SuperAdminDashboard() {
     setIsSyncing(true);
     setSyncStatusMsg(fullSync ? 'Executing Full ETL Sync...' : 'Running Incremental ETL...');
     try {
-      const res = await fetch('/api/ticketing/analytics/etl/trigger', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify({ full_sync: fullSync }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setSyncStatusMsg(`ETL Complete! Processed ${data.records_processed ?? 'all'} records.`);
+      const data = await triggerEtlSync({ full_sync: fullSync, branch_id: 'all' });
+      if (data?.status === 'success') {
+        setSyncStatusMsg(`ETL Complete! Processed ${data.records_processed ?? 'all'} records (${data.duration_ms ?? 0}ms).`);
         loadData();
       } else {
-        setSyncStatusMsg(`ETL: ${data.message || data.error || 'Triggered'}`);
+        setSyncStatusMsg(`ETL: ${data?.message || data?.error || 'Triggered'}`);
       }
     } catch (err) {
-      setSyncStatusMsg('ETL Trigger request sent to analytics pipeline.');
+      setSyncStatusMsg(`ETL: ${err?.response?.data?.message || err?.message || 'Trigger request sent'}`);
     } finally {
       setIsSyncing(false);
       setTimeout(() => setSyncStatusMsg(''), 5000);

@@ -143,7 +143,7 @@ function EmployeePortalGate() {
   const isItManager  = checkIsItManager(user);
   const isEmployee   = checkIsEmployee(user);
 
-  if (isSuperAdmin) return <Navigate to="/superadmin/config" replace />;
+  if (isSuperAdmin) return <Navigate to="/superadmin/dashboard" replace />;
   if (isAdmin)      return <Navigate to="/admin/dashboard" replace />;
   if (isCS)         return <Navigate to="/cs/dashboard" replace />;
   if (isItManager)  return <Navigate to="/it-manager/dashboard" replace />;
@@ -352,7 +352,9 @@ function App() {
                   </PrivateRoute>
                 }
               >
-                <Route index element={<Navigate to="config" replace />} />
+                <Route index element={<Navigate to="dashboard" replace />} />
+                <Route path="dashboard" element={<AdminDashboard />} />
+                <Route path="reports" element={<AdminReports />} />
                 <Route path="config" element={<SuperAdminTicketConfig />} />
                 <Route path="config/:subtab" element={<SuperAdminTicketConfig />} />
                 <Route path="ticket-config" element={<Navigate to="/superadmin/config" replace />} />

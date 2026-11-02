@@ -748,9 +748,6 @@ class SuperAdminConfigController extends Controller
             'threshold_date' => $threshold->toIso8601String(),
             'purged_at' => \Illuminate\Support\Carbon::now()->toIso8601String(),
         ]);
-    });
-
-        return response()->json($formattedLogs);
     }
 
 

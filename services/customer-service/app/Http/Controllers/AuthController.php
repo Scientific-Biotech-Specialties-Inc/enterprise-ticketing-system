@@ -390,7 +390,9 @@ class AuthController extends Controller
         if ($user) {
             if ($user instanceof Employee) {
                 $isFirstLogin = $user->password_change_at === null;
-            } else {
+            } elseif ($user instanceof \Ticketing\Auth\Dto\AuthenticatedUserDto) {
+                $isFirstLogin = false;
+            } elseif (isset($user->id)) {
                 $isFirstLogin = \Illuminate\Support\Facades\DB::table('clients_credentials')
                     ->where('client_id', $user->id)
                     ->whereNull('password_change_at')

@@ -83,12 +83,22 @@ class EmployeeDirectoryController extends Controller
                     $branchId = 2;
                 }
 
+                $uFirstName = trim((string) ($u['first_name'] ?? ''));
+                $uLastName = trim((string) ($u['last_name'] ?? ''));
+                if ($uFirstName === '' && !empty($u['name'] ?? $u['full_name'] ?? null)) {
+                    $nameParts = preg_split('/\s+/', trim((string) ($u['name'] ?? $u['full_name'])), 2);
+                    $uFirstName = $nameParts[0] ?? '';
+                    if ($uLastName === '' && isset($nameParts[1])) {
+                        $uLastName = $nameParts[1];
+                    }
+                }
+
                 $existing = DB::table('employees')->where('email', $email)->first();
 
                 if ($existing) {
                     DB::table('employees')->where('emp_id', $existing->emp_id)->update([
-                        'first_name' => $u['first_name'] ?: $existing->first_name,
-                        'last_name' => $u['last_name'] ?: $existing->last_name,
+                        'first_name' => $uFirstName !== '' ? $uFirstName : $existing->first_name,
+                        'last_name' => $uLastName !== '' ? $uLastName : $existing->last_name,
                         'department' => $dept,
                         'position_level' => $posLevel,
                         'role' => $role,
@@ -105,8 +115,8 @@ class EmployeeDirectoryController extends Controller
                         'email' => $email,
                         'phone_number' => $u['phone'] ?? null,
                         'password_hash' => '',
-                        'first_name' => $u['first_name'] ?? 'Staff',
-                        'last_name' => $u['last_name'] ?? '',
+                        'first_name' => $uFirstName !== '' ? $uFirstName : (explode('@', $email)[0] ?: 'Staff'),
+                        'last_name' => $uLastName,
                         'department' => $dept,
                         'position_level' => $posLevel,
                         'role' => $role,
@@ -438,11 +448,7 @@ class EmployeeDirectoryController extends Controller
                 'admin', 'it admin', 'superadmin', 'super admin', 'administrator', 'system administrator'
             ]);
 
-        if (\Illuminate\Support\Facades\Schema::hasColumn('employees', 'branch')) {
-            $query->addSelect('branch');
-        } elseif (\Illuminate\Support\Facades\Schema::hasColumn('employees', 'branch_id')) {
-            $query->addSelect('branch_id as branch');
-        }
+        $query->addSelect('branch');
 
         if ($department) {
             $query->where('department', $department);
@@ -525,11 +531,7 @@ class EmployeeDirectoryController extends Controller
                 'admin', 'it admin', 'superadmin', 'super admin', 'administrator', 'system administrator'
             ]);
 
-        if (\Illuminate\Support\Facades\Schema::hasColumn('employees', 'branch')) {
-            $query->addSelect('branch');
-        } elseif (\Illuminate\Support\Facades\Schema::hasColumn('employees', 'branch_id')) {
-            $query->addSelect('branch_id as branch');
-        }
+        $query->addSelect('branch');
 
         $requestedBy = $ticket->requested_by ?? null;
         if ($requestedBy) {
@@ -643,15 +645,13 @@ class EmployeeDirectoryController extends Controller
                 $authData = $res->json('user') ?? $res->json('data') ?? $res->json();
                 if (is_array($authData)) {
                     $updates = [];
-                    if (\Illuminate\Support\Facades\Schema::hasColumn('employees', 'last_synced_at')) {
-                        $updates['last_synced_at'] = now();
-                    }
+                    $updates['last_synced_at'] = now();
                     if (!empty($authData['first_name'])) $updates['first_name'] = $authData['first_name'];
                     if (!empty($authData['last_name'])) $updates['last_name'] = $authData['last_name'];
                     if (!empty($authData['email'])) $updates['email'] = $authData['email'];
                     if (!empty($authData['role'])) $updates['role'] = $authData['role'];
                     if (!empty($authData['department'])) $updates['department'] = $authData['department'];
-                    if (!empty($authData['branch']) && \Illuminate\Support\Facades\Schema::hasColumn('employees', 'branch')) {
+                    if (!empty($authData['branch'])) {
                         $updates['branch'] = $authData['branch'];
                     }
 
@@ -670,8 +670,7 @@ class EmployeeDirectoryController extends Controller
             $syncNote = 'Central Auth service is temporarily unavailable; displaying last known cached profile data.';
         }
 
-        $hasBranch = \Illuminate\Support\Facades\Schema::hasColumn('employees', 'branch');
-        $branchValue = $hasBranch ? ($employee->branch ?? 'Main') : 'Main';
+        $branchValue = $employee->branch ?? 'Main';
         $lastSynced = $employee->last_synced_at ?? $employee->last_seen_at ?? null;
 
         return response()->json([
@@ -759,7 +758,7 @@ class EmployeeDirectoryController extends Controller
 
         // Allow update of local non-auth fields (e.g. phone_number)
         $updates = [];
-        if ($request->has('phone_number') && \Illuminate\Support\Facades\Schema::hasColumn('employees', 'phone_number')) {
+        if ($request->has('phone_number')) {
             $updates['phone_number'] = $request->input('phone_number');
         }
 
@@ -802,13 +801,7 @@ class EmployeeDirectoryController extends Controller
             )
             ->whereRaw('LOWER(COALESCE(role, "")) != ?', ['customer']);
 
-        $hasBranch = \Illuminate\Support\Facades\Schema::hasColumn('employees', 'branch');
-        $hasBranchId = \Illuminate\Support\Facades\Schema::hasColumn('employees', 'branch_id');
-        $branchCol = $hasBranch ? 'branch' : ($hasBranchId ? 'branch_id' : null);
-
-        if ($branchCol) {
-            $query->addSelect("{$branchCol} as branch");
-        }
+        $query->addSelect('branch');
 
         // 1. Partial Name/Email search
         if ($queryText !== '') {
@@ -898,12 +891,14 @@ class EmployeeDirectoryController extends Controller
 
         // Departments from departments table or distinct from employees
         $departments = [];
-        if (\Illuminate\Support\Facades\Schema::hasTable('departments')) {
+        try {
             $departments = DB::table('departments')
                 ->where('is_active', true)
                 ->orderBy('name')
                 ->pluck('name')
                 ->toArray();
+        } catch (\Throwable $e) {
+            $departments = [];
         }
         if (empty($departments)) {
             $departments = DB::table('employees')
@@ -927,10 +922,13 @@ class EmployeeDirectoryController extends Controller
 
         // Branches from branches table or default options
         $branches = [];
-        if (\Illuminate\Support\Facades\Schema::hasTable('branches')) {
+        try {
             $branchesQuery = DB::table('branches')->where('is_active', true)->orderBy('name');
             $branches = $branchesQuery->select('slug', 'name', 'code')->get()->toArray();
-        } else {
+        } catch (\Throwable $e) {
+            $branches = [];
+        }
+        if (empty($branches)) {
             $branches = [
                 ['slug' => 'main', 'name' => 'Main Branch', 'code' => 'MAIN'],
                 ['slug' => 'luzon', 'name' => 'Luzon Regional Center', 'code' => 'LUZ'],

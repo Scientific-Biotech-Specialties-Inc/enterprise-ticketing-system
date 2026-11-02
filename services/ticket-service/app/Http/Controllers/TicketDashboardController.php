@@ -3,6 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Services\TicketDashboardService;
+use App\Services\TicketForecastService;
+use App\Services\TicketCacheService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 
 class TicketDashboardController extends Controller
@@ -16,7 +19,11 @@ class TicketDashboardController extends Controller
 
     public function customerDashboard(Request $request)
     {
-        $createdBy = (int) ($request->query('created_by', 1));
+        $authenticatedUser = $request->user();
+        $createdBy = (int) ($authenticatedUser->client_ID ?? $authenticatedUser->client_id ?? $authenticatedUser->emp_id ?? $authenticatedUser->id ?? 0);
+        if ($createdBy <= 0) {
+            return response()->json(['message' => 'Unauthorized: Invalid customer identity'], 401);
+        }
         $limit = max(1, min((int) $request->query('limit', 5), 200));
 
         $filters = [
@@ -36,7 +43,8 @@ class TicketDashboardController extends Controller
 
     public function customerFilterOptions(Request $request)
     {
-        $createdBy = (int) ($request->query('created_by', 1));
+        $authenticatedUser = $request->user();
+        $createdBy = (int) ($authenticatedUser->client_ID ?? $authenticatedUser->client_id ?? $authenticatedUser->emp_id ?? $authenticatedUser->id ?? 0);
         $data = $this->dashboardService->getCustomerFilterOptions($createdBy);
         return response()->json($data);
     }
@@ -109,7 +117,19 @@ class TicketDashboardController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
+        $role = strtolower(trim((string) ($user->role ?? '')));
+        $allowedRoles = ['superadmin', 'super admin', 'admin', 'systemadministrator', 'itadmin', 'it admin'];
+        if (!in_array($role, $allowedRoles, true)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Access denied: Admin role required to view operational reports.',
+            ], 403);
+        }
+
         $filters = [
+            'report_type' => $request->query('report_type'),
+            'department' => $request->query('department'),
+            'priority' => $request->query('priority'),
             'preset' => $request->query('preset') ?? $request->query('filter'),
             'date_from' => $request->query('date_from'),
             'date_to' => $request->query('date_to'),
@@ -121,5 +141,60 @@ class TicketDashboardController extends Controller
 
         $data = $this->dashboardService->getAdminReports($user, $filters, $forceRefresh);
         return response()->json($data);
+    }
+
+    public function triggerEtl(
+        Request $request,
+        TicketForecastService $forecastService,
+        TicketCacheService $cacheService
+    ) {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        $role = strtolower(trim((string) ($user->role ?? '')));
+        if (!in_array($role, ['admin', 'superadmin', 'super admin'], true)) {
+            return response()->json(['message' => 'Access denied: Admin or SuperAdmin role required.'], 403);
+        }
+
+        $isSuperAdmin = in_array($role, ['superadmin', 'super admin'], true);
+        $fullSync = filter_var($request->input('full_sync', false), FILTER_VALIDATE_BOOLEAN);
+        $requestedBranchId = $request->input('branch_id');
+
+        // Non-superadmin cannot trigger ETL for other branches
+        if (!$isSuperAdmin && !empty($requestedBranchId)) {
+            $userBranchId = (string) ($user->branch_id ?? '');
+            if ((string) $requestedBranchId !== $userBranchId && strtolower((string) $requestedBranchId) !== 'current' && strtolower((string) $requestedBranchId) !== 'assigned') {
+                return response()->json(['message' => 'Access denied: You are restricted to your assigned branch scope.'], 403);
+            }
+        }
+
+        $startTime = microtime(true);
+
+        $recordsProcessed = 0;
+        if ($isSuperAdmin && ($fullSync || empty($requestedBranchId) || strtolower((string) $requestedBranchId) === 'all')) {
+            $forecastResults = $forecastService->calculateAndPersistAllBranches(7);
+            foreach ($forecastResults as $branchResult) {
+                $recordsProcessed += (int) ($branchResult['records_processed'] ?? 0);
+            }
+        } else {
+            $branch = $this->dashboardService->resolveBranchScope($user, ['branch_id' => $requestedBranchId]);
+            $forecastResult = $forecastService->calculateAndPersistBranchForecasts($branch, 7);
+            $recordsProcessed = (int) ($forecastResult['records_processed'] ?? 0);
+        }
+
+        // Invalidate dashboard and analytics caches
+        $cacheService->clearTicketCaches();
+
+        $durationMs = (int) round((microtime(true) - $startTime) * 1000);
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'ETL synchronization completed successfully.',
+            'records_processed' => $recordsProcessed,
+            'duration_ms' => $durationMs,
+            'timestamp' => Carbon::now()->toIso8601String(),
+        ]);
     }
 }

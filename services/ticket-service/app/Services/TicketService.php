@@ -298,9 +298,7 @@ class TicketService
             'updated_at' => now(),
         ];
 
-        if (\Illuminate\Support\Facades\Schema::hasColumn('tickets', 'origin')) {
-            $ticketData['origin'] = $validated['origin'] ?? 'manual';
-        }
+        $ticketData['origin'] = $validated['origin'] ?? 'manual';
 
         $ticketId = $this->ticketLimitService->createWithinLimit(
             $clientId,
@@ -391,13 +389,23 @@ class TicketService
         DB::table('ticket_audit_logs')->insert([
             'ticket_ID' => $ticketId,
             'action_type' => 'create',
+            'event_type' => 'ticket_created',
             'action_by_ID' => $clientId,
             'actor_type' => 'customer',
+            'actor_role' => 'customer',
+            'before_state' => null,
+            'after_state' => json_encode([
+                'status_id' => $statusId,
+                'priority_id' => $priorityId,
+                'category_id' => $validated['problem_category_ID'],
+            ]),
             'details' => json_encode([
                 'machine_ID' => $validated['machine_ID'] ?? null,
                 'problem_category_ID' => $validated['problem_category_ID'],
                 'title' => strip_tags($validated['title']),
             ]),
+            'is_system' => 0,
+            'is_internal' => 0,
             'created_at' => now(),
         ]);
 
@@ -515,13 +523,23 @@ class TicketService
         DB::table('ticket_audit_logs')->insert([
             'ticket_ID' => $ticketId,
             'action_type' => 'create',
+            'event_type' => 'ticket_created',
             'action_by_ID' => $empId,
             'actor_type' => 'employee',
+            'actor_role' => $user->role ?? 'employee',
+            'before_state' => null,
+            'after_state' => json_encode([
+                'status_id' => $statusId,
+                'priority_id' => $priorityId,
+                'category_id' => $validated['problem_category_ID'],
+            ]),
             'details' => json_encode([
                 'machine_ID' => $validated['machine_ID'] ?? null,
                 'problem_category_ID' => $validated['problem_category_ID'],
                 'title' => strip_tags($validated['title']),
             ]),
+            'is_system' => 0,
+            'is_internal' => 1,
             'created_at' => now(),
         ]);
 

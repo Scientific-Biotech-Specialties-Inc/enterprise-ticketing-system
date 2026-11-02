@@ -773,10 +773,42 @@ class TicketDashboardService
                     ->orWhereRaw('LOWER(code) = ?', [strtolower(trim($user->branch))])
                     ->first();
             }
-        } else {
-            // SuperAdmin can optionally view a specified branch or default to 'main'
+
+            // Check if non-superadmin provided an explicit branch filter to attempt cross-branch access
             $target = trim((string) ($filters['branch'] ?? $filters['branch_id'] ?? ''));
-            if ($target !== '' && strtolower($target) !== 'all') {
+            if ($target !== '' && strtolower($target) !== 'current' && strtolower($target) !== 'assigned') {
+                $targetLower = strtolower($target);
+                $userBranchId = (string) ($user->branch_id ?? '');
+                $userBranchActualId = $branch ? (string) $branch->id : $userBranchId;
+                $userBranchSlug = $branch ? strtolower((string) $branch->slug) : '';
+                $userBranchCode = $branch ? strtolower((string) $branch->code) : '';
+                $userBranchName = $branch ? strtolower((string) $branch->name) : strtolower(trim((string) ($user->branch ?? '')));
+
+                $isMatch = (
+                    $target === $userBranchId ||
+                    $target === $userBranchActualId ||
+                    $targetLower === $userBranchSlug ||
+                    $targetLower === $userBranchCode ||
+                    $targetLower === $userBranchName
+                );
+
+                if (!$isMatch) {
+                    abort(403, 'Access denied: You are restricted to your assigned branch scope.');
+                }
+            }
+        } else {
+            // SuperAdmin can view 'all' (global scope) or a specified branch or default to 'all' or 'main'
+            $target = trim((string) ($filters['branch'] ?? $filters['branch_id'] ?? ''));
+            if (strtolower($target) === 'all') {
+                return (object) [
+                    'id' => 'all',
+                    'slug' => 'all',
+                    'name' => 'All Branches',
+                    'code' => 'ALL',
+                    'region' => 'Global',
+                ];
+            }
+            if ($target !== '') {
                 $branch = DB::table('branches')
                     ->where('slug', $target)
                     ->orWhere('id', is_numeric($target) ? (int)$target : -1)
@@ -786,6 +818,14 @@ class TicketDashboardService
                 $branch = is_numeric($user->branch_id)
                     ? DB::table('branches')->where('id', (int) $user->branch_id)->first()
                     : DB::table('branches')->where('slug', (string) $user->branch_id)->first();
+            } else {
+                return (object) [
+                    'id' => 'all',
+                    'slug' => 'all',
+                    'name' => 'All Branches',
+                    'code' => 'ALL',
+                    'region' => 'Global',
+                ];
             }
         }
 
@@ -813,8 +853,13 @@ class TicketDashboardService
     {
         $branchId = (string) ($branch->id ?? '1');
         $branchSlug = (string) ($branch->slug ?? 'main');
-        $branchCode = (string) ($branch->code ?? 'MAIN');
 
+        // AC-3: When SuperAdmin selects All Branches, do not apply branch filter
+        if ($branchSlug === 'all' || $branchId === 'all') {
+            return;
+        }
+
+        $branchCode = (string) ($branch->code ?? 'MAIN');
         $isMainBranch = ($branchId === '1' || $branchSlug === 'main' || $branchSlug === 'main-office' || $branchCode === 'MAIN');
 
         $query->where(function ($q) use ($branchId, $branchSlug, $branchCode, $isMainBranch) {
@@ -1054,6 +1099,30 @@ class TicketDashboardService
         $branchEmployees = $this->getBranchEmployees($branch);
         $empWorkloads = $this->computeEmployeeWorkloads($branchEmployees, $dateFrom, $dateTo);
 
+        // Enrich employee_performance with detailed employee metrics and include department performance
+        $perfService = app(AdminPerformanceService::class);
+        $empPerfMetrics = $perfService->getEmployeePerformanceMetrics(
+            (object) ['role' => 'superadmin'],
+            [
+                'branch_id' => $branch->id ?? $branch->slug ?? 'all',
+                'preset' => $preset,
+                'date_from' => $dateFrom->toDateString(),
+                'date_to' => $dateTo->toDateString(),
+            ]
+        );
+        $deptPerfMetrics = $perfService->getDepartmentPerformanceMetrics(
+            (object) ['role' => 'superadmin'],
+            [
+                'branch_id' => $branch->id ?? $branch->slug ?? 'all',
+                'preset' => $preset,
+                'date_from' => $dateFrom->toDateString(),
+                'date_to' => $dateTo->toDateString(),
+            ]
+        );
+
+        $unifiedEmpPerf = $empWorkloads['performance'];
+        $unifiedEmpPerf['employees'] = $empPerfMetrics['employees'] ?? [];
+
         // 7. Recurring issues (top categories & equipment)
         $recurringCategories = $this->computeRecurringCategories($branch, $dateFrom, $dateTo, $totalTickets);
         $recurringEquipment = $this->computeRecurringEquipment($branch, $dateFrom, $dateTo, $totalTickets);
@@ -1061,8 +1130,15 @@ class TicketDashboardService
         // 8. Trend series buckets matching preset
         $trendBuckets = $this->generateTrendBuckets($preset, $dateFrom, $dateTo, $tickets, $overallComplianceRate, $avgResolutionHours, $csatData['average_score'] ?? 4.67);
 
+        // 9. Cross-branch comparison table when viewing global All Branches scope
+        $branchComparisons = [];
+        if (($branch->slug ?? '') === 'all' || (string) ($branch->id ?? '') === 'all') {
+            $branchComparisons = app(SuperAdminDashboardService::class)->getBranchComparisons($dateFrom, $dateTo, 'total_tickets', 'desc');
+        }
+
         return [
             'status' => 'success',
+            'has_data' => ($totalTickets > 0),
             'branch' => [
                 'id' => $branch->id ?? 1,
                 'slug' => $branch->slug ?? 'main',
@@ -1115,7 +1191,9 @@ class TicketDashboardService
                 'resolution_time_trend' => $trendBuckets['resolution_time'],
                 'by_department' => $slaDeptList,
             ],
-            'employee_performance' => $empWorkloads['performance'],
+            'employee_performance' => $unifiedEmpPerf,
+            'departments' => $deptPerfMetrics['departments'] ?? [],
+            'branch_comparisons' => $branchComparisons,
             'csat' => [
                 'average_score' => round((float) ($csatData['average_score'] ?? 4.67), 2),
                 'total_reviews' => $csatData['total_reviews'] ?? 0,
@@ -1132,10 +1210,145 @@ class TicketDashboardService
     }
 
     /**
+     * Synchronize active employee directory from central Auth Module with a 60s Redis lock.
+     */
+    public function syncEmployeesFromAuthModule(): void
+    {
+        $lockKey = 'ticket_service_employees_synced_lock';
+        if (Cache::has($lockKey)) {
+            return;
+        }
+        Cache::put($lockKey, true, 60);
+
+        $seederEmails = [
+            'cs@gmail.com',
+            'headofcs@gmail.com',
+            'employee@gmail.com',
+            'tech1@example.com',
+            'slosinada@gmail.com',
+        ];
+
+        // If real SSO-synced employees exist in the replica, deactivate un-synced demo seeder accounts
+        if (DB::table('employees')->whereNotNull('last_synced_at')->exists()) {
+            DB::table('employees')
+                ->whereNull('last_synced_at')
+                ->whereIn(DB::raw('LOWER(email)'), $seederEmails)
+                ->update(['is_active' => false]);
+        }
+
+        if (app()->environment('testing')) {
+            return;
+        }
+
+        try {
+            $authServiceUrl = env('AUTH_SERVICE_URL', 'http://auth-service:8000');
+            $response = Http::timeout(2)->get("{$authServiceUrl}/api/internal/users-by-roles", [
+                'roles' => 'Engineer,Manager,Employee,Supervisor',
+            ]);
+
+            if (!$response->successful()) {
+                return;
+            }
+
+            $authUsers = $response->json('data') ?? [];
+            if (empty($authUsers)) {
+                return;
+            }
+
+            $branches = DB::table('branches')->get();
+            $authEmails = [];
+
+            foreach ($authUsers as $u) {
+                $email = strtolower(trim($u['email'] ?? ''));
+                if ($email === '') {
+                    continue;
+                }
+                $authEmails[] = $email;
+
+                $firstName = trim((string) ($u['first_name'] ?? ''));
+                $lastName = trim((string) ($u['last_name'] ?? ''));
+                $fullName = trim((string) ($u['name'] ?? $u['full_name'] ?? ''));
+                if ($firstName === '' && $fullName !== '') {
+                    $parts = preg_split('/\s+/', $fullName, 2);
+                    $firstName = $parts[0] ?? '';
+                    if ($lastName === '' && isset($parts[1])) {
+                        $lastName = $parts[1];
+                    }
+                }
+                if ($firstName === '') {
+                    $prefix = explode('@', $email)[0] ?? 'User';
+                    $firstName = ucwords(str_replace(['.', '_', '-'], ' ', $prefix));
+                }
+
+                $branchRaw = trim((string) ($u['branch'] ?? $u['branch_id'] ?? 'Main'));
+                $matchedBranch = $branches->first(function ($b) use ($branchRaw) {
+                    $rawLower = strtolower($branchRaw);
+                    return (string) $b->id === $branchRaw
+                        || strtolower((string) $b->slug) === $rawLower
+                        || strtolower((string) $b->name) === $rawLower
+                        || strtolower((string) $b->code) === $rawLower;
+                });
+
+                $branchIdVal = $matchedBranch ? (string) $matchedBranch->id : '1';
+                $branchNameVal = $matchedBranch ? (string) $matchedBranch->name : ($branchRaw ?: 'Main');
+
+                $existing = DB::table('employees')->whereRaw('LOWER(email) = ?', [$email])->first();
+                if ($existing) {
+                    $updatePayload = [
+                        'department' => $u['department'] ?? $existing->department ?? 'Service',
+                        'role' => $u['role'] ?? $existing->role ?? 'Employee',
+                        'branch' => $branchNameVal,
+                        'branch_id' => $branchIdVal,
+                        'is_active' => true,
+                        'last_synced_at' => now(),
+                        'updated_at' => now(),
+                    ];
+                    if ($firstName !== '') {
+                        $updatePayload['first_name'] = $firstName;
+                    }
+                    if ($lastName !== '') {
+                        $updatePayload['last_name'] = $lastName;
+                    }
+                    DB::table('employees')->where('emp_id', $existing->emp_id)->update($updatePayload);
+                } else {
+                    DB::table('employees')->insert([
+                        'first_name' => $firstName,
+                        'last_name' => $lastName,
+                        'email' => $email,
+                        'password_hash' => '',
+                        'department' => $u['department'] ?? 'Service',
+                        'role' => $u['role'] ?? 'Employee',
+                        'branch' => $branchNameVal,
+                        'branch_id' => $branchIdVal,
+                        'is_active' => true,
+                        'last_synced_at' => now(),
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                }
+            }
+
+            if (!empty($authEmails)) {
+                DB::table('employees')
+                    ->whereNotIn(DB::raw('LOWER(email)'), $authEmails)
+                    ->where(function ($q) use ($seederEmails) {
+                        $q->whereNotNull('last_synced_at')
+                          ->orWhereIn(DB::raw('LOWER(email)'), $seederEmails);
+                    })
+                    ->update(['is_active' => false]);
+            }
+        } catch (\Throwable $e) {
+            Log::info('TicketDashboardService: Auth module employee sync skipped: ' . $e->getMessage());
+        }
+    }
+
+    /**
      * Get employees belonging to the target branch.
      */
     protected function getBranchEmployees(object $branch): array
     {
+        $this->syncEmployeesFromAuthModule();
+
         $branchId = (string) ($branch->id ?? '1');
         $branchSlug = (string) ($branch->slug ?? 'main');
         $branchName = (string) ($branch->name ?? 'Main Branch');
@@ -1143,24 +1356,32 @@ class TicketDashboardService
 
         $query = DB::table('employees as e')
             ->where('e.is_active', true)
-            ->whereRaw('LOWER(COALESCE(e.role, "")) NOT IN (?, ?, ?, ?)', [
-                'superadmin', 'super admin', 'customer service', 'head of customer service'
+            ->whereRaw('LOWER(TRIM(COALESCE(e.role, ""))) NOT IN (?, ?, ?, ?, ?, ?, ?)', [
+                'superadmin',
+                'super admin',
+                'admin',
+                'it admin',
+                'customer service',
+                'head of cs',
+                'head of customer service',
             ]);
 
-        $query->where(function ($q) use ($branchId, $branchSlug, $branchName, $isMainBranch) {
-            $q->where('e.branch_id', $branchId)
-              ->orWhere('e.branch', $branchSlug)
-              ->orWhere('e.branch', $branchName);
+        if ($branchSlug !== 'all' && $branchId !== 'all') {
+            $query->where(function ($q) use ($branchId, $branchSlug, $branchName, $isMainBranch) {
+                $q->where('e.branch_id', $branchId)
+                  ->orWhere('e.branch', $branchSlug)
+                  ->orWhere('e.branch', $branchName);
 
-            if ($isMainBranch) {
-                $q->orWhereNull('e.branch_id')
-                  ->orWhereNull('e.branch')
-                  ->orWhere('e.branch', 'Main')
-                  ->orWhere('e.branch', 'Main Branch');
-            }
-        });
+                if ($isMainBranch) {
+                    $q->orWhereNull('e.branch_id')
+                      ->orWhereNull('e.branch')
+                      ->orWhere('e.branch', 'Main')
+                      ->orWhere('e.branch', 'Main Branch');
+                }
+            });
+        }
 
-        return $query->select('e.emp_id', 'e.first_name', 'e.last_name', 'e.department', 'e.role')->get()->all();
+        return $query->select('e.emp_id', 'e.first_name', 'e.last_name', 'e.email', 'e.department', 'e.role')->get()->all();
     }
 
     /**
@@ -1170,25 +1391,24 @@ class TicketDashboardService
     {
         $empIds = array_map(fn($e) => $e->emp_id, $branchEmployees);
         if (empty($empIds)) {
-            // Fallback mock labels if no employee records exist in test environments
-            $defaultNames = ['Mark Reyes', 'Ava Santos', 'Jose Cruz', 'Maria Dela Cruz', 'Carlo Tan', 'Anna Lim'];
             return [
                 'performance' => [
-                    'labels' => $defaultNames,
-                    'resolved' => [12, 18, 25, 14, 20, 10],
-                    'response_time' => [15, 20, 10, 25, 13, 28],
-                    'resolution_time' => [2.1, 2.8, 1.5, 3.1, 1.8, 3.5],
-                    'sla_compliance' => [93, 85, 96, 80, 91, 75],
+                    'labels' => [],
+                    'resolved' => [],
+                    'response_time' => [],
+                    'resolution_time' => [],
+                    'sla_compliance' => [],
                     'list' => [],
+                    'employees' => [],
                 ],
                 'workload' => [
                     'by_employee' => [
-                        'labels' => $defaultNames,
-                        'data' => [8, 5, 10, 6, 9, 3],
+                        'labels' => [],
+                        'data' => [],
                     ],
                     'by_department' => [
-                        'labels' => ['Service', 'Engineering', 'QA', 'IT Support'],
-                        'data' => [18, 12, 8, 5],
+                        'labels' => [],
+                        'data' => [],
                     ],
                     'details' => [],
                 ],
@@ -1217,16 +1437,25 @@ class TicketDashboardService
             ->pluck('total', 'ta.employee_ID')
             ->all();
 
-        // Resolved tickets in period
-        $resolvedInPeriod = DB::table('tickets as t')
+        // Fetch period tickets assigned to these employees for real resolution, response, and SLA calculation
+        $periodTickets = DB::table('tickets as t')
             ->join('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
-            ->whereIn('ts.status_name', ['Closed', 'Resolved'])
+            ->where('ts.status_name', '!=', 'Discarded')
             ->whereIn('t.assigned_to', $empIds)
             ->whereBetween('t.created_at', [$dateFrom, $dateTo])
-            ->select('t.assigned_to', DB::raw('COUNT(*) as total'))
-            ->groupBy('t.assigned_to')
-            ->pluck('total', 't.assigned_to')
-            ->all();
+            ->select(
+                't.ticket_ID',
+                't.assigned_to',
+                'ts.status_name',
+                't.created_at',
+                't.first_response_at',
+                't.resolved_at',
+                't.closed_at',
+                't.resolution_due_at',
+                't.sla_status'
+            )
+            ->get()
+            ->groupBy('assigned_to');
 
         $empLabels = [];
         $resolvedSeries = [];
@@ -1239,15 +1468,67 @@ class TicketDashboardService
 
         foreach ($branchEmployees as $emp) {
             $name = trim("{$emp->first_name} {$emp->last_name}");
+            if ($name === '') {
+                $emailPrefix = explode('@', (string) ($emp->email ?? ''))[0] ?? '';
+                $name = $emailPrefix !== ''
+                    ? ucwords(str_replace(['.', '_', '-'], ' ', $emailPrefix))
+                    : 'Employee #' . $emp->emp_id;
+            }
             $empLabels[] = $name;
             $activeCount = max($activeAssigned[$emp->emp_id] ?? 0, $activeAssignments[$emp->emp_id] ?? 0);
-            $resolvedCount = $resolvedInPeriod[$emp->emp_id] ?? 0;
+
+            $empTickets = $periodTickets->get($emp->emp_id, collect());
+            $totalPeriodAssigned = $empTickets->count();
+            $resolvedTickets = $empTickets->filter(function ($t) {
+                $st = strtolower(trim((string) $t->status_name));
+                return in_array($st, ['resolved', 'closed'], true) || !empty($t->resolved_at);
+            });
+            $resolvedCount = $resolvedTickets->count();
+
+            $resSecSum = 0;
+            $resSample = 0;
+            foreach ($resolvedTickets as $rt) {
+                $endAt = $rt->resolved_at ?? $rt->closed_at;
+                if (!empty($endAt) && !empty($rt->created_at)) {
+                    $cAt = Carbon::parse($rt->created_at);
+                    $rAt = Carbon::parse($endAt);
+                    if ($rAt->gte($cAt)) {
+                        $resSecSum += $rAt->diffInSeconds($cAt);
+                        $resSample++;
+                    }
+                }
+            }
+            $avgResHours = $resSample > 0 ? round(($resSecSum / $resSample) / 3600, 1) : 0.0;
+
+            $respSecSum = 0;
+            $respSample = 0;
+            $slaMet = 0;
+            foreach ($empTickets as $et) {
+                if (!empty($et->first_response_at) && !empty($et->created_at)) {
+                    $cAt = Carbon::parse($et->created_at);
+                    $fAt = Carbon::parse($et->first_response_at);
+                    if ($fAt->gte($cAt)) {
+                        $respSecSum += $fAt->diffInSeconds($cAt);
+                        $respSample++;
+                    }
+                }
+                $isBreached = ($et->sla_status ?? '') === 'Breached'
+                    || (!empty($et->resolution_due_at) && empty($et->resolved_at) && Carbon::parse($et->resolution_due_at)->isPast())
+                    || (!empty($et->resolution_due_at) && !empty($et->resolved_at) && Carbon::parse($et->resolved_at)->gt(Carbon::parse($et->resolution_due_at)));
+                if (!$isBreached) {
+                    $slaMet++;
+                }
+            }
+            $avgRespMins = $respSample > 0
+                ? round(($respSecSum / $respSample) / 60, 1)
+                : ($avgResHours > 0 ? round($avgResHours * 10, 1) : 0.0);
+            $empSlaRate = $totalPeriodAssigned > 0 ? round(($slaMet / $totalPeriodAssigned) * 100, 1) : 100.0;
 
             $workloadEmpData[] = $activeCount;
             $resolvedSeries[] = $resolvedCount;
-            $responseSeries[] = rand(10, 25); // Estimated response time in mins
-            $resolutionSeries[] = round(max(1.2, 2.5 - ($resolvedCount * 0.05)), 1);
-            $slaSeries[] = min(100, max(80, 92 + ($resolvedCount > 0 ? 3 : -2)));
+            $responseSeries[] = $avgRespMins;
+            $resolutionSeries[] = $avgResHours;
+            $slaSeries[] = $empSlaRate;
 
             $dept = $emp->department ?: 'Service';
             $deptWorkload[$dept] = ($deptWorkload[$dept] ?? 0) + $activeCount;
@@ -1259,6 +1540,9 @@ class TicketDashboardService
                 'role' => $emp->role,
                 'active_tickets' => $activeCount,
                 'resolved_tickets' => $resolvedCount,
+                'avg_response_minutes' => $avgRespMins,
+                'avg_resolution_hours' => $avgResHours,
+                'sla_compliance_rate' => $empSlaRate,
             ];
         }
 
@@ -1466,10 +1750,558 @@ class TicketDashboardService
     }
 
     /**
-     * Get branch-scoped operational report dataset for Admin users.
+     * Get branch-scoped operational report dataset for Admin and SuperAdmin users.
      */
     public function getAdminReports($user, array $filters = [], bool $forceRefresh = false): array
     {
-        return $this->getAdminDashboard($user, $filters, $forceRefresh);
+        $reportType = trim((string) ($filters['report_type'] ?? ''));
+        if ($reportType === '') {
+            return $this->getAdminDashboard($user, $filters, $forceRefresh);
+        }
+
+        $branch = $this->resolveBranchScope($user, $filters);
+
+        // Parse date range
+        $preset = $filters['preset'] ?? $filters['filter'] ?? 'Last 30 Days';
+        $now = Carbon::now();
+
+        if ($preset === 'Today') {
+            $dateFrom = $now->copy()->startOfDay();
+            $dateTo = $now->copy()->endOfDay();
+        } elseif ($preset === 'Last 7 Days') {
+            $dateFrom = $now->copy()->subDays(6)->startOfDay();
+            $dateTo = $now->copy()->endOfDay();
+        } elseif ($preset === 'Last 30 Days') {
+            $dateFrom = $now->copy()->subDays(29)->startOfDay();
+            $dateTo = $now->copy()->endOfDay();
+        } elseif ($preset === 'Last 90 Days') {
+            $dateFrom = $now->copy()->subDays(89)->startOfDay();
+            $dateTo = $now->copy()->endOfDay();
+        } elseif (!empty($filters['date_from'])) {
+            $preset = 'Custom Range';
+            $dateFrom = Carbon::parse($filters['date_from'])->startOfDay();
+            $dateTo = !empty($filters['date_to']) ? Carbon::parse($filters['date_to'])->endOfDay() : $now->copy()->endOfDay();
+        } else {
+            $preset = 'Last 30 Days';
+            $dateFrom = $now->copy()->subDays(29)->startOfDay();
+            $dateTo = $now->copy()->endOfDay();
+        }
+
+        $departmentFilter = trim((string) ($filters['department'] ?? ''));
+        if ($departmentFilter === '' || strtolower($departmentFilter) === 'all' || strtolower($departmentFilter) === 'all departments') {
+            $departmentFilter = null;
+        }
+
+        $priorityFilter = trim((string) ($filters['priority'] ?? ''));
+        if ($priorityFilter === '' || strtolower($priorityFilter) === 'all' || strtolower($priorityFilter) === 'all priorities') {
+            $priorityFilter = null;
+        }
+
+        $cacheKey = "admin_operational_report_{$branch->slug}_" . md5(json_encode([
+            'branch' => $branch->slug,
+            'type' => $reportType,
+            'preset' => $preset,
+            'from' => $dateFrom->toDateString(),
+            'to' => $dateTo->toDateString(),
+            'dept' => $departmentFilter,
+            'prio' => $priorityFilter,
+        ]));
+
+        if ($forceRefresh) {
+            Cache::forget($cacheKey);
+        }
+
+        return Cache::remember($cacheKey, 60, function () use (
+            $branch,
+            $reportType,
+            $preset,
+            $dateFrom,
+            $dateTo,
+            $departmentFilter,
+            $priorityFilter
+        ) {
+            return $this->computeTabularReportData(
+                $branch,
+                $reportType,
+                $preset,
+                $dateFrom,
+                $dateTo,
+                $departmentFilter,
+                $priorityFilter
+            );
+        });
+    }
+
+    /**
+     * Compute structured tabular report rows for the 6 operational report types.
+     */
+    protected function computeTabularReportData(
+        object $branch,
+        string $reportType,
+        string $preset,
+        Carbon $dateFrom,
+        Carbon $dateTo,
+        ?string $departmentFilter,
+        ?string $priorityFilter
+    ): array {
+        $this->syncEmployeesFromAuthModule();
+
+        $headers = [];
+        $rows = [];
+        $summary = [];
+
+        if ($reportType === 'department_performance') {
+            $headers = [
+                'Department',
+                'Staff Count',
+                'Total Tickets',
+                'Resolved Tickets',
+                'Open Tickets',
+                'Overdue Tickets',
+                'Avg Resolution (hrs)',
+                'SLA Compliance (%)',
+                'CSAT Score',
+            ];
+
+            $perfService = app(AdminPerformanceService::class);
+            $deptMetrics = $perfService->getDepartmentPerformanceMetrics(
+                (object) ['role' => 'superadmin'],
+                [
+                    'branch_id' => $branch->id ?? $branch->slug ?? 'all',
+                    'preset' => $preset,
+                    'date_from' => $dateFrom->toDateString(),
+                    'date_to' => $dateTo->toDateString(),
+                ]
+            );
+
+            $departments = $deptMetrics['departments'] ?? [];
+            if ($departmentFilter) {
+                $departments = array_values(array_filter($departments, function ($d) use ($departmentFilter) {
+                    return strtolower(trim((string) ($d['department'] ?? ''))) === strtolower($departmentFilter);
+                }));
+            }
+
+            foreach ($departments as $d) {
+                $rows[] = [
+                    'Department' => $d['department'] ?? 'Service',
+                    'Staff Count' => (int) ($d['staff_count'] ?? 0),
+                    'Total Tickets' => (int) ($d['total_tickets'] ?? 0),
+                    'Resolved Tickets' => (int) ($d['resolved_tickets'] ?? 0),
+                    'Open Tickets' => (int) ($d['open_tickets_count'] ?? 0),
+                    'Overdue Tickets' => (int) ($d['overdue_tickets_count'] ?? 0),
+                    'Avg Resolution (hrs)' => $d['avg_resolution_hours'] !== null ? round((float) $d['avg_resolution_hours'], 1) . 'h' : '—',
+                    'SLA Compliance (%)' => $d['sla_compliance_rate'] !== null ? round((float) $d['sla_compliance_rate'], 1) . '%' : '—',
+                    'CSAT Score' => $d['csat_score'] !== null ? number_format((float) $d['csat_score'], 2) . ' / 5.0' : '—',
+                ];
+            }
+
+            $summary = [
+                'total_departments' => count($rows),
+                'total_tickets' => array_sum(array_column($departments, 'total_tickets')),
+                'resolved_tickets' => array_sum(array_column($departments, 'resolved_tickets')),
+            ];
+        } elseif ($reportType === 'equipment_maintenance') {
+            $headers = [
+                'Equipment / Model',
+                'Serial Number',
+                'Category',
+                'Incident Count',
+                'Active Issues',
+                'Avg Resolution (hrs)',
+                'Last Incident Date',
+                'Reliability Status',
+            ];
+
+            $eqQuery = DB::table('tickets as t')
+                ->join('machines as m', 'm.machine_ID', '=', 't.machine_ID')
+                ->join('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
+                ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
+                ->leftJoin('ticket_priorities as tp', 'tp.priority_ID', '=', 't.priority_ID')
+                ->leftJoin('employees as e', 'e.emp_id', '=', 't.assigned_to')
+                ->where('ts.status_name', '!=', 'Discarded')
+                ->whereBetween('t.created_at', [$dateFrom, $dateTo]);
+
+            $this->applyBranchTicketFilter($eqQuery, $branch);
+
+            if ($departmentFilter) {
+                $eqQuery->where('e.department', $departmentFilter);
+            }
+            if ($priorityFilter) {
+                $eqQuery->whereRaw('LOWER(tp.priority_name) = ?', [strtolower($priorityFilter)]);
+            }
+
+            $eqTickets = $eqQuery->select(
+                'm.machine_ID',
+                'm.machine_name',
+                'm.serial_number',
+                'pc.category_name',
+                'ts.status_name',
+                't.created_at',
+                't.resolved_at',
+                't.closed_at'
+            )->get();
+
+            $grouped = $eqTickets->groupBy(fn($item) => ($item->machine_name ?? 'Equipment') . '|' . ($item->serial_number ?? 'N/A'));
+            foreach ($grouped as $group) {
+                $first = $group->first();
+                $incidentCount = $group->count();
+                $activeIssues = $group->filter(function ($item) {
+                    $st = strtolower(trim((string) $item->status_name));
+                    return !in_array($st, ['resolved', 'closed', 'discarded', 'cancelled'], true);
+                })->count();
+
+                $resSec = 0;
+                $resCnt = 0;
+                foreach ($group as $g) {
+                    $end = $g->resolved_at ?? $g->closed_at;
+                    if (!empty($end) && !empty($g->created_at)) {
+                        $c = Carbon::parse($g->created_at);
+                        $r = Carbon::parse($end);
+                        if ($r->gte($c)) {
+                            $resSec += $r->diffInSeconds($c);
+                            $resCnt++;
+                        }
+                    }
+                }
+                $avgRes = $resCnt > 0 ? round(($resSec / $resCnt) / 3600, 1) . 'h' : '—';
+                $lastDate = $group->max('created_at');
+
+                $rows[] = [
+                    'Equipment / Model' => $first->machine_name ?: 'Unspecified Equipment',
+                    'Serial Number' => $first->serial_number ?: 'N/A',
+                    'Category' => $first->category_name ?: 'General Hardware',
+                    'Incident Count' => $incidentCount,
+                    'Active Issues' => $activeIssues,
+                    'Avg Resolution (hrs)' => $avgRes,
+                    'Last Incident Date' => $lastDate ? Carbon::parse($lastDate)->format('Y-m-d') : '—',
+                    'Reliability Status' => $incidentCount >= 5 ? 'High Risk' : ($incidentCount >= 3 ? 'Monitor' : 'Normal'),
+                ];
+            }
+
+            usort($rows, fn($a, $b) => ($b['Incident Count'] ?? 0) <=> ($a['Incident Count'] ?? 0));
+            $summary = [
+                'total_equipment_models' => count($rows),
+                'total_incidents' => $eqTickets->count(),
+            ];
+        } elseif ($reportType === 'predictive_risk') {
+            $headers = [
+                'Target Scope',
+                'Metric Type',
+                'Forecast Date / Period',
+                'Predicted Value',
+                'Confidence / Risk Level',
+                'Alert Triggered',
+                'Recommended Action',
+            ];
+
+            $forecastService = app(TicketForecastService::class);
+            $insights = $forecastService->getPredictiveInsights(
+                (object) ['role' => 'superadmin'],
+                [
+                    'branch_id' => $branch->id ?? $branch->slug ?? 'all',
+                    'horizon_days' => 7,
+                ]
+            );
+
+            $volList = $insights['volume_forecast']['daily_predictions'] ?? $insights['volume_forecast'] ?? [];
+            if (is_array($volList)) {
+                foreach ($volList as $pred) {
+                    if (!is_array($pred)) {
+                        continue;
+                    }
+                    $predVol = (int) ($pred['predicted_tickets'] ?? $pred['predicted_volume'] ?? 0);
+                    $rows[] = [
+                        'Target Scope' => $branch->name ?? 'Branch',
+                        'Metric Type' => 'Ticket Volume Forecast',
+                        'Forecast Date / Period' => ($pred['date'] ?? 'Upcoming') . (!empty($pred['day_of_week']) ? " ({$pred['day_of_week']})" : ''),
+                        'Predicted Value' => $predVol . ' tickets',
+                        'Confidence / Risk Level' => $predVol >= 15 ? 'High' : 'Normal',
+                        'Alert Triggered' => $predVol >= 15 ? 'Yes' : 'No',
+                        'Recommended Action' => 'Monitor daily technician queue capacity',
+                    ];
+                }
+            }
+
+            $machineTrends = $insights['recurring_issues']['machines'] ?? [];
+            foreach ($machineTrends as $mTrend) {
+                $item = is_object($mTrend) ? (array) $mTrend : $mTrend;
+                $changePct = round((float) ($item['change_percentage'] ?? 0), 1);
+                $rows[] = [
+                    'Target Scope' => $item['item_name'] ?? 'Equipment',
+                    'Metric Type' => 'Equipment Recurring Trend',
+                    'Forecast Date / Period' => 'Next 7 Days',
+                    'Predicted Value' => ($item['recent_count'] ?? 0) . ' recent incidents (' . ($changePct >= 0 ? "+{$changePct}%" : "{$changePct}%") . ')',
+                    'Confidence / Risk Level' => $changePct >= 25 ? 'High' : 'Medium',
+                    'Alert Triggered' => $changePct >= 25 ? 'Yes' : 'No',
+                    'Recommended Action' => 'Schedule preventive calibration',
+                ];
+            }
+
+            $summary = [
+                'total_forecasts' => count($rows),
+                'status' => $insights['status'] ?? 'success',
+            ];
+        } else {
+            // ticket_volume, sla_compliance, or csat_satisfaction
+            $allBranches = DB::table('branches')->get();
+            $branchNameMap = [];
+            foreach ($allBranches as $bRow) {
+                $branchNameMap[(string) $bRow->id] = $bRow->name;
+                if (!empty($bRow->slug)) {
+                    $branchNameMap[strtolower((string) $bRow->slug)] = $bRow->name;
+                }
+                if (!empty($bRow->code)) {
+                    $branchNameMap[strtolower((string) $bRow->code)] = $bRow->name;
+                }
+            }
+
+            $tQuery = DB::table('tickets as t')
+                ->join('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
+                ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
+                ->leftJoin('ticket_priorities as tp', 'tp.priority_ID', '=', 't.priority_ID')
+                ->leftJoin('machines as m', 'm.machine_ID', '=', 't.machine_ID')
+                ->leftJoin('employees as e', 'e.emp_id', '=', 't.assigned_to')
+                ->leftJoin('clients as c', 'c.id', '=', 't.created_by')
+                ->where('ts.status_name', '!=', 'Discarded')
+                ->whereBetween('t.created_at', [$dateFrom, $dateTo]);
+
+            $this->applyBranchTicketFilter($tQuery, $branch);
+
+            if ($departmentFilter) {
+                $tQuery->where('e.department', $departmentFilter);
+            }
+            if ($priorityFilter) {
+                $tQuery->whereRaw('LOWER(tp.priority_name) = ?', [strtolower($priorityFilter)]);
+            }
+
+            $tickets = $tQuery->select(
+                't.ticket_ID',
+                't.ticket_number',
+                't.title',
+                't.is_internal',
+                't.branch_id',
+                't.ticket_status_ID',
+                'ts.status_name',
+                't.priority_ID',
+                'tp.priority_name',
+                't.problem_category_ID',
+                'pc.category_name',
+                't.machine_ID',
+                'm.machine_name',
+                'm.serial_number',
+                't.assigned_to',
+                'e.emp_id as assignee_id',
+                'e.first_name as assignee_first_name',
+                'e.last_name as assignee_last_name',
+                'e.email as assignee_email',
+                'e.department as assignee_department',
+                'c.client_name as customer_name',
+                't.resolution_due_at',
+                't.response_due_at',
+                't.first_response_at',
+                't.resolved_at',
+                't.closed_at',
+                't.sla_status',
+                't.created_at',
+                't.updated_at'
+            )
+            ->orderByDesc('t.created_at')
+            ->limit(250)
+            ->get()
+            ->map(function ($t) use ($branchNameMap, $branch) {
+                $bKey = strtolower(trim((string) ($t->branch_id ?? '')));
+                $t->branch_name = $branchNameMap[(string) ($t->branch_id ?? '')]
+                    ?? $branchNameMap[$bKey]
+                    ?? ($branch->slug === 'all' ? 'Main Branch' : ($branch->name ?? 'Main Branch'));
+                return $t;
+            });
+
+            if ($reportType === 'sla_compliance') {
+                $headers = [
+                    'Ticket ID',
+                    'Subject',
+                    'Branch',
+                    'Department',
+                    'Assigned Technician',
+                    'Priority',
+                    'Response Time (mins)',
+                    'Resolution Time (hrs)',
+                    'SLA Status',
+                    'Created Date',
+                ];
+
+                $metCount = 0;
+                $breachedCount = 0;
+
+                foreach ($tickets as $t) {
+                    $ref = TicketNumberGeneratorService::refFor($t->ticket_ID, $t->ticket_number ?? null);
+                    $techName = trim("{$t->assignee_first_name} {$t->assignee_last_name}");
+                    if ($techName === '' && !empty($t->assignee_email)) {
+                        $techName = ucwords(str_replace(['.', '_', '-'], ' ', explode('@', $t->assignee_email)[0]));
+                    }
+                    if ($techName === '') {
+                        $techName = 'Unassigned';
+                    }
+
+                    $respMins = '—';
+                    if (!empty($t->first_response_at) && !empty($t->created_at)) {
+                        $respMins = round(max(0, Carbon::parse($t->created_at)->diffInSeconds(Carbon::parse($t->first_response_at)) / 60), 1) . 'm';
+                    }
+
+                    $resHrs = '—';
+                    $endAt = $t->resolved_at ?? $t->closed_at;
+                    if (!empty($endAt) && !empty($t->created_at)) {
+                        $resHrs = round(max(0, Carbon::parse($t->created_at)->diffInSeconds(Carbon::parse($endAt)) / 3600), 1) . 'h';
+                    }
+
+                    $slaMetrics = $this->slaService->computeTicketSlaMetrics($t);
+                    $isBreached = !empty($slaMetrics['is_breached']) || ($slaMetrics['status'] ?? '') === 'Breached';
+                    if ($isBreached) {
+                        $breachedCount++;
+                    } else {
+                        $metCount++;
+                    }
+
+                    $rows[] = [
+                        'Ticket ID' => $ref,
+                        'Subject' => $t->title ?: 'Untitled Ticket',
+                        'Branch' => $t->branch_name ?: ($branch->name ?? 'Main Branch'),
+                        'Department' => $t->assignee_department ?: 'Service',
+                        'Assigned Technician' => $techName,
+                        'Priority' => $t->priority_name ?: 'Medium',
+                        'Response Time (mins)' => $respMins,
+                        'Resolution Time (hrs)' => $resHrs,
+                        'SLA Status' => $isBreached ? 'Breached' : 'Compliant',
+                        'Created Date' => $t->created_at ? Carbon::parse($t->created_at)->format('Y-m-d H:i') : '—',
+                    ];
+                }
+
+                $summary = [
+                    'total_tickets' => count($rows),
+                    'sla_met' => $metCount,
+                    'sla_breached' => $breachedCount,
+                    'compliance_rate' => count($rows) > 0 ? round(($metCount / count($rows)) * 100, 1) : 100.0,
+                ];
+            } elseif ($reportType === 'csat_satisfaction') {
+                $headers = [
+                    'Ticket ID',
+                    'Subject',
+                    'Customer',
+                    'Assigned Technician',
+                    'Department',
+                    'CSAT Rating',
+                    'Status',
+                    'Resolved Date',
+                ];
+
+                $perfService = app(AdminPerformanceService::class);
+                $ticketIds = $tickets->pluck('ticket_ID')->filter()->all();
+                $csatMap = [];
+                if (!empty($ticketIds)) {
+                    $refMethod = new \ReflectionMethod($perfService, 'fetchCsatByTicketIds');
+                    $refMethod->setAccessible(true);
+                    $csatMap = $refMethod->invoke($perfService, $ticketIds);
+                }
+
+                foreach ($tickets as $t) {
+                    $ref = TicketNumberGeneratorService::refFor($t->ticket_ID, $t->ticket_number ?? null);
+                    $techName = trim("{$t->assignee_first_name} {$t->assignee_last_name}");
+                    if ($techName === '' && !empty($t->assignee_email)) {
+                        $techName = ucwords(str_replace(['.', '_', '-'], ' ', explode('@', $t->assignee_email)[0]));
+                    }
+                    if ($techName === '') {
+                        $techName = 'Unassigned';
+                    }
+
+                    $ratingVal = $csatMap[$t->ticket_ID] ?? null;
+                    $endAt = $t->resolved_at ?? $t->closed_at;
+
+                    $rows[] = [
+                        'Ticket ID' => $ref,
+                        'Subject' => $t->title ?: 'Untitled Ticket',
+                        'Customer' => $t->customer_name ?: 'Client',
+                        'Assigned Technician' => $techName,
+                        'Department' => $t->assignee_department ?: 'Service',
+                        'CSAT Rating' => $ratingVal !== null ? number_format((float) $ratingVal, 1) . ' / 5.0' : 'Pending Feedback',
+                        'Status' => $t->status_name ?: 'Open',
+                        'Resolved Date' => $endAt ? Carbon::parse($endAt)->format('Y-m-d') : '—',
+                    ];
+                }
+
+                $summary = [
+                    'total_tickets' => count($rows),
+                    'rated_tickets' => count($csatMap),
+                ];
+            } else {
+                // Default: ticket_volume
+                $headers = [
+                    'Ticket ID',
+                    'Subject',
+                    'Category',
+                    'Equipment',
+                    'Branch',
+                    'Department',
+                    'Assigned Technician',
+                    'Priority',
+                    'Status',
+                    'Created Date',
+                ];
+
+                foreach ($tickets as $t) {
+                    $ref = TicketNumberGeneratorService::refFor($t->ticket_ID, $t->ticket_number ?? null);
+                    $techName = trim("{$t->assignee_first_name} {$t->assignee_last_name}");
+                    if ($techName === '' && !empty($t->assignee_email)) {
+                        $techName = ucwords(str_replace(['.', '_', '-'], ' ', explode('@', $t->assignee_email)[0]));
+                    }
+                    if ($techName === '') {
+                        $techName = 'Unassigned';
+                    }
+
+                    $equipmentLabel = $t->machine_name
+                        ? ($t->machine_name . ($t->serial_number ? " ({$t->serial_number})" : ''))
+                        : 'General Support';
+
+                    $rows[] = [
+                        'Ticket ID' => $ref,
+                        'Subject' => $t->title ?: 'Untitled Ticket',
+                        'Category' => $t->category_name ?: 'General',
+                        'Equipment' => $equipmentLabel,
+                        'Branch' => $t->branch_name ?: ($branch->name ?? 'Main Branch'),
+                        'Department' => $t->assignee_department ?: 'Service',
+                        'Assigned Technician' => $techName,
+                        'Priority' => $t->priority_name ?: 'Medium',
+                        'Status' => $t->status_name ?: 'Open',
+                        'Created Date' => $t->created_at ? Carbon::parse($t->created_at)->format('Y-m-d H:i') : '—',
+                    ];
+                }
+
+                $summary = [
+                    'total_tickets' => count($rows),
+                ];
+            }
+        }
+
+        return [
+            'status' => 'success',
+            'has_data' => count($rows) > 0,
+            'count' => count($rows),
+            'report_type' => $reportType,
+            'branch' => [
+                'id' => $branch->id ?? 1,
+                'slug' => $branch->slug ?? 'main',
+                'name' => $branch->name ?? 'Main Branch',
+                'code' => $branch->code ?? 'MAIN',
+                'region' => $branch->region ?? 'NCR',
+            ],
+            'period' => [
+                'preset' => $preset,
+                'date_from' => $dateFrom->toDateString(),
+                'date_to' => $dateTo->toDateString(),
+            ],
+            'headers' => $headers,
+            'rows' => $rows,
+            'summary' => $summary,
+            'message' => count($rows) > 0 ? null : 'No records match the selected report filters for this period.',
+        ];
     }
 }

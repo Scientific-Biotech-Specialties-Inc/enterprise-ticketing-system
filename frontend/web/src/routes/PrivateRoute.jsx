@@ -177,7 +177,7 @@ export default function PrivateRoute({ children, role }) {
     if (role) {
       const normalizedRole = role.toLowerCase();
       if (isSuperAdmin && normalizedRole !== 'superadmin') {
-        return <Navigate to="/superadmin/config" replace />;
+        return <Navigate to="/superadmin/dashboard" replace />;
       }
       if (isAdmin && normalizedRole !== 'admin') {
         return <Navigate to="/admin/dashboard" replace />;
@@ -186,14 +186,14 @@ export default function PrivateRoute({ children, role }) {
         return <Navigate to="/it-manager/dashboard" replace />;
       }
       if ((normalizedRole === 'it_manager' || normalizedRole === 'it manager') && !isItManager) {
-        if (isSuperAdmin) return <Navigate to="/superadmin/config" replace />;
+        if (isSuperAdmin) return <Navigate to="/superadmin/dashboard" replace />;
         if (isAdmin) return <Navigate to="/admin/dashboard" replace />;
         if (isCS) return <Navigate to="/cs/dashboard" replace />;
         return <Navigate to="/employee/dashboard" replace />;
       }
       if (normalizedRole === 'customer') {
         if (isSuperAdmin) {
-          return <Navigate to="/superadmin/config" replace />;
+          return <Navigate to="/superadmin/dashboard" replace />;
         }
         if (isAdmin) {
           return <Navigate to="/admin/dashboard" replace />;
@@ -206,7 +206,7 @@ export default function PrivateRoute({ children, role }) {
         }
       }
       if (normalizedRole === 'admin' && !isAdmin) {
-        if (isSuperAdmin) return <Navigate to="/superadmin/config" replace />;
+        if (isSuperAdmin) return <Navigate to="/superadmin/dashboard" replace />;
         if (isCS) return <Navigate to="/cs/dashboard" replace />;
         return <Navigate to="/employee/dashboard" replace />;
       }

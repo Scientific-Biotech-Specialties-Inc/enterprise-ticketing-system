@@ -14,6 +14,7 @@ This repository is an enterprise-grade, microservice-based IT service desk and t
   - `services/analytics-service` (Port 8004): CSAT ratings, performance metrics, and reporting.
   - `services/attachment-service` (Port 8006): Attachment storage with mandatory ClamAV antivirus daemon inspection.
   - `services/messaging-service` (Port 8007): Real-time ticket chat messaging backed by MongoDB 7.
+  - `services/employee-service` (Port 8008): Staff directory, employee assignment eligibility, and technician workload routing.
   - `services/configuration-service` (Port 8009): System and third-party configuration management (Resend email delivery, RSA cryptography, live credential validation).
 - **Frontend (`frontend/web/`)**: React 19 SPA with Vite, Tailwind CSS v4, Lucide icons, and dual-mode runtime (`employee` at `/ticketing/` vs `customer` at `/`).
 - **Gateway (`nginx.conf` & `nginx.prod.conf`)**: Nginx reverse proxy routing `/api/*` to corresponding microservice FastCGI or HTTP sockets.
@@ -37,6 +38,15 @@ AI assistants operating within this repository are configured with specialized r
 - **`gemini-ai`**: Manages the Google Gemini 2.0 Flash AI support subsystem, conversation persistence, escalation payloads, and direct manual ticket fallback.
 - **`api-testing`**: Verifies endpoints across the Nginx gateway and microservices with JWT bearer tokens.
 - **`security-audit`**: Inspects code changes, git diffs, and staged commits for secret leaks and verifies compliance with repository security standards.
+- **`architect`**: Designs technical solutions, asks clarifying questions, and writes build specifications.
+- **`audit`**: Bootstraps repository AI context and AGENTS.md documentation.
+- **`check`**: Confirms implementation behavior through verification and code reviews.
+- **`debug`**: Identifies root causes of issues and validates minimal bug fixes.
+- **`develop`**: Implements features and services from approved specifications.
+- **`document`**: Generates pull request descriptions, changelogs, and release notes.
+- **`scope`**: Defines product slices and feature tracking in docs/scope/.
+- **`sync`**: Reconciles durable knowledge files, scope status, and specification statuses.
+- **`test`**: Authors automated test suites for recent changes.
 
 ## Inviolable Architectural Invariants
 

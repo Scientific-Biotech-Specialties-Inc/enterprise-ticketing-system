@@ -667,12 +667,7 @@ export const getEligibleEmployees = async (ticketId, { track } = {}) => {
 };
 
 const fetchDepartments = async () => {
-  let response;
-  try {
-    response = await employeeClient.get('/departments');
-  } catch {
-    response = await ticketClient.get('/departments');
-  }
+  const response = await employeeClient.get('/departments');
   const data = response.data?.departments ?? [];
   departmentsCache = data;
   departmentsCacheAt = Date.now();
@@ -708,12 +703,7 @@ export const assignTicketToEmployees = async ({ ticketId, employeeIds, assignedB
     assigned_by_email: assignedByEmail,
     priority_ID: priorityId,
   };
-  let response;
-  try {
-    response = await employeeClient.post(`/tickets/${normalizedId}/assign`, payload);
-  } catch (err) {
-    response = await ticketClient.post(`/tickets/${normalizedId}/assign`, payload);
-  }
+  const response = await employeeClient.post(`/tickets/${normalizedId}/assign`, payload);
   clearCSDashboardCache();
   notifyCsTicketRefresh();
   return response.data;
@@ -726,13 +716,7 @@ export const acceptTicket = async ({ ticketId, employeeIds, assignedByEmail, pri
   if (assignedByEmail !== undefined && assignedByEmail !== null) payload.assigned_by_email = assignedByEmail;
   if (priorityId !== undefined && priorityId !== null) payload.priority_ID = priorityId;
 
-  let response;
-  try {
-    response = await employeeClient.patch(`/tickets/${normalizedId}/accept`, payload);
-  } catch (err) {
-    response = await ticketClient.patch(`/tickets/${normalizedId}/accept`, payload);
-  }
-  // The save changes the ticket row, assignment rows, and audit log entries.
+  const response = await employeeClient.patch(`/tickets/${normalizedId}/accept`, payload);
   clearIncomingTicketsCache();
   clearCSDashboardCache();
   clearEmployeeTicketsCache();
@@ -996,7 +980,7 @@ export const cleanupCorruptedOverrides = () => {
 cleanupCorruptedOverrides();
 
 export const requestReassignment = async ({ ticketId, reason }) => {
-  const response = await ticketClient.post(`/tickets/${ticketId}/reassign-request`, {
+  const response = await employeeClient.post(`/tickets/${ticketId}/reassign-request`, {
     reason,
   });
 
@@ -1047,7 +1031,7 @@ export const respondReassignment = async ({ ticketId, action, newEmployeeId, rea
   const body = { action };
   if (newEmployeeId !== undefined) body.new_employee_id = newEmployeeId;
   if (reason !== undefined) body.reason = reason;
-  const response = await ticketClient.post(`/tickets/${ticketId}/reassign-respond`, body);
+  const response = await employeeClient.post(`/tickets/${ticketId}/reassign-respond`, body);
 
   try {
     const all = getEmployeeOverrides();
@@ -1166,12 +1150,12 @@ export const updateEmployeeTicket = async (ticketId, formData) => {
 
 
 export const getInternalTickets = async () => {
-  const response = await ticketClient.get('/employee/tickets/internal');
+  const response = await employeeClient.get('/employee/tickets/internal');
   return response.data?.tickets ?? [];
 };
 
 export const getEmployeeProfile = async () => {
-  const response = await ticketClient.get('/employee/profile');
+  const response = await employeeClient.get('/employee/profile');
   return response.data;
 };
 
@@ -1584,6 +1568,36 @@ export const getSecurityIncidentDetail = async (incidentId) => {
 };
 
 
+
+export const getAdminDashboard = async (params = {}) => {
+  const response = await ticketClient.get('/admin/dashboard', { params });
+  return response.data;
+};
+
+export const getAdminReports = async (params = {}) => {
+  const response = await ticketClient.get('/admin/reports', { params });
+  return response.data;
+};
+
+export const getAdminEmployeePerformance = async (params = {}) => {
+  const response = await ticketClient.get('/admin-reports/employees', { params });
+  return response.data;
+};
+
+export const getAdminDepartmentPerformance = async (params = {}) => {
+  const response = await ticketClient.get('/admin-reports/departments', { params });
+  return response.data;
+};
+
+export const getAdminPredictiveInsights = async (params = {}) => {
+  const response = await ticketClient.get('/admin-reports/predictive-insights', { params });
+  return response.data;
+};
+
+export const triggerEtlSync = async (payload = {}) => {
+  const response = await ticketClient.post('/etl/trigger', payload);
+  return response.data;
+};
 
 export const classifyDepartment = async (title, description) => {
   try {

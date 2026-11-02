@@ -808,6 +808,22 @@ class SLAService
     }
 
     /**
+     * Classify ticket risk into standard categories: 'breached', 'near_breach', 'within_sla'.
+     * Used by SuperAdmin, Admin, and Employee personal dashboards.
+     */
+    public function classifyTicketRisk($ticket): string
+    {
+        $metrics = $this->computeTicketSlaMetrics($ticket);
+        if (!empty($metrics['is_breached']) || ($metrics['status'] ?? '') === 'Breached') {
+            return 'breached';
+        }
+        if (!empty($metrics['is_at_risk']) || ($metrics['status'] ?? '') === 'At Risk') {
+            return 'near_breach';
+        }
+        return 'within_sla';
+    }
+
+    /**
      * Inspect all active tickets for SLA breach or at risk conditions.
      * Dispatches notifications to CS and assigned employees with deduplication.
      */

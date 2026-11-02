@@ -12,6 +12,10 @@ use App\Http\Controllers\SLARuleController;
 use App\Http\Controllers\WorkflowEscalationController;
 use App\Http\Controllers\TicketDraftController;
 use App\Http\Controllers\TicketReminderController;
+use App\Http\Controllers\AdminReportController;
+use App\Http\Controllers\TicketTimelineController;
+use App\Http\Controllers\EmployeeDashboardController;
+use App\Http\Controllers\SuperAdminDashboardController;
 
 /*
 |--------------------------------------------------------------------------
@@ -25,7 +29,6 @@ Route::middleware('auth.subsystem')->get('/user', function (Request $request) {
 
 // ─── Core Ticket Public / Common Endpoints ────────────────────────────────────
 Route::get('/ticket-form-options', [TicketController::class, 'formOptions']);
-Route::get('/customer/filter-options', [TicketDashboardController::class, 'customerFilterOptions']);
 Route::get('/cs/filter-options', [TicketDashboardController::class, 'csFilterOptions']);
 Route::post('/tickets/draft', [TicketDraftController::class, 'saveDraft']);
 Route::get('/tickets/drafts', [TicketDraftController::class, 'listDrafts']);
@@ -34,7 +37,6 @@ Route::delete('/tickets/drafts/{id}', [TicketDraftController::class, 'deleteDraf
 Route::get('/branches', [BranchPriorityController::class, 'publicBranches']);
 
 // ─── Dashboards & Feed Endpoints ─────────────────────────────────────────────
-Route::get('/customer-dashboard', [TicketDashboardController::class, 'customerDashboard']);
 Route::get('/cs-dashboard', [TicketDashboardController::class, 'csDashboard'])->middleware('no-cache');
 Route::get('/cs-incoming', [TicketDashboardController::class, 'csIncoming'])->middleware('no-cache');
 Route::match(['get', 'post'], '/tickets/check-sla-alerts', function (\App\Services\SLAService $slaService) {
@@ -45,58 +47,29 @@ Route::match(['get', 'post'], '/tickets/check-sla-alerts', function (\App\Servic
         'data' => $result,
     ]);
 });
-Route::get('/departments', function () {
-    try {
-        $resp = Illuminate\Support\Facades\Http::get('http://employee-service:8000/api/departments');
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    } catch (\Exception $e) {
-        return response()->json(['departments' => []]);
-    }
-});
-
-Route::get('/employees/search', function (Request $request) {
-    $token = $request->bearerToken();
-    try {
-        $client = Illuminate\Support\Facades\Http::timeout(5);
-        if ($token) {
-            $client = $client->withHeaders(['Authorization' => "Bearer {$token}"]);
-        }
-        $resp = $client->get('http://employee-service:8000/api/employees/search', $request->all());
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    } catch (\Exception $e) {
-        return response()->json([
-            'success' => false,
-            'data' => [],
-            'total' => 0,
-            'message' => 'Employee service unavailable. Please try again later.'
-        ], 503);
-    }
-});
-
-Route::get('/employees/filter-options', function (Request $request) {
-    $token = $request->bearerToken();
-    try {
-        $client = Illuminate\Support\Facades\Http::timeout(5);
-        if ($token) {
-            $client = $client->withHeaders(['Authorization' => "Bearer {$token}"]);
-        }
-        $resp = $client->get('http://employee-service:8000/api/employees/filter-options', $request->all());
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    } catch (\Exception $e) {
-        return response()->json([
-            'departments' => [],
-            'roles' => [],
-            'branches' => []
-        ], 503);
-    }
-});
 
 Route::middleware('auth.subsystem')->group(function () {
+    // ─── Customer Dashboard (Strictly Token Authenticated) ────────────────────
+    Route::get('/customer-dashboard', [TicketDashboardController::class, 'customerDashboard']);
+    Route::get('/customer/filter-options', [TicketDashboardController::class, 'customerFilterOptions']);
+
     // ─── Admin Branch Dashboard & Reports ─────────────────────────────────────
     Route::get('/admin-dashboard', [TicketDashboardController::class, 'adminDashboard'])->middleware('no-cache');
     Route::get('/admin/dashboard', [TicketDashboardController::class, 'adminDashboard'])->middleware('no-cache');
     Route::get('/admin-reports', [TicketDashboardController::class, 'adminReports'])->middleware('no-cache');
     Route::get('/admin/reports', [TicketDashboardController::class, 'adminReports'])->middleware('no-cache');
+    Route::get('/admin-reports/employees', [AdminReportController::class, 'employeePerformance'])->middleware('no-cache');
+    Route::get('/admin/reports/employees', [AdminReportController::class, 'employeePerformance'])->middleware('no-cache');
+    Route::get('/admin-reports/departments', [AdminReportController::class, 'departmentPerformance'])->middleware('no-cache');
+    Route::get('/admin/reports/departments', [AdminReportController::class, 'departmentPerformance'])->middleware('no-cache');
+    Route::get('/admin-reports/predictive-insights', [AdminReportController::class, 'predictiveInsights'])->middleware('no-cache');
+    Route::get('/admin/reports/predictive-insights', [AdminReportController::class, 'predictiveInsights'])->middleware('no-cache');
+    Route::post('/etl/trigger', [TicketDashboardController::class, 'triggerEtl'])->middleware('no-cache');
+    Route::post('/admin/etl/trigger', [TicketDashboardController::class, 'triggerEtl'])->middleware('no-cache');
+    Route::get('/superadmin/system-dashboard', [SuperAdminDashboardController::class, 'systemDashboard'])->middleware('no-cache');
+    Route::get('/super-admin/system-dashboard', [SuperAdminDashboardController::class, 'systemDashboard'])->middleware('no-cache');
+    Route::get('/employee/dashboard', [EmployeeDashboardController::class, 'dashboard'])->middleware('no-cache');
+    Route::get('/employee-dashboard', [EmployeeDashboardController::class, 'dashboard'])->middleware('no-cache');
 
     // ─── Employee Assignment Forwarding ────────────────────────────────────────
     Route::match(['post', 'patch'], '/tickets/{ticketId}/accept', function (Request $request, $ticketId) {
@@ -332,6 +305,7 @@ Route::middleware('auth.subsystem')->group(function () {
     Route::get('/tickets/{ticketId}/customer-context', [TicketController::class, 'customerContext']);
     Route::get('/tickets/{ticketId}/customer-info', [TicketController::class, 'customerContext']);
     Route::get('/tickets/escalate-handoff/{conversationId}', [TicketController::class, 'escalateHandoff']);
+    Route::get('/tickets/{id}/timeline', [TicketTimelineController::class, 'timeline'])->middleware('no-cache');
 
     // ─── Staff-Only Internal Notes (TS028) ────────────────────────────────────
     Route::get('/tickets/{ticketId}/internal-notes', [TicketController::class, 'getInternalNotes']);

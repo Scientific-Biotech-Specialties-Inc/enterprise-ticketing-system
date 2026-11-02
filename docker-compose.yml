@@ -39,6 +39,7 @@ services:
     container_name: capstone-reverb
     volumes:
       - ./services/customer-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - customer-service-vendor:/var/www/vendor
     restart: always
     environment:
@@ -61,6 +62,7 @@ services:
     container_name: customer-service
     volumes:
       - ./services/customer-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - customer-service-vendor:/var/www/vendor
     ports:
       - "8001:8000"
@@ -109,6 +111,7 @@ services:
     container_name: customer-service-queue
     volumes:
       - ./services/customer-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - customer-service-vendor:/var/www/vendor
     environment:
       DB_CONNECTION: mysql
@@ -162,6 +165,7 @@ services:
     container_name: ticket-service
     volumes:
       - ./services/ticket-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - ticket-service-vendor:/var/www/vendor
     ports:
       - "8002:8000"
@@ -205,6 +209,7 @@ services:
     container_name: ticket-service-queue
     volumes:
       - ./services/ticket-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - ticket-service-vendor:/var/www/vendor
     environment:
       DB_CONNECTION: mysql
@@ -240,6 +245,7 @@ services:
     container_name: employee-service
     volumes:
       - ./services/employee-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - employee-service-vendor:/var/www/vendor
     ports:
       - "8008:8000"
@@ -458,6 +464,7 @@ services:
     container_name: capstone-messaging-reverb
     volumes:
       - ./services/messaging-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - messaging-service-vendor:/var/www/vendor
     restart: always
     environment:
@@ -483,6 +490,7 @@ services:
     container_name: messaging-service
     volumes:
       - ./services/messaging-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - messaging-service-vendor:/var/www/vendor
     ports:
       - "8007:8000"

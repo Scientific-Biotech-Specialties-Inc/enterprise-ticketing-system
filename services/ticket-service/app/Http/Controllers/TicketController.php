@@ -538,9 +538,7 @@ class TicketController extends Controller
                 $rawCat = strtolower(trim((string) $handoff['category']));
                 $catQuery = \Illuminate\Support\Facades\DB::table('problem_categories')
                     ->whereRaw('LOWER(category_name) = ?', [$rawCat]);
-                if (\Illuminate\Support\Facades\Schema::hasColumn('problem_categories', 'is_active')) {
-                    $catQuery->where('is_active', true);
-                }
+                $catQuery->where('is_active', true);
                 $categoryId = $catQuery->value('problem_category_ID');
             }
 
@@ -707,16 +705,7 @@ class TicketController extends Controller
             ], 422);
         }
 
-        // Ensure internal_notes table exists
-        if (!\Illuminate\Support\Facades\Schema::hasTable('internal_notes')) {
-            \Illuminate\Support\Facades\Schema::create('internal_notes', function ($table) {
-                $table->bigIncrements('id');
-                $table->unsignedBigInteger('ticket_id');
-                $table->unsignedBigInteger('employee_id');
-                $table->text('note');
-                $table->timestamps();
-            });
-        }
+        // internal_notes table is created by database migration
 
         $noteId = \Illuminate\Support\Facades\DB::table('internal_notes')->insertGetId([
             'ticket_id' => $ticketId,
@@ -732,23 +721,21 @@ class TicketController extends Controller
         }
         $authorRole = $user->role ?? 'Employee';
 
-        // Record independent audit log
+        // Record independent audit log with internal flag set
         try {
-            if (\Illuminate\Support\Facades\Schema::hasTable('ticket_audit_logs')) {
-                \Illuminate\Support\Facades\DB::table('ticket_audit_logs')->insert([
-                    'ticket_ID' => $ticketId,
-                    'action_type' => 'internal_note_added',
-                    'action_by_ID' => $empId,
-                    'actor_type' => strtolower($authorRole),
-                    'details' => json_encode([
-                        'note_id' => $noteId,
-                        'text' => $noteText,
-                        'author' => $authorName,
-                        'role' => $authorRole,
-                    ]),
-                    'created_at' => now(),
-                ]);
-            }
+            app(\App\Services\AuditTimelineService::class)->recordEvent(
+                $ticketId,
+                'internal_note',
+                'internal_note',
+                $empId,
+                'employee',
+                $authorRole,
+                null,
+                ['note_id' => $noteId, 'note' => $noteText],
+                $noteText,
+                false,
+                true
+            );
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning("Failed to record internal note audit log: " . $e->getMessage());
         }

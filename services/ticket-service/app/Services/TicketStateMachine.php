@@ -675,13 +675,19 @@ class TicketStateMachine
                 } catch (\Throwable $e) {}
             }
 
-            // 5. Insert audit log
+            // 5. Insert audit log with structured timeline attributes
             DB::table('ticket_audit_logs')->insert([
                 'ticket_ID' => $ticketId,
                 'action_type' => $auditAction,
+                'event_type' => in_array($auditAction, ['hold', 'resume', 'reopen', 'close', 'resolve'], true) ? $auditAction : 'status_change',
                 'action_by_ID' => $actorId,
                 'actor_type' => $actorType,
+                'actor_role' => in_array(strtolower($actorType), ['employee', 'superadmin', 'admin', 'cs', 'systemadministrator', 'itadmin'], true) ? $actorType : null,
+                'before_state' => json_encode(['state' => $currentState]),
+                'after_state' => json_encode(['state' => $resolvedTargetState]),
                 'details' => json_encode($auditDetails),
+                'is_system' => ($actorType === 'system') ? 1 : 0,
+                'is_internal' => ($resolvedTargetState === self::STATE_ON_HOLD) ? 1 : 0,
                 'created_at' => now(),
             ]);
         });

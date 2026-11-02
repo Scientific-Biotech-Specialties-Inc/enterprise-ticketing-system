@@ -14,6 +14,7 @@ class Kernel extends ConsoleKernel
     {
         $schedule->command('tickets:auto-close-internal')->everyFiveMinutes();
         $schedule->command('tickets:check-sla-alerts')->everyMinute();
+        $schedule->command('tickets:calculate-forecasts')->dailyAt('02:00')->onOneServer()->runInBackground();
     }
 
     /**
