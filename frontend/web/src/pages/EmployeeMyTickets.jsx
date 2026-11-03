@@ -125,7 +125,7 @@ export default function EmployeeMyTickets({ roleContext }) {
       }
 
       if (roleContext !== 'cs' && mapped.length === 0) {
-        let stored = JSON.parse(localStorage.getItem(storageKey) || '[]');
+        let stored = JSON.parse(sessionStorage.getItem(storageKey) || '[]');
         let healed = false;
         mapped = stored.map(t => {
           const numericId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
@@ -137,7 +137,7 @@ export default function EmployeeMyTickets({ roleContext }) {
           return t;
         });
         if (healed) {
-          localStorage.setItem(storageKey, JSON.stringify(mapped));
+          sessionStorage.setItem(storageKey, JSON.stringify(mapped));
         }
       }
       setTickets(mapped);
@@ -265,13 +265,13 @@ export default function EmployeeMyTickets({ roleContext }) {
         requested_by: user?.id ?? user?.emp_id,
       };
 
-      const stored = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      const stored = JSON.parse(sessionStorage.getItem(storageKey) || '[]');
       const updatedList = [
         newTicket,
         ...stored.filter((ticket) => ticket.id !== newTicket.id && ticket.ticket_ID !== numericTicketId),
       ];
 
-      localStorage.setItem(storageKey, JSON.stringify(updatedList));
+      sessionStorage.setItem(storageKey, JSON.stringify(updatedList));
       setTickets(updatedList);
       setIsModalOpen(false);
 
@@ -348,7 +348,7 @@ export default function EmployeeMyTickets({ roleContext }) {
   const handleResolveTicket = async (ticketId) => {
     const isMock = selectedTicket ? !!selectedTicket.isMock : false;
     if (isMock) {
-      const stored = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      const stored = JSON.parse(sessionStorage.getItem(storageKey) || '[]');
       const updatedList = stored.map(t => {
         if (t.id === ticketId || t.ticket_ID === ticketId) {
           const timestamp = new Date().toISOString();
@@ -373,7 +373,7 @@ export default function EmployeeMyTickets({ roleContext }) {
         }
         return t;
       });
-      localStorage.setItem(storageKey, JSON.stringify(updatedList));
+      sessionStorage.setItem(storageKey, JSON.stringify(updatedList));
       setTickets(updatedList);
       setSelectedTicket(null);
       window.alert('Ticket resolved successfully.');

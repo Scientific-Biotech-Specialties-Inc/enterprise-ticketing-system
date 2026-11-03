@@ -20,17 +20,11 @@ import { Button } from '@/components/ui/button';
 
 const statusClass = (s) => statusColors[s] ?? (s?.includes('Discarded') ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-700');
 
-const getStoredUser = () => {
-  try {
-    return JSON.parse(localStorage.getItem('user') || 'null');
-  } catch {
-    return null;
-  }
-};
+// User resolved from AuthContext
 
 export default function EmployeeDashboard() {
   const { user } = useAuth();
-  const effectiveUser = user || getStoredUser();
+  const effectiveUser = user || null;
   const navigate = useNavigate();
   const dateStr = new Intl.DateTimeFormat('en-US', {
     weekday: 'long',
@@ -83,9 +77,9 @@ export default function EmployeeDashboard() {
           can_discard: ticket.status === 'Open' && !ticket.assigned_to,
         }));
         setMyRecentTickets(mapped.slice(0, 5));
-        localStorage.setItem('employee_created_tickets', JSON.stringify(mapped));
+        sessionStorage.setItem('employee_created_tickets', JSON.stringify(mapped));
       } else {
-        const stored = JSON.parse(localStorage.getItem('employee_created_tickets') || '[]');
+        const stored = JSON.parse(sessionStorage.getItem('employee_created_tickets') || '[]');
         const updated = await Promise.all(
           stored.slice(0, 5).map(async (t) => {
             const numericId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
@@ -105,12 +99,12 @@ export default function EmployeeDashboard() {
         );
         setMyRecentTickets(updated);
 
-        const fullList = JSON.parse(localStorage.getItem('employee_created_tickets') || '[]');
+        const fullList = JSON.parse(sessionStorage.getItem('employee_created_tickets') || '[]');
         const updatedFullList = fullList.map((item) => {
           const found = updated.find((candidate) => candidate.id === item.id);
           return found ? { ...item, ...found } : item;
         });
-        localStorage.setItem('employee_created_tickets', JSON.stringify(updatedFullList));
+        sessionStorage.setItem('employee_created_tickets', JSON.stringify(updatedFullList));
       }
     } catch (err) {
       console.error('Failed to load my tickets on dashboard:', err);
@@ -122,7 +116,7 @@ export default function EmployeeDashboard() {
   const handleResolveMyTicket = async (ticketId) => {
     const isMock = selectedMyTicket ? !!selectedMyTicket.isMock : false;
     if (isMock) {
-      const stored = JSON.parse(localStorage.getItem('employee_created_tickets') || '[]');
+      const stored = JSON.parse(sessionStorage.getItem('employee_created_tickets') || '[]');
       const updatedList = stored.map(t => {
         if (t.id === ticketId || t.ticket_ID === ticketId) {
           const timestamp = new Date().toISOString();
@@ -147,7 +141,7 @@ export default function EmployeeDashboard() {
         }
         return t;
       });
-      localStorage.setItem('employee_created_tickets', JSON.stringify(updatedList));
+      sessionStorage.setItem('employee_created_tickets', JSON.stringify(updatedList));
       await loadMyTickets();
       setSelectedMyTicket(null);
       window.alert('Ticket resolved successfully.');
@@ -158,7 +152,7 @@ export default function EmployeeDashboard() {
   const handleReopenMyTicket = async (ticketId, reason) => {
     const isMock = selectedMyTicket ? !!selectedMyTicket.isMock : false;
     if (isMock) {
-      const stored = JSON.parse(localStorage.getItem('employee_created_tickets') || '[]');
+      const stored = JSON.parse(sessionStorage.getItem('employee_created_tickets') || '[]');
       const updatedList = stored.map(t => {
         if (t.id === ticketId || t.ticket_ID === ticketId) {
           const timestamp = new Date().toISOString();
@@ -182,7 +176,7 @@ export default function EmployeeDashboard() {
         }
         return t;
       });
-      localStorage.setItem('employee_created_tickets', JSON.stringify(updatedList));
+      sessionStorage.setItem('employee_created_tickets', JSON.stringify(updatedList));
       await loadMyTickets();
       setSelectedMyTicket(null);
       window.alert('Ticket reopened successfully.');
