@@ -3,7 +3,7 @@ import { cva } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const badgeVariants = cva(
-  "inline-flex items-center gap-1.5 rounded-full text-xs font-semibold select-none font-sans transition-colors h-6 px-3 leading-none",
+  "inline-flex items-center justify-center gap-1.5 rounded-full text-xs font-semibold select-none font-sans transition-colors h-6 px-3 leading-none whitespace-nowrap shrink-0",
   {
     variants: {
       variant: {
@@ -62,7 +62,7 @@ export function getStatusBadgeVariant(status, tier = "medium") {
   const s = String(status || "").toLowerCase().trim();
   const prefix = tier === "high" ? "" : `${tier}-`;
 
-  if (s === "open" || s === "new") return `${prefix}info`;
+  if (s === "open" || s === "new" || s === "pending assignment" || s === "pending_assignment") return `${prefix}info`;
   if (s === "in_progress" || s === "in progress" || s === "pending" || s === "assigned" || s === "pending approval") {
     return `${prefix}warning`;
   }
@@ -84,11 +84,10 @@ export function getStatusBadgeVariant(status, tier = "medium") {
   return `${prefix}info`;
 }
 
-function Badge({ className, variant, size, dot = false, children, ...props }) {
+function Badge({ className, variant, size, children, ...props }) {
   const content = typeof children === "string" ? toTitleCase(children) : children;
   return (
     <span className={cn(badgeVariants({ variant, size }), className)} {...props}>
-      {dot && <span className="h-1.5 w-1.5 rounded-full bg-current shrink-0" />}
       {content}
     </span>
   );

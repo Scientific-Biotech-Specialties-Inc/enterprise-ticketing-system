@@ -32,6 +32,7 @@ import { getFeedbackFormStatus, getWindowConfiguration, getCachedWindowConfigura
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { getTicketAttachments } from '@/services/ticketService';
 
 const getFileName = (file, fallback = 'Attachment') => {
   if (!file) return fallback;
@@ -41,8 +42,24 @@ const getFileName = (file, fallback = 'Attachment') => {
 
 const getFileUrl = (file) => {
   if (!file) return '';
-  if (typeof file === 'string') return file;
-  return file.url || file.file_path || file.path || '';
+  let raw = '';
+  if (typeof file === 'string') {
+    raw = file;
+  } else {
+    raw = file.url || file.file_path || file.path || '';
+  }
+  if (!raw) return '';
+  if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('blob:') || raw.startsWith('data:')) {
+    return raw;
+  }
+  const clean = raw.replace(/^\/+/, '');
+  if (clean.startsWith('storage/')) {
+    return `/api/ticketing/attachment/${clean}`;
+  }
+  if (clean.startsWith('api/')) {
+    return `/${clean}`;
+  }
+  return `/api/ticketing/attachment/storage/${clean}`;
 };
 
 export default function CustomerTicketDetailModal({
@@ -80,6 +97,35 @@ export default function CustomerTicketDetailModal({
   }, [ticket]);
 
   const effectiveTicket = currentTicket || ticket;
+
+  const normalizedAttachments = useMemo(() => {
+    let list = effectiveTicket?.attachments || effectiveTicket?.ticket_attachments || [];
+    if (typeof list === 'string') {
+      try { list = JSON.parse(list); } catch { list = []; }
+    }
+    if (!Array.isArray(list)) list = [];
+    return list;
+  }, [effectiveTicket?.attachments, effectiveTicket?.ticket_attachments]);
+
+  useEffect(() => {
+    const rawId = effectiveTicket?.ticket_ID || effectiveTicket?.id;
+    if (!rawId) return;
+    const numId = Number(String(rawId).replace(/\D/g, ''));
+    if (!numId) return;
+
+    if (normalizedAttachments.length === 0) {
+      let isMounted = true;
+      getTicketAttachments(numId).then((atts) => {
+        if (isMounted && Array.isArray(atts) && atts.length > 0) {
+          setCurrentTicket((prev) => ({
+            ...prev,
+            attachments: atts,
+          }));
+        }
+      }).catch(() => {});
+      return () => { isMounted = false; };
+    }
+  }, [effectiveTicket?.ticket_ID, effectiveTicket?.id, normalizedAttachments.length]);
 
   useEffect(() => {
     let isMounted = true;
@@ -680,11 +726,11 @@ export default function CustomerTicketDetailModal({
               </div>
             )}
 
-            {effectiveTicket.attachments && effectiveTicket.attachments.length > 0 && (
+            {normalizedAttachments.length > 0 && (
               <div className="md:col-span-2">
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-muted">Attachments ({effectiveTicket.attachments.length})</p>
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-muted">Attachments ({normalizedAttachments.length})</p>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {effectiveTicket.attachments.map((file, idx) => {
+                  {normalizedAttachments.map((file, idx) => {
                     const fName = getFileName(file);
                     const fUrl = getFileUrl(file);
                     const isQuarantined = Boolean(

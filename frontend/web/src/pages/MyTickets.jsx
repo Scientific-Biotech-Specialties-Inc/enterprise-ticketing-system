@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { MoreVertical, Filter, RotateCcw, Trash2, Edit3, FileText, X, Plus, Search, Calendar, User, Tag, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
@@ -75,6 +75,9 @@ export default function MyTickets({ mode = 'all' }) {
   const customerId = effectiveUser?.id || 1;
   const location = useLocation();
   const navigate = useNavigate();
+  const params = useParams();
+  const [searchParams] = useSearchParams();
+  const urlTicketId = params?.ticketId || searchParams.get('ticketId');
 
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -121,6 +124,40 @@ export default function MyTickets({ mode = 'all' }) {
       setActiveTab(location.state.tab);
     }
   }, [location.state?.tab]);
+
+  // Auto-open ticket modal when navigating with ticketId (e.g. from email links or alerts)
+  useEffect(() => {
+    if (!urlTicketId) return;
+    const cleanId = String(urlTicketId).replace(/\D/g, '');
+    if (!cleanId) return;
+
+    let isMounted = true;
+    (async () => {
+      setModalLoading(true);
+      setLoadingText('Loading ticket details...');
+      try {
+        const fullTicket = await getTicketDetails(Number(cleanId));
+        if (isMounted && fullTicket) {
+          setSelectedTicket({
+            ...fullTicket,
+            id: fullTicket.id || `TKT-${String(cleanId).padStart(4, '0')}`,
+            status: fullTicket.status || 'Open',
+            description: fullTicket.description || '',
+            proofAttachments: fullTicket.proofAttachments || [],
+            proofFiles: fullTicket.proofFiles || [],
+            attachments: fullTicket.attachments || fullTicket.ticket_attachments || [],
+            can_discard: (fullTicket.status || 'Open') === 'Open' && !fullTicket.assigned_to,
+          });
+        }
+      } catch (err) {
+        console.warn('Could not auto-open ticket from URL:', err);
+      } finally {
+        if (isMounted) setModalLoading(false);
+      }
+    })();
+
+    return () => { isMounted = false; };
+  }, [urlTicketId]);
 
   const loadDrafts = useCallback(async () => {
     setLoadingDrafts(true);
@@ -571,6 +608,7 @@ export default function MyTickets({ mode = 'all' }) {
         closed_at: fullTicket.closed_at || t.closed_at || localDetails.closed_at || null,
         proofAttachments: fullTicket.proofAttachments || [],
         proofFiles: fullTicket.proofFiles || [],
+        attachments: fullTicket.attachments || fullTicket.ticket_attachments || t.attachments || localDetails.attachments || [],
         can_discard: (fullTicket.status || t.status) === 'Open' && !fullTicket.assigned_to,
       });
 
@@ -1276,7 +1314,7 @@ export default function MyTickets({ mode = 'all' }) {
                   <TableHead className="min-w-[220px]">Title & Summary</TableHead>
                   <TableHead className="min-w-[140px]">Equipment</TableHead>
                   <TableHead className="w-[100px]">Priority</TableHead>
-                  <TableHead className="w-[130px]">Status</TableHead>
+                  <TableHead className="w-[170px] min-w-[155px]">Status</TableHead>
                   <TableHead className="min-w-[140px]">Assigned Employee</TableHead>
                   <TableHead className="w-[130px]">Date Created</TableHead>
                   <TableHead className="w-[130px]">Last Updated</TableHead>
@@ -1327,7 +1365,7 @@ export default function MyTickets({ mode = 'all' }) {
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-col items-start gap-1">
-                          <Badge variant={getStatusBadgeVariant(ticket.status)} dot>
+                          <Badge variant={getStatusBadgeVariant(ticket.status)}>
                             {ticket.status}
                           </Badge>
                           {(hasFeedbackBeenSubmitted(ticket.id) || hasFeedbackBeenSubmitted(ticket.ticket_ID)) && (

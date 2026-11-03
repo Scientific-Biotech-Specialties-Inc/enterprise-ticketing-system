@@ -218,7 +218,7 @@ export default function CSHistory({ roleContext = 'cs' }) {
 
   const handleRowAction = (t) => {
     const ticketId = t.ticket_ID || Number(String(t.id).replace(/\D/g, ''));
-    const basePath = roleContext === 'it_manager' ? '/it-manager' : '/cs';
+    const basePath = roleContext === 'it_manager' ? '/it-manager' : roleContext === 'service_manager' ? '/service-manager' : roleContext === 'cs_manager' ? '/cs-manager' : '/cs';
     navigate(`${basePath}/history/${ticketId}`, { state: { ticket: t, backPath: `${basePath}/history` } });
   };
 

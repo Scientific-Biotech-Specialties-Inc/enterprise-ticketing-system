@@ -125,7 +125,7 @@ export default function EmployeeMyTickets({ roleContext }) {
       }
 
       if (roleContext !== 'cs' && mapped.length === 0) {
-        let stored = JSON.parse(localStorage.getItem(storageKey) || '[]');
+        let stored = JSON.parse(sessionStorage.getItem(storageKey) || '[]');
         let healed = false;
         mapped = stored.map(t => {
           const numericId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
@@ -137,7 +137,7 @@ export default function EmployeeMyTickets({ roleContext }) {
           return t;
         });
         if (healed) {
-          localStorage.setItem(storageKey, JSON.stringify(mapped));
+          // State updated directly
         }
       }
       setTickets(mapped);
@@ -265,13 +265,13 @@ export default function EmployeeMyTickets({ roleContext }) {
         requested_by: user?.id ?? user?.emp_id,
       };
 
-      const stored = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      const stored = JSON.parse(sessionStorage.getItem(storageKey) || '[]');
       const updatedList = [
         newTicket,
         ...stored.filter((ticket) => ticket.id !== newTicket.id && ticket.ticket_ID !== numericTicketId),
       ];
 
-      localStorage.setItem(storageKey, JSON.stringify(updatedList));
+      // State updated directly
       setTickets(updatedList);
       setIsModalOpen(false);
 
@@ -340,15 +340,15 @@ export default function EmployeeMyTickets({ roleContext }) {
 
   const handleViewTicket = (t) => {
     const ticketId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
-    const basePath = roleContext === 'cs' ? '/cs' : roleContext === 'it_manager' ? '/it-manager' : '/employee';
-    const backPath = roleContext === 'cs' ? '/cs/my-tickets' : roleContext === 'it_manager' ? '/it-manager/my-tickets' : '/employee/my-tickets';
+    const basePath = roleContext === 'cs' ? '/cs' : roleContext === 'cs_manager' ? '/cs-manager' : roleContext === 'service_manager' ? '/service-manager' : roleContext === 'it_manager' ? '/it-manager' : '/employee';
+    const backPath = roleContext === 'cs' ? '/cs/my-tickets' : roleContext === 'cs_manager' ? '/cs-manager/my-tickets' : roleContext === 'service_manager' ? '/service-manager/my-tickets' : roleContext === 'it_manager' ? '/it-manager/my-tickets' : '/employee/my-tickets';
     navigate(`${basePath}/history/${ticketId}`, { state: { ticket: t, backPath } });
   };
 
   const handleResolveTicket = async (ticketId) => {
     const isMock = selectedTicket ? !!selectedTicket.isMock : false;
     if (isMock) {
-      const stored = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      const stored = JSON.parse(sessionStorage.getItem(storageKey) || '[]');
       const updatedList = stored.map(t => {
         if (t.id === ticketId || t.ticket_ID === ticketId) {
           const timestamp = new Date().toISOString();
@@ -373,7 +373,7 @@ export default function EmployeeMyTickets({ roleContext }) {
         }
         return t;
       });
-      localStorage.setItem(storageKey, JSON.stringify(updatedList));
+      // State updated directly
       setTickets(updatedList);
       setSelectedTicket(null);
       window.alert('Ticket resolved successfully.');
@@ -538,7 +538,7 @@ export default function EmployeeMyTickets({ roleContext }) {
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <Badge variant={getStatusBadgeVariant(ticket.status)} dot>
+                    <Badge variant={getStatusBadgeVariant(ticket.status)}>
                       {ticket.status}
                     </Badge>
                     {(() => {
@@ -659,7 +659,7 @@ export default function EmployeeMyTickets({ roleContext }) {
               onClick={() => {
                 const ticketId = confirmCreated.ticket_ID || confirmCreated.id;
                 setConfirmCreated(null);
-                const targetPath = roleContext === 'cs' ? '/cs/messages' : roleContext === 'it_manager' ? '/it-manager/messages' : '/employee/messages';
+                const targetPath = roleContext === 'cs' ? '/cs/messages' : roleContext === 'cs_manager' ? '/cs-manager/messages' : roleContext === 'service_manager' ? '/service-manager/messages' : roleContext === 'it_manager' ? '/it-manager/messages' : '/employee/messages';
                 navigate(targetPath, { state: { selectedTicketId: ticketId } });
               }}
             >

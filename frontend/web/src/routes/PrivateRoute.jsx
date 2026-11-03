@@ -1,60 +1,28 @@
 import React, { useEffect } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
-import { useAuth, resolveUserRole, resolveUserDepartment } from '@/context/AuthContext';
+import {
+  useAuth,
+  resolveUserRole,
+  resolveUserDepartment,
+  checkIsCS,
+  checkIsSuperAdmin,
+  checkIsAdmin,
+  checkIsItManager,
+  checkIsServiceManager,
+  checkIsCSManager,
+  checkIsEmployee,
+} from '@/context/AuthContext';
 import tokenStore from '@/auth/tokenStore';
 
-// ─── Role helpers ─────────────────────────────────────────────────────────────
-export const checkIsCS = (user) => {
-  if (!user) return false;
-  const dept = resolveUserDepartment(user).toLowerCase();
-  const role = resolveUserRole(user).toLowerCase();
-  if (dept.includes('customer service') || dept.includes('customer support') || dept === 'cs') return true;
-  return (
-    role.includes('customer service') ||
-    role.includes('customer-service') ||
-    role.includes('head of cs') ||
-    role.includes('head of customer service') ||
-    role === 'cs' ||
-    role === 'head cs'
-  );
-};
-
-export const checkIsSuperAdmin = (user) => {
-  if (!user) return false;
-  const role = resolveUserRole(user).toLowerCase();
-  const dept = resolveUserDepartment(user).toLowerCase();
-  return role === 'superadmin' || role === 'super admin' || dept === 'superadmin' || dept === 'super admin';
-};
-
-export const checkIsAdmin = (user) => {
-  if (!user) return false;
-  const role = resolveUserRole(user).toLowerCase();
-  const dept = resolveUserDepartment(user).toLowerCase();
-  return role === 'admin' || role === 'it admin' || (dept === 'admin' && role !== 'superadmin' && role !== 'super admin');
-};
-
-export const checkIsItManager = (user) => {
-  if (!user) return false;
-  const role = resolveUserRole(user).toLowerCase();
-  const dept = resolveUserDepartment(user).toLowerCase();
-  return (
-    role === 'it_manager' ||
-    role === 'it manager' ||
-    role === 'it department manager' ||
-    (dept.includes('it') && role.includes('manager'))
-  );
-};
-
-export const checkIsEmployee = (user) => {
-  if (!user) return false;
-  if (checkIsCS(user)) return false;
-  if (checkIsAdmin(user)) return false;
-  if (checkIsSuperAdmin(user)) return false;
-  if (checkIsItManager(user)) return false;
-  const dept = resolveUserDepartment(user).toLowerCase();
-  const role = resolveUserRole(user).toLowerCase();
-  if (dept === 'service' || dept.includes('engineer')) return true;
-  return role === 'employee' || role.includes('service') || role.includes('engineer');
+// Re-export role helpers for backwards compatibility
+export {
+  checkIsCS,
+  checkIsSuperAdmin,
+  checkIsAdmin,
+  checkIsItManager,
+  checkIsServiceManager,
+  checkIsCSManager,
+  checkIsEmployee,
 };
 
 // ─── Wrong Portal page ────────────────────────────────────────────────────────
@@ -88,7 +56,6 @@ function WrongPortal() {
     </div>
   );
 }
-
 
 // ─── Private Route ────────────────────────────────────────────────────────────
 // isCustomerSite: true when running as the customer-only container (port 5006)
@@ -155,12 +122,14 @@ export default function PrivateRoute({ children, role }) {
   }
 
   // Authenticated — check roles
-  const isCS          = checkIsCS(user);
-  const isAdmin       = checkIsAdmin(user);
-  const isEmployee    = checkIsEmployee(user);
-  const isSuperAdmin  = checkIsSuperAdmin(user);
-  const isItManager   = checkIsItManager(user);
-  const isCustomer    = !isCS && !isEmployee && !isSuperAdmin && !isAdmin && !isItManager;
+  const isCS             = checkIsCS(user);
+  const isAdmin          = checkIsAdmin(user);
+  const isEmployee       = checkIsEmployee(user);
+  const isSuperAdmin     = checkIsSuperAdmin(user);
+  const isItManager      = checkIsItManager(user);
+  const isServiceManager = checkIsServiceManager(user);
+  const isCSManager      = checkIsCSManager(user);
+  const isCustomer       = !isCS && !isEmployee && !isSuperAdmin && !isAdmin && !isItManager && !isServiceManager && !isCSManager;
 
   // ── Customer portal (port 5006) ──────────────────────────────────────────
   if (isCustomerSite) {
@@ -188,34 +157,65 @@ export default function PrivateRoute({ children, role }) {
       if ((normalizedRole === 'it_manager' || normalizedRole === 'it manager') && !isItManager) {
         if (isSuperAdmin) return <Navigate to="/superadmin/config" replace />;
         if (isAdmin) return <Navigate to="/admin/dashboard" replace />;
+        if (isServiceManager) return <Navigate to="/service-manager/dashboard" replace />;
+        if (isCSManager) return <Navigate to="/cs-manager/dashboard" replace />;
         if (isCS) return <Navigate to="/cs/dashboard" replace />;
         return <Navigate to="/employee/dashboard" replace />;
       }
+
+      if (isServiceManager && normalizedRole !== 'service_manager' && normalizedRole !== 'service manager') {
+        return <Navigate to="/service-manager/dashboard" replace />;
+      }
+      if ((normalizedRole === 'service_manager' || normalizedRole === 'service manager') && !isServiceManager) {
+        if (isSuperAdmin) return <Navigate to="/superadmin/config" replace />;
+        if (isAdmin) return <Navigate to="/admin/dashboard" replace />;
+        if (isItManager) return <Navigate to="/it-manager/dashboard" replace />;
+        if (isCSManager) return <Navigate to="/cs-manager/dashboard" replace />;
+        if (isCS) return <Navigate to="/cs/dashboard" replace />;
+        return <Navigate to="/employee/dashboard" replace />;
+      }
+
+      if (isCSManager && normalizedRole !== 'cs_manager' && normalizedRole !== 'cs manager') {
+        return <Navigate to="/cs-manager/dashboard" replace />;
+      }
+      if ((normalizedRole === 'cs_manager' || normalizedRole === 'cs manager') && !isCSManager) {
+        if (isSuperAdmin) return <Navigate to="/superadmin/config" replace />;
+        if (isAdmin) return <Navigate to="/admin/dashboard" replace />;
+        if (isItManager) return <Navigate to="/it-manager/dashboard" replace />;
+        if (isServiceManager) return <Navigate to="/service-manager/dashboard" replace />;
+        if (isCS) return <Navigate to="/cs/dashboard" replace />;
+        return <Navigate to="/employee/dashboard" replace />;
+      }
+
       if (normalizedRole === 'customer') {
-        if (isSuperAdmin) {
-          return <Navigate to="/superadmin/config" replace />;
-        }
-        if (isAdmin) {
-          return <Navigate to="/admin/dashboard" replace />;
-        }
-        if (isCS) {
-          return <Navigate to="/cs/dashboard" replace />;
-        }
-        if (isEmployee) {
-          return <Navigate to="/employee/dashboard" replace />;
-        }
+        if (isSuperAdmin) return <Navigate to="/superadmin/config" replace />;
+        if (isAdmin) return <Navigate to="/admin/dashboard" replace />;
+        if (isItManager) return <Navigate to="/it-manager/dashboard" replace />;
+        if (isServiceManager) return <Navigate to="/service-manager/dashboard" replace />;
+        if (isCSManager) return <Navigate to="/cs-manager/dashboard" replace />;
+        if (isCS) return <Navigate to="/cs/dashboard" replace />;
+        if (isEmployee) return <Navigate to="/employee/dashboard" replace />;
       }
       if (normalizedRole === 'admin' && !isAdmin) {
         if (isSuperAdmin) return <Navigate to="/superadmin/config" replace />;
+        if (isItManager) return <Navigate to="/it-manager/dashboard" replace />;
+        if (isServiceManager) return <Navigate to="/service-manager/dashboard" replace />;
+        if (isCSManager) return <Navigate to="/cs-manager/dashboard" replace />;
         if (isCS) return <Navigate to="/cs/dashboard" replace />;
         return <Navigate to="/employee/dashboard" replace />;
       }
       if (normalizedRole === 'superadmin' && !isSuperAdmin) {
         if (isAdmin) return <Navigate to="/admin/dashboard" replace />;
+        if (isItManager) return <Navigate to="/it-manager/dashboard" replace />;
+        if (isServiceManager) return <Navigate to="/service-manager/dashboard" replace />;
+        if (isCSManager) return <Navigate to="/cs-manager/dashboard" replace />;
         return <Navigate to="/employee/dashboard" replace />;
       }
       if (normalizedRole === 'employee' && !isEmployee) {
         if (isAdmin) return <Navigate to="/admin/dashboard" replace />;
+        if (isItManager) return <Navigate to="/it-manager/dashboard" replace />;
+        if (isServiceManager) return <Navigate to="/service-manager/dashboard" replace />;
+        if (isCSManager) return <Navigate to="/cs-manager/dashboard" replace />;
         return <Navigate to="/cs/dashboard" replace />;
       }
       if (
@@ -224,9 +224,11 @@ export default function PrivateRoute({ children, role }) {
           normalizedRole === 'customer-service' ||
           normalizedRole === 'head of cs' ||
           normalizedRole === 'head of customer service') &&
-        !isCS
+        !isCS && !isCSManager
       ) {
         if (isAdmin) return <Navigate to="/admin/dashboard" replace />;
+        if (isItManager) return <Navigate to="/it-manager/dashboard" replace />;
+        if (isServiceManager) return <Navigate to="/service-manager/dashboard" replace />;
         return <Navigate to="/employee/dashboard" replace />;
       }
     }

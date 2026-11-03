@@ -3,7 +3,19 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 
 // Vite's BASE_URL is '/', '/ticketing/', or '/customer-service/' depending on context.
 const routerBasename = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
-import { AuthProvider, useAuth, resolveUserRole, resolveUserDepartment } from '@/context/AuthContext';
+import {
+  AuthProvider,
+  useAuth,
+  resolveUserRole,
+  resolveUserDepartment,
+  checkIsCS,
+  checkIsSuperAdmin,
+  checkIsAdmin,
+  checkIsItManager,
+  checkIsServiceManager,
+  checkIsCSManager,
+  checkIsEmployee,
+} from '@/context/AuthContext';
 import { BranchProvider } from '@/context/BranchContext';
 import PrivateRoute from '@/routes/PrivateRoute';
 import GuestRoute from '@/routes/GuestRoute';
@@ -54,6 +66,16 @@ const ITManagerLayout = React.lazy(() => import('./components/ITManagerLayout.js
 const ITManagerDashboard = React.lazy(() => import('./pages/ITManagerDashboard.jsx'));
 const ITManagerTickets = React.lazy(() => import('./pages/ITManagerTickets.jsx'));
 
+// Lazy loaded Service Manager components
+const ServiceManagerLayout = React.lazy(() => import('./components/ServiceManagerLayout.jsx'));
+const ServiceManagerDashboard = React.lazy(() => import('./pages/ServiceManagerDashboard.jsx'));
+const ServiceManagerTickets = React.lazy(() => import('./pages/ServiceManagerTickets.jsx'));
+
+// Lazy loaded CS Manager components
+const CSManagerLayout = React.lazy(() => import('./components/CSManagerLayout.jsx'));
+const CSManagerDashboard = React.lazy(() => import('./pages/CSManagerDashboard.jsx'));
+const CSManagerTickets = React.lazy(() => import('./pages/CSManagerTickets.jsx'));
+
 // Lazy loaded Admin page and layout components
 const AdminLayout = React.lazy(() => import('./components/AdminLayout.jsx'));
 const AdminDashboard = React.lazy(() => import('./pages/AdminDashboard.jsx'));
@@ -61,56 +83,6 @@ const AdminEmployees = React.lazy(() => import('./pages/AdminEmployees.jsx'));
 const AdminReports = React.lazy(() => import('./pages/AdminReports.jsx'));
 const AdminSettings = React.lazy(() => import('./pages/AdminSettings.jsx'));
 const ExternalFeedbackPage = React.lazy(() => import('./pages/ExternalFeedbackPage.jsx'));
-
-// ─── Role helpers (mirrors GuestRoute / PrivateRoute) ─────────────────────────
-const checkIsCS = (user) => {
-  if (!user) return false;
-  const dept = resolveUserDepartment(user).toLowerCase();
-  const role = resolveUserRole(user).toLowerCase();
-  if (dept.includes('customer service') || dept.includes('customer support') || dept === 'cs') return true;
-  return (
-    role.includes('customer service') ||
-    role.includes('customer-service') ||
-    role.includes('head of cs') ||
-    role.includes('head of customer service') ||
-    role === 'cs' ||
-    role === 'head cs'
-  );
-};
-const checkIsSuperAdmin = (user) => {
-  if (!user) return false;
-  const role = resolveUserRole(user).toLowerCase();
-  const dept = resolveUserDepartment(user).toLowerCase();
-  return role === 'superadmin' || role === 'super admin' || dept === 'superadmin' || dept === 'super admin';
-};
-const checkIsAdmin = (user) => {
-  if (!user) return false;
-  const role = resolveUserRole(user).toLowerCase();
-  const dept = resolveUserDepartment(user).toLowerCase();
-  return role === 'admin' || role === 'it admin' || (dept === 'admin' && role !== 'superadmin' && role !== 'super admin');
-};
-const checkIsItManager = (user) => {
-  if (!user) return false;
-  const role = resolveUserRole(user).toLowerCase();
-  const dept = resolveUserDepartment(user).toLowerCase();
-  return (
-    role === 'it_manager' ||
-    role === 'it manager' ||
-    role === 'it department manager' ||
-    (dept.includes('it') && role.includes('manager'))
-  );
-};
-const checkIsEmployee = (user) => {
-  if (!user) return false;
-  if (checkIsCS(user)) return false;
-  if (checkIsAdmin(user)) return false;
-  if (checkIsSuperAdmin(user)) return false;
-  if (checkIsItManager(user)) return false;
-  const dept = resolveUserDepartment(user).toLowerCase();
-  const role = resolveUserRole(user).toLowerCase();
-  if (dept === 'service' || dept.includes('engineer')) return true;
-  return role === 'employee' || role.includes('service') || role.includes('engineer');
-};
 
 // ─── Employee Portal Gate ─────────────────────────────────────────────────────
 // Smart entry-point for the employee/CS ticketing portal (/ticketing/).
@@ -137,17 +109,21 @@ function EmployeePortalGate() {
     return null;
   }
 
-  const isSuperAdmin = checkIsSuperAdmin(user);
-  const isAdmin      = checkIsAdmin(user);
-  const isCS         = checkIsCS(user);
-  const isItManager  = checkIsItManager(user);
-  const isEmployee   = checkIsEmployee(user);
+  const isSuperAdmin     = checkIsSuperAdmin(user);
+  const isAdmin          = checkIsAdmin(user);
+  const isItManager      = checkIsItManager(user);
+  const isServiceManager = checkIsServiceManager(user);
+  const isCSManager      = checkIsCSManager(user);
+  const isCS             = checkIsCS(user);
+  const isEmployee       = checkIsEmployee(user);
 
-  if (isSuperAdmin) return <Navigate to="/superadmin/config" replace />;
-  if (isAdmin)      return <Navigate to="/admin/dashboard" replace />;
-  if (isCS)         return <Navigate to="/cs/dashboard" replace />;
-  if (isItManager)  return <Navigate to="/it-manager/dashboard" replace />;
-  if (isEmployee)   return <Navigate to="/employee/dashboard" replace />;
+  if (isSuperAdmin)     return <Navigate to="/superadmin/config" replace />;
+  if (isAdmin)          return <Navigate to="/admin/dashboard" replace />;
+  if (isItManager)      return <Navigate to="/it-manager/dashboard" replace />;
+  if (isServiceManager) return <Navigate to="/service-manager/dashboard" replace />;
+  if (isCSManager)      return <Navigate to="/cs-manager/dashboard" replace />;
+  if (isCS)             return <Navigate to="/cs/dashboard" replace />;
+  if (isEmployee)       return <Navigate to="/employee/dashboard" replace />;
 
   // Unknown role on the employee portal → back to auth module
   window.location.replace('/');
@@ -252,6 +228,8 @@ function App() {
                 <Route path="customer-dashboard" element={<CustomerDashboard />} />
                 <Route path="create-ticket" element={<TicketCreation />} />
                 <Route path="my-tickets" element={<MyTickets />} />
+                <Route path="tickets/:ticketId" element={<MyTickets />} />
+                <Route path="my-tickets/:ticketId" element={<MyTickets />} />
                 <Route path="history" element={<CustomerHistory />} />
                 <Route path="messages" element={<MessagingPage />} />
                 <Route path="profile" element={<Profile />} />
@@ -321,6 +299,48 @@ function App() {
                 <Route path="notifications" element={<Notifications />} />
               </Route>
 
+              {/* Service Manager Routes (Strictly role: service_manager) */}
+              <Route
+                path="/service-manager"
+                element={
+                  <PrivateRoute role="service_manager">
+                    <ServiceManagerLayout />
+                  </PrivateRoute>
+                }
+              >
+                <Route index element={<Navigate to="dashboard" replace />} />
+                <Route path="dashboard" element={<ServiceManagerDashboard />} />
+                <Route path="tickets" element={<ServiceManagerTickets />} />
+                <Route path="breached" element={<Navigate to="/service-manager/dashboard" replace />} />
+                <Route path="history" element={<CSHistory roleContext="service_manager" />} />
+                <Route path="history/:ticketId" element={<EmployeeHistoryDetail />} />
+                <Route path="my-tickets" element={<EmployeeMyTickets roleContext="service_manager" />} />
+                <Route path="messages" element={<MessagingPage />} />
+                <Route path="profile" element={<Profile />} />
+                <Route path="notifications" element={<Notifications />} />
+              </Route>
+
+              {/* CS Manager Routes (Strictly role: cs_manager) */}
+              <Route
+                path="/cs-manager"
+                element={
+                  <PrivateRoute role="cs_manager">
+                    <CSManagerLayout />
+                  </PrivateRoute>
+                }
+              >
+                <Route index element={<Navigate to="dashboard" replace />} />
+                <Route path="dashboard" element={<CSManagerDashboard />} />
+                <Route path="tickets" element={<CSManagerTickets />} />
+                <Route path="breached" element={<Navigate to="/cs-manager/dashboard" replace />} />
+                <Route path="history" element={<CSHistory roleContext="cs_manager" />} />
+                <Route path="history/:ticketId" element={<EmployeeHistoryDetail />} />
+                <Route path="my-tickets" element={<EmployeeMyTickets roleContext="cs_manager" />} />
+                <Route path="messages" element={<MessagingPage />} />
+                <Route path="profile" element={<Profile />} />
+                <Route path="notifications" element={<Notifications />} />
+              </Route>
+
               {/* Customer Service (CS) Routes */}
               <Route
                 path="/cs"
@@ -334,6 +354,7 @@ function App() {
                 <Route path="dashboard" element={<CSDashboard />} />
                 <Route path="incoming" element={<CSIncoming />} />
                 <Route path="assigned" element={<CSAssigned />} />
+                <Route path="tickets" element={<CSManagerTickets />} />
                 <Route path="my-tickets" element={<EmployeeMyTickets roleContext="cs" />} />
                 <Route path="messages" element={<MessagingPage />} />
                 <Route path="history" element={<CSHistory />} />

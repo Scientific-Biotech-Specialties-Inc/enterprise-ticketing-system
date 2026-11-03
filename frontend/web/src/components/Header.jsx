@@ -34,15 +34,21 @@ export default function Header({ sidebarHovered }) {
     };
   }, []);
 
-  const basePath = location.pathname.startsWith('/cs')
-    ? '/cs'
-    : location.pathname.startsWith('/employee')
-      ? '/employee'
-      : location.pathname.startsWith('/superadmin')
-        ? '/superadmin'
-        : location.pathname.startsWith('/admin')
-          ? '/admin'
-          : '';
+  const basePath = location.pathname.startsWith('/cs-manager')
+    ? '/cs-manager'
+    : location.pathname.startsWith('/service-manager')
+      ? '/service-manager'
+      : location.pathname.startsWith('/it-manager')
+        ? '/it-manager'
+        : location.pathname.startsWith('/cs')
+          ? '/cs'
+          : location.pathname.startsWith('/employee')
+            ? '/employee'
+            : location.pathname.startsWith('/superadmin')
+              ? '/superadmin'
+              : location.pathname.startsWith('/admin')
+                ? '/admin'
+                : '';
 
   const fetchNotifications = useCallback(async () => {
     if (!user) return;
@@ -251,6 +257,7 @@ export default function Header({ sidebarHovered }) {
 
   const getPageTitle = () => {
     const p = location.pathname.toLowerCase();
+    if (p.includes('/tickets')) return 'Ticket Queue';
     if (p.includes('/dashboard')) return 'Dashboard';
     if (p.includes('/create-ticket')) return 'Create Ticket';
     if (p.includes('/my-tickets')) return 'My Tickets';

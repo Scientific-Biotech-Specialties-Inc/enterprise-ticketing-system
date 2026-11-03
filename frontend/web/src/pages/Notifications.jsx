@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Bell,
@@ -35,11 +35,19 @@ import { respondReassignment } from '@/services/ticketService';
 import SecurityIncidentModal from '@/components/security/SecurityIncidentModal';
 import SystemAlertModal from '@/components/security/SystemAlertModal';
 
+export const isNotificationRead = (n) => {
+  if (!n) return false;
+  if (n.is_read === true || n.is_read === 1 || n.is_read === '1' || n.is_read === 'true') return true;
+  if (n.is_read === false || n.is_read === 0 || n.is_read === '0' || n.is_read === 'false') return false;
+  return !Boolean(n.unread);
+};
+
 export default function Notifications() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
   const [notifications, setNotifications] = useState([]);
+  const [filter, setFilter] = useState('all'); // 'all' | 'unread' | 'read'
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -49,6 +57,24 @@ export default function Notifications() {
   const [activeTicketLoading, setActiveTicketLoading] = useState(false);
   const [activeSecurityIncident, setActiveSecurityIncident] = useState(null);
   const [activeSystemAlert, setActiveSystemAlert] = useState(null);
+
+  const unreadCount = useMemo(() => {
+    return notifications.filter((n) => !isNotificationRead(n)).length;
+  }, [notifications]);
+
+  const readCount = useMemo(() => {
+    return notifications.filter((n) => isNotificationRead(n)).length;
+  }, [notifications]);
+
+  const filteredNotifications = useMemo(() => {
+    if (filter === 'unread') {
+      return notifications.filter((n) => !isNotificationRead(n));
+    }
+    if (filter === 'read') {
+      return notifications.filter((n) => isNotificationRead(n));
+    }
+    return notifications;
+  }, [notifications, filter]);
 
   const loadData = useCallback(async ({ source = 'manual' } = {}) => {
     if (source !== 'websocket' && source !== 'poll') {
@@ -79,22 +105,33 @@ export default function Notifications() {
   });
 
   const handleMarkAllRead = async () => {
+    // 1. Optimistically update local state immediately
+    setNotifications((prev) =>
+      prev.map((n) => ({ ...n, is_read: true, unread: false }))
+    );
     try {
       await markNotificationsRead();
       setSuccess('All notifications marked as read.');
       window.dispatchEvent(new Event('notifications:updated'));
-      await loadData();
+      const data = await getNotifications();
+      if (data?.notifications) {
+        setNotifications(data.notifications);
+      }
     } catch (err) {
       console.error(err);
       setError('Failed to mark notifications as read.');
+      loadData();
     }
   };
 
   const handleMarkOneRead = async (id) => {
+    // Optimistically update local state immediately
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, is_read: true, unread: false } : n))
+    );
     try {
       await markNotificationRead(id);
       window.dispatchEvent(new Event('notifications:updated'));
-      await loadData();
     } catch (err) {
       console.error(err);
     }
@@ -158,6 +195,10 @@ export default function Notifications() {
   }, [activeNotificationId, loadData]);
 
   const handleNotificationClick = async (n) => {
+    if (!isNotificationRead(n)) {
+      handleMarkOneRead(n.id);
+    }
+
     const parsedData = (() => {
       try { return typeof n.data === 'string' ? JSON.parse(n.data) : n.data || {}; } catch { return {}; }
     })();
@@ -302,7 +343,7 @@ export default function Notifications() {
           title="Notifications & Alerts"
           subtitle="Stay updated with real-time ticket status updates and remarks."
           actions={
-            notifications.filter(n => !n.is_read).length > 0 ? (
+            unreadCount > 0 ? (
               <Button
                 variant="ghost"
                 size="sm"
@@ -341,21 +382,79 @@ export default function Notifications() {
           <SkeletonLoader variant="ticket-card" />
         </div>
       ) : (
-        <div className="space-y-8">
-          {/* Unified General Notification Feed */}
+        <div className="space-y-6">
+          {/* Unified General Notification Feed with Filter Tabs */}
           <div className="space-y-4">
-            <h2 className="text-lg font-bold text-dark-slate border-b border-border pb-2">Recent Notifications</h2>
-            {notifications.length === 0 ? (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-3">
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-bold text-dark-slate">Notifications</h2>
+                {unreadCount > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-accent/10 text-accent">
+                    {unreadCount} unread
+                  </span>
+                )}
+              </div>
+
+              {/* Notification Filter Toggle (TS Defect 4) */}
+              <div className="flex items-center gap-3">
+                <div className="inline-flex p-1 bg-slate-100 rounded-xl gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setFilter('all')}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                      filter === 'all'
+                        ? 'bg-white text-primary shadow-xs'
+                        : 'text-muted-slate hover:text-dark-slate'
+                    }`}
+                  >
+                    All <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] bg-slate-200/70 text-slate-700">{notifications.length}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilter('unread')}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                      filter === 'unread'
+                        ? 'bg-white text-primary shadow-xs'
+                        : 'text-muted-slate hover:text-dark-slate'
+                    }`}
+                  >
+                    Unread <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] bg-blue-100 text-blue-700">{unreadCount}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilter('read')}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                      filter === 'read'
+                        ? 'bg-white text-primary shadow-xs'
+                        : 'text-muted-slate hover:text-dark-slate'
+                    }`}
+                  >
+                    Read <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] bg-slate-200/70 text-slate-700">{readCount}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {filteredNotifications.length === 0 ? (
               <div className="bg-card rounded-xl border border-border p-12 text-center shadow-xs">
                 <div className="w-16 h-16 rounded-full bg-slate-50 flex items-center justify-center mx-auto mb-4 border border-border text-slate-400">
                   <Bell size={28} className="text-slate-300" />
                 </div>
-                <h3 className="text-lg font-bold text-dark-slate">All caught up!</h3>
-                <p className="text-sm text-muted-slate mt-1">There are no recent notifications.</p>
+                <h3 className="text-lg font-bold text-dark-slate">
+                  {filter === 'unread' ? 'No unread notifications' : filter === 'read' ? 'No read notifications' : 'All caught up!'}
+                </h3>
+                <p className="text-sm text-muted-slate mt-1">
+                  {filter === 'unread'
+                    ? 'You have reviewed all incoming alerts and status updates.'
+                    : filter === 'read'
+                    ? 'None of your notifications have been marked as read yet.'
+                    : 'There are no recent notifications.'}
+                </p>
               </div>
             ) : (
               <div className="space-y-3">
-                {notifications.map((n) => {
+                {filteredNotifications.map((n) => {
+                  const isItemUnread = !isNotificationRead(n);
                   const parsedData = (() => {
                     try { return typeof n.data === 'string' ? JSON.parse(n.data) : n.data || {}; } catch { return {}; }
                   })();
@@ -423,16 +522,16 @@ export default function Notifications() {
                       onClick={() => handleNotificationClick(n)}
                       className={`bg-card rounded-xl border p-5 shadow-xs flex items-start gap-4 transition-all duration-200 cursor-pointer animate-fadeIn ${
                         isSecurityAlert
-                          ? 'border-destructive/30 bg-destructive/5 hover:border-destructive/40 ' + (!n.is_read ? 'border-l-4 border-l-destructive pl-4' : '')
+                          ? 'border-destructive/30 bg-destructive/5 hover:border-destructive/40 ' + (isItemUnread ? 'border-l-4 border-l-destructive pl-4' : '')
                           : isSystemIssue
-                            ? 'border-amber-300 bg-amber-50/25 hover:border-amber-400 ' + (!n.is_read ? 'border-l-4 border-l-amber-600 pl-4' : '')
+                            ? 'border-amber-300 bg-amber-50/25 hover:border-amber-400 ' + (isItemUnread ? 'border-l-4 border-l-amber-600 pl-4' : '')
                             : isSlaBreach
-                              ? 'border-red-200 bg-red-50/25 hover:border-red-300 ' + (!n.is_read ? 'border-l-4 border-l-red-600 pl-4' : '')
+                              ? 'border-red-200 bg-red-50/25 hover:border-red-300 ' + (isItemUnread ? 'border-l-4 border-l-red-600 pl-4' : '')
                               : isAutoClose
-                                ? 'border-amber-200 bg-amber-50/20 ' + (!n.is_read ? 'border-l-4 border-l-accent pl-4' : '')
+                                ? 'border-amber-200 bg-amber-50/20 ' + (isItemUnread ? 'border-l-4 border-l-accent pl-4' : '')
                                 : isNewMessage
-                                  ? 'border-indigo-200 bg-indigo-50/20 hover:border-indigo-300 ' + (!n.is_read ? 'border-l-4 border-l-indigo-600 pl-4' : '')
-                                  : 'border-border hover:border-slate-300 ' + (!n.is_read ? 'border-l-4 border-l-accent pl-4' : '')
+                                  ? 'border-indigo-200 bg-indigo-50/20 hover:border-indigo-300 ' + (isItemUnread ? 'border-l-4 border-l-indigo-600 pl-4' : '')
+                                  : 'border-border hover:border-slate-300 ' + (isItemUnread ? 'border-l-4 border-l-accent pl-4' : '')
                       }`}
                     >
                       <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${

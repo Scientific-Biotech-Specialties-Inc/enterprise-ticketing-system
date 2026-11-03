@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 
 export function Dropzone({
   onFilesSelected,
-  acceptedTypes = ".pdf,.docx,.png,.jpg,.jpeg",
+  acceptedTypes = ".pdf,.docx,.doc,.png,.jpg,.jpeg",
   maxSizeMB = 10,
   maxFiles = 5,
   files = [],

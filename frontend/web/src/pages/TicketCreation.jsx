@@ -69,6 +69,22 @@ export default function TicketCreation() {
     conversation_id: location.state?.conversationId || location.state?.conversation_id || location.state?.fromConversationId || undefined,
   });
 
+  const handleCancelOrBack = useCallback(() => {
+    if (isFromAi || incomingPrefill || location.state?.fromAiChat) {
+      navigate('/ai-support');
+      return;
+    }
+    if (draftId || location.state?.draftId) {
+      navigate('/my-tickets', { state: { tab: 'drafts' } });
+      return;
+    }
+    if (window.history.length > 2) {
+      navigate(-1);
+    } else {
+      navigate('/customer-dashboard');
+    }
+  }, [isFromAi, incomingPrefill, location.state, draftId, navigate]);
+
   // Helper to resolve machine ID from options given ID or name/model
   const resolveMachineId = useCallback((val, machineList) => {
     if (!val || !machineList || !machineList.length) return '';
@@ -777,7 +793,7 @@ export default function TicketCreation() {
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => navigate(-1)}
+              onClick={handleCancelOrBack}
               className="cursor-pointer"
             >
               <ArrowLeft className="h-4 w-4 mr-1.5" />
@@ -1080,7 +1096,7 @@ export default function TicketCreation() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => navigate(-1)}
+                onClick={handleCancelOrBack}
                 className="cursor-pointer"
               >
                 Cancel

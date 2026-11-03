@@ -1,772 +1,738 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Search, Filter, AlertTriangle, ShieldAlert, ArrowRight, ChevronRight, Inbox, ClipboardList, CheckCircle2, Eye } from 'lucide-react';
 import {
-  Search,
-  Filter,
-  AlertTriangle,
-  ShieldAlert,
-  ArrowRight,
-  ChevronRight,
-  Inbox,
-  ClipboardList,
-  CheckCircle2,
-  Eye,
-  Clock,
-  Send,
-  PauseCircle,
-  RefreshCw,
-  ExternalLink,
-  Briefcase,
-  User,
-  AlertCircle,
-} from 'lucide-react';
+  recentProgress,
+  statusColors,
+  priorityColors,
+} from '@/constants/employeeTickets';
 import CustomerTicketDetailModal from '@/components/CustomerTicketDetailModal';
 import { useAuth } from '@/context/AuthContext';
-import {
-  getEmployeeAssignedTickets,
-  getTicketDetails,
-  getInternalTickets,
-  getEmployeeProfile,
-  clearEmployeeTicketsCache,
-} from '@/services/ticketService';
+import { getEmployeeAssignedTickets, acceptTicket, updateTicket, updateEmployeeTicketOverride, getTicketDetails, getInternalTickets, getEmployeeProfile, clearEmployeeTicketsCache } from '@/services/ticketService';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import { DashboardHeader } from '@/components/ui/page-header';
 import { MetricCard } from '@/components/ui/metric-card';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
-import { DataTableSkeleton } from '@/components/ui/data-table';
 import { Button } from '@/components/ui/button';
-import { formatDisplayDate } from '@/utils/dateUtils';
+
+
+
+const statusClass = (s) => statusColors[s] ?? (s?.includes('Discarded') ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-700');
+
+// User resolved from AuthContext
 
 export default function EmployeeDashboard() {
   const { user } = useAuth();
+  const effectiveUser = user || null;
   const navigate = useNavigate();
+  const dateStr = new Intl.DateTimeFormat('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  }).format(new Date());
 
-  // Active view toggle: 'all' (Unified), 'assigned' (My Work), 'requestor' (My Requests)
-  const [activeSection, setActiveSection] = useState('all');
+  const [tickets, setTickets] = useState([]);
+  const [loadingTickets, setLoadingTickets] = useState(true);
 
-  // Assigned Workload state
-  const [assignedTickets, setAssignedTickets] = useState([]);
-  const [loadingAssigned, setLoadingAssigned] = useState(true);
-  const [assignedError, setAssignedError] = useState(null);
-
-  // Requestor Activity state
-  const [myRequests, setMyRequests] = useState([]);
-  const [loadingRequests, setLoadingRequests] = useState(true);
-  const [requestorError, setRequestorError] = useState(null);
-
-  // Filters for Assigned tickets
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All Status');
+  const [categoryFilter, setCategoryFilter] = useState('All Category');
   const [priorityFilter, setPriorityFilter] = useState('All Priority');
 
-  // Read-only Modal state
-  const [selectedTicket, setSelectedTicket] = useState(null);
-  const [modalLoading, setModalLoading] = useState(false);
+  const [employeeName, setEmployeeName] = useState('');
+  const [myRecentTickets, setMyRecentTickets] = useState([]);
+  const [loadingMyTickets, setLoadingMyTickets] = useState(true);
+  const [selectedMyTicket, setSelectedMyTicket] = useState(null);
+  const [myTicketsModalLoading, setMyTicketsModalLoading] = useState(false);
+  const [myTicketsLoadingText, setMyTicketsLoadingText] = useState('Loading...');
+  const [selectedDashboardTicket, setSelectedDashboardTicket] = useState(null);
+  const [dashboardModalLoading, setDashboardModalLoading] = useState(false);
 
-  const displayName = user?.first_name
-    ? `${user.first_name}${user.last_name ? ' ' + user.last_name : ''}`
-    : user?.name || 'Employee';
+  const visible = useMemo(() => tickets.filter((t) => !t.rejected), [tickets]);
 
-  // ─── SLA Risk Classifier ──────────────────────────────────────────────────
-  const evaluateSlaRisk = useCallback((ticket) => {
-    if (['Resolved', 'Closed', 'Discarded'].includes(ticket.status)) return 'normal';
-    const s = String(ticket.sla_status || ticket.slaStatus || (ticket.sla?.resolution?.status) || '').toLowerCase().replace(/[\s_-]+/g, '');
-    if (s === 'breached' || s === 'violated' || Boolean(ticket.sla_breached) || Boolean(ticket.is_breached)) {
-      return 'breached';
-    }
-    if (s.includes('risk') || s.includes('warning')) {
-      return 'at_risk';
-    }
-    const due = ticket.resolution_due_at || ticket.due_at;
-    if (due) {
-      const msLeft = new Date(due).getTime() - Date.now();
-      if (msLeft < 0) return 'breached';
-      if (msLeft < 2 * 60 * 60 * 1000) return 'at_risk';
-    }
-    return 'normal';
-  }, []);
-
-  // ─── 1. Load Assigned Workload (My Work) ──────────────────────────────────
-  const loadAssigned = useCallback(async ({ forceRefresh = false } = {}) => {
-    setLoadingAssigned(true);
-    setAssignedError(null);
+  const loadTickets = useCallback(async ({ forceRefresh = false } = {}) => {
+    const email = user?.email || 'frontend@example.com';
+    setLoadingTickets(true);
     try {
-      const email = user?.email || 'frontend@example.com';
       const list = await getEmployeeAssignedTickets({ employeeEmail: email, forceRefresh });
-      setAssignedTickets(list.map((t) => ({ ...t, rejected: false })));
-    } catch {
-      setAssignedError('Unable to load assigned workload tickets.');
+      setTickets(list.map((t) => ({ ...t, rejected: false })));
     } finally {
-      setLoadingAssigned(false);
+      setLoadingTickets(false);
     }
   }, [user?.email]);
 
-  // ─── 2. Load Requestor Activity (My Requests) ─────────────────────────────
-  const loadRequests = useCallback(async () => {
-    setLoadingRequests(true);
-    setRequestorError(null);
+  const loadMyTickets = useCallback(async () => {
+    setLoadingMyTickets(true);
     try {
       const apiTickets = await getInternalTickets();
-      if (apiTickets && apiTickets.length > 0) {
-        const mapped = apiTickets.map((t) => ({
-          ...t,
-          date_created: t.date || t.created_at,
-          last_updated: t.lastUpdate || t.updated_at || t.last_updated,
+      if (apiTickets.length > 0) {
+        const mapped = apiTickets.map((ticket) => ({
+          ...ticket,
+          date_created: ticket.date || ticket.created_at,
+          last_updated: ticket.lastUpdate || ticket.updated_at || ticket.last_updated,
           is_internal: true,
           ticket_type: 'Internal',
+          can_discard: ticket.status === 'Open' && !ticket.assigned_to,
         }));
-        setMyRequests(mapped);
+        setMyRecentTickets(mapped.slice(0, 5));
+        // State updated directly
       } else {
-        const stored = JSON.parse(localStorage.getItem('employee_created_tickets') || '[]');
-        setMyRequests(stored);
+        const stored = JSON.parse(sessionStorage.getItem('employee_created_tickets') || '[]');
+        const updated = await Promise.all(
+          stored.slice(0, 5).map(async (t) => {
+            const numericId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
+            if (!!t.isMock) return t;
+            try {
+              const detail = await getTicketDetails(numericId);
+              return {
+                ...t,
+                ...detail,
+                status: detail.status || t.status,
+                last_updated: detail.last_updated || t.last_updated,
+              };
+            } catch {
+              return t;
+            }
+          })
+        );
+        setMyRecentTickets(updated);
+
+        const fullList = JSON.parse(sessionStorage.getItem('employee_created_tickets') || '[]');
+        const updatedFullList = fullList.map((item) => {
+          const found = updated.find((candidate) => candidate.id === item.id);
+          return found ? { ...item, ...found } : item;
+        });
+        // State updated directly
       }
-    } catch {
-      setRequestorError('Unable to load your submitted internal tickets.');
+    } catch (err) {
+      console.error('Failed to load my tickets on dashboard:', err);
     } finally {
-      setLoadingRequests(false);
+      setLoadingMyTickets(false);
     }
   }, []);
 
-  useEffect(() => {
-    loadAssigned({ forceRefresh: false });
-    loadRequests();
-  }, [loadAssigned, loadRequests]);
+  const handleResolveMyTicket = async (ticketId) => {
+    const isMock = selectedMyTicket ? !!selectedMyTicket.isMock : false;
+    if (isMock) {
+      const stored = JSON.parse(sessionStorage.getItem('employee_created_tickets') || '[]');
+      const updatedList = stored.map(t => {
+        if (t.id === ticketId || t.ticket_ID === ticketId) {
+          const timestamp = new Date().toISOString();
+          const timeline = t.timeline || [
+            { id: 'creation', type: 'system', text: 'Ticket created.', timestamp: t.date_created }
+          ];
+          return {
+            ...t,
+            status: 'Resolved',
+            resolved_at: timestamp,
+            last_updated: timestamp,
+            timeline: [
+              ...timeline,
+              {
+                id: `status-resolved-${Date.now()}`,
+                type: 'status',
+                text: 'Ticket resolved by creator.',
+                timestamp,
+              }
+            ]
+          };
+        }
+        return t;
+      });
+      // State updated directly
+      await loadMyTickets();
+      setSelectedMyTicket(null);
+      window.alert('Ticket resolved successfully.');
+      return;
+    }
+  };
 
-  // ─── Near-Real-Time Refresh ───────────────────────────────────────────────
+  const handleReopenMyTicket = async (ticketId, reason) => {
+    const isMock = selectedMyTicket ? !!selectedMyTicket.isMock : false;
+    if (isMock) {
+      const stored = JSON.parse(sessionStorage.getItem('employee_created_tickets') || '[]');
+      const updatedList = stored.map(t => {
+        if (t.id === ticketId || t.ticket_ID === ticketId) {
+          const timestamp = new Date().toISOString();
+          const timeline = t.timeline || [
+            { id: 'creation', type: 'system', text: 'Ticket created.', timestamp: t.date_created }
+          ];
+          return {
+            ...t,
+            status: 'Reopened',
+            last_updated: timestamp,
+            timeline: [
+              ...timeline,
+              {
+                id: `status-reopened-${Date.now()}`,
+                type: 'status',
+                text: `Ticket reopened. Reason: "${reason}"`,
+                timestamp,
+              }
+            ]
+          };
+        }
+        return t;
+      });
+      // State updated directly
+      await loadMyTickets();
+      setSelectedMyTicket(null);
+      window.alert('Ticket reopened successfully.');
+      return;
+    }
+
+    setMyTicketsLoadingText('Reopening ticket...');
+    setMyTicketsModalLoading(true);
+    try {
+      const numericId = Number(String(ticketId).replace(/\D/g, ''));
+      await updateTicket({
+        ticketId: numericId,
+        statusId: 8, // Reopened
+      });
+      await loadMyTickets();
+      setSelectedMyTicket(null);
+      window.alert('Ticket reopened successfully.');
+    } catch (err) {
+      console.error('Failed to reopen ticket:', err);
+      window.alert(err?.response?.data?.message || 'Failed to reopen ticket.');
+    } finally {
+      setMyTicketsModalLoading(false);
+    }
+  };
+
+  const handleViewMyTicket = async (t) => {
+    const numericId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
+    const isMock = !!t.isMock || [1001, 1002, 1003, 1004, 7545, 9091, 9092].includes(numericId) || String(t.id).startsWith('TKT-100');
+    if (isMock) {
+      setSelectedMyTicket({
+        ...t,
+        isMock: true,
+        description: t.description || '',
+        resolved_at: t.resolved_at || null,
+        proofAttachments: t.proofAttachments || [],
+        proofFiles: t.proofFiles || [],
+        can_discard: t.status === 'Open' && !t.assigned_to,
+      });
+      return;
+    }
+
+    setMyTicketsLoadingText('Loading ticket details...');
+    setMyTicketsModalLoading(true);
+    try {
+      const fullTicket = await getTicketDetails(numericId);
+      setSelectedMyTicket({
+        ...t,
+        ...fullTicket,
+        description: fullTicket.description || t.description || '',
+        resolved_at: fullTicket.resolved_at || null,
+        proofAttachments: fullTicket.proofAttachments || [],
+        proofFiles: fullTicket.proofFiles || [],
+        can_discard: (fullTicket.status || t.status) === 'Open' && !fullTicket.assigned_to,
+      });
+    } catch (err) {
+      console.error('Failed to load ticket details:', err);
+      setSelectedMyTicket(t);
+    } finally {
+      setMyTicketsModalLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadTickets({ forceRefresh: false });
+    loadMyTickets();
+    getEmployeeProfile().then(p => setEmployeeName(p.name)).catch(() => {});
+  }, [loadTickets, loadMyTickets]);
+
   const handleRefreshAll = useCallback(async () => {
     clearEmployeeTicketsCache();
-    await Promise.all([loadAssigned({ forceRefresh: true }), loadRequests()]);
-  }, [loadAssigned, loadRequests]);
+    await loadTickets({ forceRefresh: true });
+    await loadMyTickets();
+  }, [loadTickets, loadMyTickets]);
 
   useRealtimeRefresh({
     refresh: handleRefreshAll,
     channels: [{ name: 'ticket-updates', event: 'ticket.changed' }],
     intervalMs: 30000,
-    deferRefresh: false,
+    shouldRefresh: ({ source, payload }) => {
+      if (source === 'websocket') {
+        const myEmpId = Number(user?.emp_id ?? user?.id);
+        const payloadTicketId = Number(
+          payload?.ticket_id ||
+          payload?.ticket_ID ||
+          payload?.ticketId ||
+          payload?.id ||
+          payload?.ticket?.ticket_ID ||
+          payload?.ticket?.id ||
+          0
+        );
+        const isCurrentAssignee =
+          payload && (
+            Number(payload.assigned_to) === myEmpId ||
+            Number(payload.employee_id) === myEmpId ||
+            (Array.isArray(payload.employee_ids) && payload.employee_ids.map(Number).includes(myEmpId))
+          );
+        const isRemovedAssignee =
+          payload && (
+            (Array.isArray(payload.removed_employee_ids) && payload.removed_employee_ids.map(Number).includes(myEmpId)) ||
+            (Array.isArray(payload.previous_employee_ids) && payload.previous_employee_ids.map(Number).includes(myEmpId))
+          );
+        const isHoldingTicket =
+          Boolean(payloadTicketId) &&
+          tickets.some((t) => Number(t.ticket_ID || String(t.id).replace(/\D/g, '')) === payloadTicketId);
+
+        return Boolean(isCurrentAssignee || isRemovedAssignee || isHoldingTicket || !payloadTicketId);
+      }
+      return true;
+    },
   });
 
-  // ─── Assigned Workload Metrics (TS060 Criteria) ───────────────────────────
-  const assignedMetrics = useMemo(() => {
-    let openCount = 0;
-    let inProgressCount = 0;
-    let onHoldCount = 0;
-    let resolvedCount = 0;
-    let atRiskCount = 0;
-    let breachedCount = 0;
-    let awaitingAcceptCount = 0;
+  const handleStatusChange = useCallback(async (id, newStatus) => {
+    // If status is 'Pending Evaluation', it has already been submitted to the backend via proof upload.
+    // We only need to update the local ticket status and clear any proof rejection flags.
+    if (newStatus === 'Pending Evaluation') {
+      updateEmployeeTicketOverride(id, {
+        status: newStatus,
+        proofRejected: false,
+        rejectionReason: null,
+      });
+      setTickets((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? { ...t, status: newStatus, proofRejected: false, rejectionReason: null }
+            : t
+        )
+      );
+      return;
+    }
 
-    assignedTickets.forEach((t) => {
-      if (t.status === 'Open') openCount++;
-      if (t.status === 'In Progress') inProgressCount++;
-      if (t.status === 'On Hold') onHoldCount++;
-      if (t.status === 'Resolved' || t.status === 'Closed') resolvedCount++;
-      if (!t.accepted && t.status !== 'Resolved' && t.status !== 'Closed') awaitingAcceptCount++;
-
-      const risk = evaluateSlaRisk(t);
-      if (risk === 'breached') breachedCount++;
-      if (risk === 'at_risk') atRiskCount++;
-    });
-
-    return {
-      open: openCount,
-      inProgress: inProgressCount,
-      onHold: onHoldCount,
-      resolved: resolvedCount,
-      atRisk: atRiskCount,
-      breached: breachedCount,
-      awaitingAccept: awaitingAcceptCount,
-      totalActive: assignedTickets.filter((t) => !['Resolved', 'Closed'].includes(t.status)).length,
+    const statusMap = {
+      'Open': 1,
+      'In Progress': 2,
+      'Resolved': 3,
+      'Closed': 4,
+      'Escalated': 5,
+      'Pending Evaluation': 6,
+      'Pending': 7,
+      'Reopened': 8,
+      'On Hold': 11,
     };
-  }, [assignedTickets, evaluateSlaRisk]);
+    const ticketObj = tickets.find((t) => t.id === id);
+    if (!ticketObj) return;
 
-  // ─── Requestor Activity Metrics (TS060 Criteria) ──────────────────────────
-  const requestorMetrics = useMemo(() => {
-    let openCount = 0;
-    let inProgressCount = 0;
-    let resolvedCount = 0;
-    let closedCount = 0;
-    let autoClosingSoonCount = 0;
-    let reopenedCount = 0;
+    const numericId = ticketObj.ticket_ID || Number(String(id).replace(/\D/g, ''));
+    try {
+      await updateTicket({
+        ticketId: numericId,
+        statusId: statusMap[newStatus] ?? 2,
+        assignedByEmail: user?.email,
+      });
+      updateEmployeeTicketOverride(id, {
+        status: newStatus,
+        proofRejected: false,
+        rejectionReason: null,
+      });
+      setTickets((prev) => prev.map((t) => (t.id === id ? { ...t, status: newStatus } : t)));
+    } catch (err) {
+      console.error('Failed to update ticket status on backend:', err);
+      // fallback to optimistic update
+      updateEmployeeTicketOverride(id, {
+        status: newStatus,
+        proofRejected: false,
+        rejectionReason: null,
+      });
+      setTickets((prev) => prev.map((t) => (t.id === id ? { ...t, status: newStatus } : t)));
+    }
+  }, [tickets, user]);
 
-    myRequests.forEach((t) => {
-      const s = t.status;
-      if (s === 'Open') openCount++;
-      if (s === 'In Progress') inProgressCount++;
-      if (s === 'Resolved') {
-        resolvedCount++;
-        // Check if auto-closing soon (e.g. resolved within window)
-        autoClosingSoonCount++;
-      }
-      if (s === 'Closed') closedCount++;
-      if (s === 'Reopened') reopenedCount++;
-    });
+  const openTicketFlow = useCallback((t) => {
+    if (t.accepted) {
+      navigate('/employee/machine', { state: { focusTicketId: t.id } });
+    } else {
+      navigate('/employee/assigned', { state: { focusTicketId: t.id } });
+    }
+  }, [navigate]);
 
-    return {
-      open: openCount,
-      inProgress: inProgressCount,
-      resolved: resolvedCount,
-      closed: closedCount,
-      autoClosingSoon: autoClosingSoonCount,
-      reopened: reopenedCount,
-      total: myRequests.length,
-    };
-  }, [myRequests]);
-
-  // Filtered assigned tickets
-  const filteredAssigned = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return assignedTickets.filter((t) => {
-      if (q && !t.id?.toLowerCase().includes(q) && !t.title?.toLowerCase().includes(q) && !t.customer?.toLowerCase().includes(q)) return false;
-      if (statusFilter !== 'All Status' && t.status !== statusFilter) return false;
-      if (priorityFilter !== 'All Priority' && t.priority !== priorityFilter) return false;
-      return true;
-    });
-  }, [assignedTickets, search, statusFilter, priorityFilter]);
-
-  // Attention-needed items for Assigned section
-  const assignedAttentionItems = useMemo(() => {
-    return assignedTickets.filter((t) => {
-      const risk = evaluateSlaRisk(t);
-      const isUrgent = risk === 'breached' || risk === 'at_risk' || !t.accepted || t.status === 'Escalated';
-      return isUrgent && !['Resolved', 'Closed'].includes(t.status);
-    }).slice(0, 4);
-  }, [assignedTickets, evaluateSlaRisk]);
-
-  // Attention-needed items for Requestor section
-  const requestorAttentionItems = useMemo(() => {
-    return myRequests.filter((t) => {
-      return t.status === 'Resolved' || t.status === 'Reopened';
-    }).slice(0, 4);
-  }, [myRequests]);
-
-  // Read-only modal viewer (Strict Read-Only Enforcement)
-  const handleViewTicketReadOnly = useCallback(async (t) => {
-    setModalLoading(true);
+  const handleViewDashboardTicket = useCallback(async (t) => {
+    const isMock = !!t.isMock;
+    if (isMock) {
+      setSelectedDashboardTicket({ ...t, description: t.description || '', resolved_at: t.resolved_at || null, proofAttachments: t.proofAttachments || [], proofFiles: t.proofFiles || [] });
+      return;
+    }
+    setDashboardModalLoading(true);
     try {
       const ticketId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
       const full = await getTicketDetails(ticketId);
-      setSelectedTicket({ ...t, ...full, description: full?.description || t.description || '' });
+      setSelectedDashboardTicket({ ...t, ...full, description: full.description || t.description || '', resolved_at: full.resolved_at || null, proofAttachments: full.proofAttachments || [], proofFiles: full.proofFiles || [], timeline: full.timeline || t.timeline });
     } catch {
-      setSelectedTicket(t);
+      setSelectedDashboardTicket(t);
     } finally {
-      setModalLoading(false);
+      setDashboardModalLoading(false);
     }
   }, []);
 
+  const stats = useMemo(() => {
+    const CLOSED_STATUSES = ['Closed', 'Resolved'];
+    const incomingCount = visible.filter((t) => !t.accepted && !CLOSED_STATUSES.includes(t.status)).length;
+    const assignedCount = visible.filter((t) => t.accepted && !CLOSED_STATUSES.includes(t.status)).length;
+    const completedCount = visible.filter((t) => CLOSED_STATUSES.includes(t.status)).length;
+    const isBreachedTicket = (t) => {
+      if (CLOSED_STATUSES.includes(t.status)) return false;
+      const s = String(t.sla_status || t.slaStatus || (t.sla?.resolution?.status) || '').toLowerCase().replace(/[\s_-]+/g, '');
+      if (s === 'breached' || s === 'violated' || Boolean(t.sla_breached) || Boolean(t.is_breached)) return true;
+      if (t.resolution_due_at && new Date(t.resolution_due_at) < new Date()) return true;
+      if (t.due_at && new Date(t.due_at) < new Date()) return true;
+      return false;
+    };
+    const slaBreachedCount = visible.filter(isBreachedTicket).length;
+    const escalatedCount = visible.filter((t) => (t.status === 'Escalated' || t.escalated || t.priority === 'Critical' || t.priority === 'High') && !CLOSED_STATUSES.includes(t.status)).length;
+
+    return [
+      { label: 'Incoming Tickets', value: incomingCount, sub: 'Awaiting acceptance', icon: Inbox, variant: 'default' },
+      { label: 'Assigned Tickets', value: assignedCount, sub: 'Active work in progress', icon: ClipboardList, variant: 'default' },
+      { label: 'Completed Tickets', value: completedCount, sub: 'Resolved & closed history', icon: CheckCircle2, variant: 'default' },
+      { label: 'SLA Breached', value: slaBreachedCount, sub: 'SLA violations detected', icon: AlertTriangle, variant: 'destructive' },
+      { label: 'Escalated Tickets', value: escalatedCount, sub: 'Critical tickets requiring review', icon: ShieldAlert, variant: 'warning' },
+    ];
+  }, [visible]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return visible.filter((t) => {
+      if (q && !t.id?.toLowerCase().includes(q) && !t.title?.toLowerCase().includes(q) && !t.customer?.toLowerCase().includes(q)) return false;
+      if (statusFilter !== 'All Status') {
+        if (statusFilter === 'Pending Reassignment' || statusFilter === 'Pending Reassign') {
+          if (!t.reassignmentRequested && t.status !== 'Pending Reassignment') return false;
+        } else if (t.status !== statusFilter) {
+          return false;
+        }
+      }
+      if (categoryFilter !== 'All Category' && t.category !== categoryFilter) return false;
+      if (priorityFilter !== 'All Priority' && t.priority !== priorityFilter) return false;
+      return true;
+    });
+  }, [visible, search, statusFilter, categoryFilter, priorityFilter]);
+
+  const activeTickets = useMemo(() => {
+    const CLOSED_STATUSES = ['Closed', 'Resolved'];
+    return visible.filter((t) => !CLOSED_STATUSES.includes(t.status));
+  }, [visible]);
+
+  const urgentTicket = visible.find((t) => t.status === 'Escalated');
+  const escalatedTicket = visible.find((t) => t.priority === 'Critical' && t.status !== 'Resolved');
+
+  const goMachine = () => navigate('/employee/machine');
+
   return (
-    <div className="space-y-6 w-full min-w-0 max-w-full">
-      {/* Header */}
+    <div className="flex flex-col gap-6 font-sans text-dark-slate">
       <DashboardHeader
-        greeting="Personal Workspace Dashboard"
-        userName={displayName}
-        subtitle="Manage your assigned technician work and track your submitted internal support tickets in one place."
-        badgeText="Employee Active"
-        badgeVariant="emerald"
+        greeting={(() => {
+          const displayName = effectiveUser?.first_name
+            ? `${effectiveUser.first_name}${effectiveUser.last_name ? ' ' + effectiveUser.last_name : ''}`
+            : (effectiveUser?.name || 'General Employee');
+          return `Welcome back, ${displayName}!`;
+        })()}
+        subtitle="Here's a real-time summary of your assigned equipment support tickets."
       />
 
-      {/* Visual Navigation Pill Switcher (Clearly separating the two roles) */}
-      <div className="flex items-center gap-1 bg-muted/40 p-1.5 rounded-xl border border-border w-fit">
-        <Button
-          variant={activeSection === 'all' ? 'default' : 'ghost'}
-          size="sm"
-          onClick={() => setActiveSection('all')}
-          className="text-xs gap-1.5"
-        >
-          <span>All Overview</span>
-        </Button>
-        <Button
-          variant={activeSection === 'assigned' ? 'default' : 'ghost'}
-          size="sm"
-          onClick={() => setActiveSection('assigned')}
-          className="text-xs gap-1.5"
-        >
-          <Briefcase className="w-3.5 h-3.5" />
-          <span>My Work (Assigned Workload)</span>
-          <Badge variant="secondary" className="ml-1 text-[10px]">{assignedMetrics.totalActive}</Badge>
-        </Button>
-        <Button
-          variant={activeSection === 'requestor' ? 'default' : 'ghost'}
-          size="sm"
-          onClick={() => setActiveSection('requestor')}
-          className="text-xs gap-1.5"
-        >
-          <Send className="w-3.5 h-3.5" />
-          <span>My Requests (Requestor Activity)</span>
-          <Badge variant="secondary" className="ml-1 text-[10px]">{requestorMetrics.total}</Badge>
-        </Button>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+        {stats.map((s) => (
+          <MetricCard
+            key={s.label}
+            title={s.label}
+            value={s.value}
+            subtitle={s.sub}
+            icon={s.icon}
+            variant={s.variant}
+            loading={loadingTickets}
+          />
+        ))}
       </div>
 
-      {/* ═════════════════════════════════════════════════════════════════════ */}
-      {/* SECTION 1: ASSIGNED EMPLOYEE WORKLOAD ("MY WORK")                     */}
-      {/* ═════════════════════════════════════════════════════════════════════ */}
-      {(activeSection === 'all' || activeSection === 'assigned') && (
-        <div className="rounded-2xl border-2 border-primary/20 bg-card p-6 shadow-xs space-y-6">
-          {/* Section Banner Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
-                <Briefcase className="w-5 h-5" />
-              </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="rounded-2xl border border-red-200 bg-red-50/50 p-6 shadow-level-1">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
+            <span className="text-sm font-bold text-red-800">Ventilator Pressure Alarm Fault</span>
+          </div>
+          <p className="text-xs text-red-600 mb-4 font-medium">Immediate action required</p>
+          {urgentTicket && (
+            <button
+              type="button"
+              onClick={() => openTicketFlow(urgentTicket)}
+              className="w-full flex items-center justify-between rounded-xl border border-red-200 bg-surface px-4 py-3 shadow-xs hover:border-red-300 transition-colors text-left cursor-pointer"
+            >
               <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-base font-bold text-foreground">Section I: Assigned Workload (My Work)</h2>
-                  <Badge variant="outline" className="text-[10px] bg-primary/5 text-primary border-primary/20">
-                    Technician Role
-                  </Badge>
-                </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Tickets assigned to you for diagnostics, field maintenance, and repair resolution.
-                </p>
+                <p className="text-sm font-semibold text-dark-slate">SLA Breached</p>
+                <p className="text-xs text-muted-slate">{urgentTicket.id} · {urgentTicket.facility || 'Facility #1'}</p>
               </div>
-            </div>
+              <ChevronRight className="h-4 w-4 text-muted-slate" />
+            </button>
+          )}
+        </div>
 
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/50 p-6 shadow-level-1">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <div className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+              <span className="text-sm font-bold text-amber-900">Escalated Tickets</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate('/employee/assigned')}
+              className="text-amber-800 hover:text-amber-950 p-1 cursor-pointer"
+              aria-label="Go to assigned"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+          <p className="text-xs text-amber-700 mb-4 font-medium">Requires senior technical review</p>
+          {escalatedTicket && (
+            <button
+              type="button"
+              onClick={() => openTicketFlow(escalatedTicket)}
+              className="w-full flex items-center justify-between rounded-xl border border-amber-200 bg-surface px-4 py-3 shadow-xs hover:border-amber-300 transition-colors text-left cursor-pointer"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="w-2 h-2 bg-red-500 rounded-full shrink-0" />
+                <div>
+                  <p className="text-sm font-semibold text-dark-slate">{escalatedTicket.title}</p>
+                  <p className="text-xs text-muted-slate">{escalatedTicket.id} · {escalatedTicket.facility || 'Facility #1'}</p>
+                </div>
+              </div>
+              <ChevronRight className="h-4 w-4 text-muted-slate" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-6">
+        <div className="rounded-2xl border border-slate-200 bg-surface p-6 shadow-xs flex flex-col gap-5">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-dark-slate">Active Assigned Tickets</h2>
+              <p className="text-xs text-muted-slate mt-0.5">{activeTickets.length} tickets need attention</p>
+            </div>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => navigate('/employee/assigned')}
-              className="text-xs gap-1.5 shrink-0"
+              onClick={goMachine}
+              icon={<ArrowRight className="h-3.5 w-3.5" />}
             >
-              <span>Go to Work Log</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              View All
             </Button>
           </div>
 
-          {/* Assigned Section Partial-Failure State */}
-          {assignedError ? (
-            <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive flex items-center justify-between">
-              <span>{assignedError}</span>
-              <Button variant="outline" size="sm" onClick={() => loadAssigned({ forceRefresh: true })} className="h-7 text-xs">
-                <RefreshCw className="w-3.5 h-3.5 mr-1" /> Retry
-              </Button>
+          <div className="w-full space-y-3 shrink-0">
+            <div className="relative w-full">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-slate" />
+              <input
+                type="search"
+                placeholder="Search ID, title, customer..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full rounded-xl border border-gray-200 bg-surface pl-9 pr-4 py-2.5 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent placeholder:text-muted-slate/60"
+              />
             </div>
-          ) : (
-            <>
-              {/* Summary Cards by Status + SLA Risk Highlights (TS060 Criteria) */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                <MetricCard
-                  title="Open Work"
-                  value={assignedMetrics.open}
-                  subtitle="Awaiting start"
-                  icon={<Inbox className="w-4 h-4 text-primary" />}
-                  loading={loadingAssigned}
-                  onClick={() => navigate('/employee/assigned?status=Open')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="In Progress"
-                  value={assignedMetrics.inProgress}
-                  subtitle="Active work"
-                  icon={<ClipboardList className="w-4 h-4 text-amber-600" />}
-                  loading={loadingAssigned}
-                  onClick={() => navigate('/employee/assigned?status=In+Progress')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="On Hold"
-                  value={assignedMetrics.onHold}
-                  subtitle="Paused tickets"
-                  icon={<PauseCircle className="w-4 h-4 text-slate-600" />}
-                  loading={loadingAssigned}
-                  onClick={() => navigate('/employee/assigned?status=On+Hold')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="Completed / Resolved"
-                  value={assignedMetrics.resolved}
-                  subtitle="Successfully serviced"
-                  icon={<CheckCircle2 className="w-4 h-4 text-emerald-600" />}
-                  loading={loadingAssigned}
-                  onClick={() => navigate('/employee/assigned?status=Resolved')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="Approaching SLA"
-                  value={assignedMetrics.atRisk}
-                  subtitle="At Risk (warning)"
-                  icon={<Clock className="w-4 h-4 text-amber-600" />}
-                  variant="amber"
-                  loading={loadingAssigned}
-                  onClick={() => navigate('/employee/assigned?sla=At+Risk')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="SLA Breached"
-                  value={assignedMetrics.breached}
-                  subtitle="SLA exceeded"
-                  icon={<AlertTriangle className="w-4 h-4 text-rose-600" />}
-                  variant="crimson"
-                  loading={loadingAssigned}
-                  onClick={() => navigate('/employee/assigned?sla=Breached')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-              </div>
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full">
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+              >
+                {['All Status', 'Open', 'In Progress', 'Escalated', 'Pending', 'Pending Reassign', 'On Hold'].map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              <select
+                value={categoryFilter}
+                onChange={(e) => setCategoryFilter(e.target.value)}
+                className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+              >
+                {['All Category', 'MRI', 'CT Scan', 'Ultrasound', 'X-Ray', 'Ventilator', 'Defibrillator'].map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              <select
+                value={priorityFilter}
+                onChange={(e) => setPriorityFilter(e.target.value)}
+                className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+              >
+                {['All Priority', 'Critical', 'High', 'Medium', 'Low'].map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-              {/* Assigned Attention Highlights (TS060 Criteria) */}
-              {assignedAttentionItems.length > 0 && (
-                <div className="rounded-xl border border-rose-200 bg-rose-50/40 p-4 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <AlertTriangle className="w-4 h-4 text-rose-600" />
-                    <h3 className="text-xs font-bold text-rose-900 uppercase tracking-wider">
-                      Assigned Items Needing Immediate Action ({assignedAttentionItems.length})
-                    </h3>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {assignedAttentionItems.map((t) => (
-                      <div
-                        key={t.id}
-                        className="bg-card border border-rose-200/80 rounded-xl p-3 flex items-center justify-between gap-3 shadow-xs"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-xs text-primary">{t.id}</span>
-                            {!t.accepted ? (
-                              <Badge variant="warning" className="text-[10px]">Awaiting Review &amp; Accept</Badge>
-                            ) : (
-                              <Badge variant="destructive" className="text-[10px]">SLA Critical</Badge>
-                            )}
-                          </div>
-                          <p className="text-xs font-medium text-foreground truncate mt-1">{t.title}</p>
-                          <p className="text-[11px] text-muted-foreground">{t.customer} • {t.priority}</p>
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => navigate('/employee/assigned', { state: { focusTicketId: t.id } })}
-                          className="text-xs shrink-0"
-                        >
-                          Review in Work Log
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Active Assigned Tickets Table */}
-              <div className="space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
-                    Active Assigned Work Tickets ({filteredAssigned.length})
-                  </h3>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <div className="relative">
-                      <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                      <input
-                        type="search"
-                        placeholder="Search assigned..."
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        className="h-8 pl-8 pr-3 text-xs bg-muted/30 border border-border rounded-lg outline-none focus:ring-1 focus:ring-primary"
-                      />
-                    </div>
-                    <select
-                      value={statusFilter}
-                      onChange={(e) => setStatusFilter(e.target.value)}
-                      className="h-8 px-2.5 text-xs bg-muted/30 border border-border rounded-lg outline-none"
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[140px]">Ticket ID</TableHead>
+                  <TableHead className="min-w-[260px]">Title</TableHead>
+                  <TableHead className="min-w-[160px]">Customer</TableHead>
+                  <TableHead className="w-[140px]">Status</TableHead>
+                  <TableHead className="w-[120px]">Priority</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filtered.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="py-8 text-center text-xs text-muted-slate">
+                      No tickets match the selected filters.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filtered.map((t) => (
+                    <TableRow
+                      key={t.id}
+                      className="cursor-pointer"
+                      onClick={() => handleViewDashboardTicket(t)}
                     >
-                      {['All Status', 'Open', 'In Progress', 'On Hold', 'Resolved'].map((s) => (
-                        <option key={s} value={s}>{s}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="overflow-hidden rounded-lg border border-border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-[130px]">Ticket ID</TableHead>
-                        <TableHead>Title</TableHead>
-                        <TableHead>Customer / Facility</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Priority</TableHead>
-                        <TableHead className="w-[100px] text-right">Action</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {loadingAssigned ? (
-                        <DataTableSkeleton columns={6} rows={3} />
-                      ) : filteredAssigned.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={6} className="py-6 text-center text-xs text-muted-foreground">
-                            No assigned tickets match the selected filters.
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        filteredAssigned.slice(0, 5).map((t) => (
-                          <TableRow key={t.id} className="hover:bg-muted/40 transition-colors">
-                            <TableCell className="font-semibold text-primary text-xs">
-                              {t.id}
-                            </TableCell>
-                            <TableCell className="font-medium text-foreground text-xs max-w-xs truncate">
-                              {t.title}
-                            </TableCell>
-                            <TableCell className="text-muted-foreground text-xs truncate">
-                              {t.customer || 'Hospital Facility'}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant={getStatusBadgeVariant(t.status)}>{t.status}</Badge>
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant={t.priority === 'Critical' ? 'destructive' : t.priority === 'High' ? 'warning' : 'secondary'}>
-                                {t.priority}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleViewTicketReadOnly(t)}
-                                className="text-xs text-primary hover:text-primary gap-1"
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                                View
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-              </div>
-            </>
-          )}
+                      <TableCell className="font-semibold text-brand-primary">
+                        <div className="flex flex-col">
+                          <span>{t.id}</span>
+                          {!t.accepted && (
+                            <span className="text-[11px] text-amber-700 font-medium">Tap to review</span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="max-w-[300px]">
+                        <span className="line-clamp-2 font-medium text-dark-slate">{t.title}</span>
+                      </TableCell>
+                      <TableCell className="text-muted-slate truncate">{t.customer}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <Badge variant={getStatusBadgeVariant(t.proofRejected ? 'Rejected' : t.status)} dot>
+                            {t.proofRejected ? 'Proof Rejected' : t.status}
+                          </Badge>
+                          {(() => {
+                            const rawSla = t.sla_status || t.slaStatus || (t.sla?.resolution?.status) || (t.sla_breached ? 'Breached' : null);
+                            const normalized = rawSla ? String(rawSla).toLowerCase().replace(/[\s_-]+/g, '') : '';
+                            if (normalized === 'breached' || normalized === 'violated') {
+                              return (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                                  <AlertTriangle className="h-2.5 w-2.5 text-rose-600 shrink-0" />
+                                  <span>Breached</span>
+                                </span>
+                              );
+                            }
+                            return null;
+                          })()}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-xs font-semibold text-muted-slate">{t.priority}</span>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+          <div className="text-xs text-muted-slate">
+            Showing {filtered.length} of {activeTickets.length} active tickets
+          </div>
         </div>
-      )}
 
-      {/* ═════════════════════════════════════════════════════════════════════ */}
-      {/* SECTION 2: REQUESTOR ACTIVITY ("MY REQUESTS")                         */}
-      {/* ═════════════════════════════════════════════════════════════════════ */}
-      {(activeSection === 'all' || activeSection === 'requestor') && (
-        <div className="rounded-2xl border-2 border-accent/20 bg-card p-6 shadow-xs space-y-6">
-          {/* Section Banner Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-accent text-white flex items-center justify-center shrink-0">
-                <Send className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-base font-bold text-foreground">Section II: Requestor Activity (My Requests)</h2>
-                  <Badge variant="outline" className="text-[10px] bg-accent/5 text-accent border-accent/20">
-                    Requestor Role
-                  </Badge>
-                </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Internal support requests you submitted for internal tools, facility issues, or peer technical assistance.
-                </p>
-              </div>
+        <div className="rounded-2xl border border-slate-200 bg-surface p-6 shadow-xs">
+          <div className="flex justify-between items-center mb-5">
+            <div>
+              <h2 className="text-lg font-bold text-dark-slate">My Recent Tickets</h2>
+              <p className="text-xs text-muted-slate mt-0.5">Latest submitted support tickets</p>
             </div>
-
             <Button
               variant="outline"
               size="sm"
               onClick={() => navigate('/employee/my-tickets')}
-              className="text-xs gap-1.5 shrink-0"
+              icon={<ArrowRight className="h-3.5 w-3.5" />}
             >
-              <span>View All Requests</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              View All
             </Button>
           </div>
 
-          {/* Requestor Section Partial-Failure State */}
-          {requestorError ? (
-            <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive flex items-center justify-between">
-              <span>{requestorError}</span>
-              <Button variant="outline" size="sm" onClick={() => loadRequests()} className="h-7 text-xs">
-                <RefreshCw className="w-3.5 h-3.5 mr-1" /> Retry
-              </Button>
-            </div>
-          ) : (
-            <>
-              {/* Summary Cards by Status (TS060 Criteria) */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                <MetricCard
-                  title="Open Requests"
-                  value={requestorMetrics.open}
-                  subtitle="Awaiting triage"
-                  icon={<Inbox className="w-4 h-4 text-accent" />}
-                  loading={loadingRequests}
-                  onClick={() => navigate('/employee/my-tickets?status=Open')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="In Progress"
-                  value={requestorMetrics.inProgress}
-                  subtitle="Being serviced"
-                  icon={<Clock className="w-4 h-4 text-amber-600" />}
-                  loading={loadingRequests}
-                  onClick={() => navigate('/employee/my-tickets?status=In+Progress')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="Resolved (Awaiting Close)"
-                  value={requestorMetrics.resolved}
-                  subtitle="Awaiting your confirm"
-                  icon={<CheckCircle2 className="w-4 h-4 text-emerald-600" />}
-                  variant="emerald"
-                  loading={loadingRequests}
-                  onClick={() => navigate('/employee/my-tickets?status=Resolved')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="Auto-Closing Soon"
-                  value={requestorMetrics.autoClosingSoon}
-                  subtitle="Resolution window active"
-                  icon={<Clock className="w-4 h-4 text-primary" />}
-                  loading={loadingRequests}
-                  onClick={() => navigate('/employee/my-tickets?status=Resolved')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="Closed Requests"
-                  value={requestorMetrics.closed}
-                  subtitle="Past request history"
-                  icon={<CheckCircle2 className="w-4 h-4 text-slate-500" />}
-                  loading={loadingRequests}
-                  onClick={() => navigate('/employee/my-tickets?status=Closed')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-              </div>
-
-              {/* Requestor Attention Highlights (TS060 Criteria: Resolved awaiting confirm or reopened) */}
-              {requestorAttentionItems.length > 0 && (
-                <div className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 text-amber-700" />
-                    <h3 className="text-xs font-bold text-amber-900 uppercase tracking-wider">
-                      Requests Requiring Your Confirmation or Feedback ({requestorAttentionItems.length})
-                    </h3>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {requestorAttentionItems.map((t) => (
-                      <div
-                        key={t.id}
-                        className="bg-card border border-amber-200/80 rounded-xl p-3 flex items-center justify-between gap-3 shadow-xs"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-xs text-primary">{t.id}</span>
-                            <Badge variant={getStatusBadgeVariant(t.status)}>{t.status}</Badge>
-                          </div>
-                          <p className="text-xs font-medium text-foreground truncate mt-1">{t.title}</p>
-                          <p className="text-[11px] text-muted-foreground">
-                            {t.status === 'Resolved' ? 'Technician resolved this. Confirm or reopen before auto-close.' : 'Ticket reopened.'}
-                          </p>
-                        </div>
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[140px]">Ticket ID</TableHead>
+                  <TableHead className="min-w-[280px]">Title</TableHead>
+                  <TableHead className="w-[160px]">Status</TableHead>
+                  <TableHead className="w-[100px] text-center">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {myRecentTickets.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={4} className="py-8 text-center text-xs text-muted-slate">
+                      {loadingMyTickets ? 'Loading recent tickets...' : 'No tickets yet.'}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  myRecentTickets.map((t) => (
+                    <TableRow key={t.id}>
+                      <TableCell className="font-semibold text-brand-primary align-middle">
+                        {t.id}
+                      </TableCell>
+                      <TableCell className="align-middle">
+                        <div className="font-semibold text-dark-slate">{t.title}</div>
+                        <div className="text-xs text-muted-slate mt-0.5">{t.equipment || 'General'}</div>
+                      </TableCell>
+                      <TableCell className="align-middle">
+                        <Badge variant={getStatusBadgeVariant(t.status)} dot>
+                          {t.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-center align-middle">
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => navigate('/employee/my-tickets', { state: { focusTicketId: t.id } })}
-                          className="text-xs shrink-0"
+                          onClick={() => handleViewMyTicket(t)}
+                          icon={<Eye className="h-3.5 w-3.5" />}
                         >
-                          Confirm in My Requests
+                          View
                         </Button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Recent Requests Table */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
-                    Recent Submitted Internal Requests ({myRequests.length})
-                  </h3>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => navigate('/employee/my-tickets')}
-                    className="text-xs text-primary hover:text-primary gap-1"
-                  >
-                    <span>View All ({myRequests.length})</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </Button>
-                </div>
-
-                <div className="overflow-hidden rounded-lg border border-border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-[130px]">Ticket ID</TableHead>
-                        <TableHead>Title</TableHead>
-                        <TableHead>Target Equipment</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead className="w-[100px] text-right">Action</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {loadingRequests ? (
-                        <DataTableSkeleton columns={5} rows={3} />
-                      ) : myRequests.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={5} className="py-6 text-center text-xs text-muted-foreground">
-                            You have not submitted any internal tickets yet.
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        myRequests.slice(0, 5).map((t) => (
-                          <TableRow key={t.id} className="hover:bg-muted/40 transition-colors">
-                            <TableCell className="font-semibold text-primary text-xs">
-                              {t.id}
-                            </TableCell>
-                            <TableCell className="font-medium text-foreground text-xs max-w-xs truncate">
-                              {t.title}
-                            </TableCell>
-                            <TableCell className="text-muted-foreground text-xs truncate">
-                              {t.equipment || 'General System'}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant={getStatusBadgeVariant(t.status)}>{t.status}</Badge>
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleViewTicketReadOnly(t)}
-                                className="text-xs text-primary hover:text-primary gap-1"
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                                View
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-              </div>
-            </>
-          )}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
         </div>
-      )}
+      </div>
 
-      {/* ─── READ-ONLY TICKET DETAILS MODAL ────────────────────────────────── */}
-      {selectedTicket && (
+      {selectedDashboardTicket && (
         <CustomerTicketDetailModal
-          ticket={selectedTicket}
-          onClose={() => setSelectedTicket(null)}
+          ticket={selectedDashboardTicket}
+          onClose={() => setSelectedDashboardTicket(null)}
           onDiscard={null}
           onReopen={null}
           onResolve={null}
           allowReopen={false}
-          customerName={selectedTicket.customer}
-          onViewTicket={(t) => {
-            setSelectedTicket(null);
-            navigate(`/employee/history/${t.ticket_ID || Number(String(t.id).replace(/\D/g, ''))}`);
-          }}
+          customerName={selectedDashboardTicket.customer}
         />
       )}
 
-      {modalLoading && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs">
-          <div className="bg-card border border-border rounded-xl p-6 shadow-xl flex flex-col items-center gap-3 max-w-xs w-full mx-4">
-            <div className="w-8 h-8 border-3 border-primary/20 border-t-primary rounded-full animate-spin" />
-            <p className="text-sm font-semibold text-foreground">Loading ticket details...</p>
+      {selectedMyTicket && (
+        <CustomerTicketDetailModal
+          ticket={selectedMyTicket}
+          onClose={() => setSelectedMyTicket(null)}
+          onDiscard={null}
+          onReopen={(ticketId, reason) => handleReopenMyTicket(ticketId, reason)}
+          onResolve={null}
+        />
+      )}
+
+      {(myTicketsModalLoading || dashboardModalLoading) && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-[1.5px] animate-in fade-in duration-200">
+          <div className="bg-surface rounded-2xl p-6 shadow-level-4 flex flex-col items-center gap-4 max-w-xs w-full mx-4 border border-slate-200">
+            <div className="w-10 h-10 border-4 border-brand-primary/10 border-t-brand-primary rounded-full animate-spin" />
+            <p className="text-sm font-semibold text-brand-primary text-center font-sans">
+              {myTicketsLoadingText}
+            </p>
           </div>
         </div>
       )}
