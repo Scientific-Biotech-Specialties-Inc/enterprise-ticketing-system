@@ -148,6 +148,18 @@ export const uploadAttachments = async (files, isProof = false) => {
   return response.data?.attachments ?? [];
 };
 
+export const getTicketAttachments = async (ticketId) => {
+  const numericId = Number(String(ticketId).replace(/\D/g, ''));
+  if (!numericId) return [];
+  try {
+    const res = await attachmentClient.get(`/attachments?ticket_id=${numericId}`);
+    return res.data?.attachments || [];
+  } catch (err) {
+    console.warn(`Failed to fetch attachments for ticket ${ticketId}:`, err);
+    return [];
+  }
+};
+
 const processPayloadAndUpload = async (payload, isProof = false) => {
   let files = [];
   let existingAttachmentIds = [];

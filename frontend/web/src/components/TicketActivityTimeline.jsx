@@ -15,7 +15,7 @@ import {
   ArrowRight,
   ChevronDown,
 } from 'lucide-react';
-import { formatDisplayDate } from '@/utils/dateUtils';
+import { formatDisplayDate, parseUTCDate } from '@/utils/dateUtils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 
@@ -49,10 +49,14 @@ export default function TicketActivityTimeline({
   const rawEvents = useMemo(() => {
     if (!ticket) return [];
     const list = [];
+    const hasTimeline = Array.isArray(ticket.timeline) && ticket.timeline.length > 0;
 
     // 1. Creation event
     const creationTime = ticket.date || ticket.created_at || ticket.date_created;
-    if (creationTime) {
+    const hasExplicitCreate = hasTimeline && ticket.timeline.some((item) =>
+      item.type === 'creation' || /created|opened/i.test(item.text || '')
+    );
+    if (creationTime && !hasExplicitCreate) {
       list.push({
         id: 'evt-create',
         type: 'creation',
@@ -67,7 +71,10 @@ export default function TicketActivityTimeline({
     }
 
     // 2. Acceptance event
-    if (ticket.accepted) {
+    const hasExplicitAccept = hasTimeline && ticket.timeline.some((item) =>
+      item.type === 'assignment' || /accept/i.test(item.text || '')
+    );
+    if (ticket.accepted && !hasExplicitAccept) {
       list.push({
         id: 'evt-accept',
         type: 'assignment',
@@ -76,12 +83,15 @@ export default function TicketActivityTimeline({
         actorName: ticket.assigned_employee?.name || ticket.assigned_employee || 'Technician',
         actorRole: 'Service Engineer',
         isSystem: false,
-        timestamp: ticket.date || ticket.created_at,
+        timestamp: ticket.accepted_at || ticket.updated_at || ticket.date || ticket.created_at,
       });
     }
 
     // 3. Reassignment Request event
-    if (ticket.reassignmentRequested) {
+    const hasExplicitReassign = hasTimeline && ticket.timeline.some((item) =>
+      item.type === 'reassign' || /reassign/i.test(item.text || '')
+    );
+    if (ticket.reassignmentRequested && !hasExplicitReassign) {
       list.push({
         id: 'evt-reassign-req',
         type: 'reassign',
@@ -90,14 +100,17 @@ export default function TicketActivityTimeline({
         actorName: ticket.assigned_employee?.name || ticket.assigned_employee || 'Technician',
         actorRole: 'Service Engineer',
         isSystem: false,
-        timestamp: ticket.lastUpdate || ticket.updated_at || ticket.date,
+        timestamp: ticket.reassignment_requested_at || ticket.lastUpdate || ticket.updated_at || ticket.date,
       });
     }
 
     // 4. SLA Breach event (TS086 Criteria)
     const rawSla = String(ticket.sla_status || ticket.slaStatus || (ticket.sla?.resolution?.status) || '').toLowerCase();
     const isBreached = rawSla.includes('breach') || rawSla.includes('violated') || ticket.sla_breached;
-    if (isBreached) {
+    const hasExplicitBreach = hasTimeline && ticket.timeline.some((item) =>
+      item.type === 'sla_breach' || /breach/i.test(item.text || '')
+    );
+    if (isBreached && !hasExplicitBreach) {
       list.push({
         id: 'evt-sla-breach',
         type: 'sla_breach',
@@ -111,30 +124,35 @@ export default function TicketActivityTimeline({
     }
 
     // 5. Auto-Close event
-    if (ticket.status === 'Closed' && (ticket.auto_closed || ticket.closed_by === 'system')) {
-      list.push({
-        id: 'evt-autoclose',
-        type: 'system_autoclose',
-        category: 'system',
-        text: 'Ticket closed automatically by system due to customer inactivity following the resolution window.',
-        actorName: 'System Scheduler',
-        actorRole: 'Automated System Daemon',
-        isSystem: true,
-        timestamp: ticket.closed_at || ticket.updated_at || ticket.lastUpdate,
-        beforeAfter: { field: 'Status', before: 'Resolved', after: 'Closed' },
-      });
-    } else if (ticket.status === 'Closed') {
-      list.push({
-        id: 'evt-close-manual',
-        type: 'status_close',
-        category: 'status',
-        text: `Ticket closed by ${ticket.closed_by || 'Customer Service'}.`,
-        actorName: ticket.closed_by || 'Customer Service',
-        actorRole: 'Customer Service Representative',
-        isSystem: false,
-        timestamp: ticket.closed_at || ticket.updated_at || ticket.lastUpdate,
-        beforeAfter: { field: 'Status', before: 'Resolved', after: 'Closed' },
-      });
+    const hasExplicitClose = hasTimeline && ticket.timeline.some((item) =>
+      item.type === 'system_autoclose' || item.type === 'status_close' || /closed/i.test(item.text || '')
+    );
+    if (ticket.status === 'Closed' && !hasExplicitClose) {
+      if (ticket.auto_closed || ticket.closed_by === 'system') {
+        list.push({
+          id: 'evt-autoclose',
+          type: 'system_autoclose',
+          category: 'system',
+          text: 'Ticket closed automatically by system due to customer inactivity following the resolution window.',
+          actorName: 'System Scheduler',
+          actorRole: 'Automated System Daemon',
+          isSystem: true,
+          timestamp: ticket.closed_at || ticket.updated_at || ticket.lastUpdate,
+          beforeAfter: { field: 'Status', before: 'Resolved', after: 'Closed' },
+        });
+      } else {
+        list.push({
+          id: 'evt-close-manual',
+          type: 'status_close',
+          category: 'status',
+          text: `Ticket closed by ${ticket.closed_by || 'Customer Service'}.`,
+          actorName: ticket.closed_by || 'Customer Service',
+          actorRole: 'Customer Service Representative',
+          isSystem: false,
+          timestamp: ticket.closed_at || ticket.updated_at || ticket.lastUpdate,
+          beforeAfter: { field: 'Status', before: 'Resolved', after: 'Closed' },
+        });
+      }
     }
 
     // 6. Integrate backend timeline array
@@ -204,7 +222,7 @@ export default function TicketActivityTimeline({
           actorName: item.actorName || item.actor || actorName,
           actorRole: item.actorRole || actorRole,
           isSystem,
-          timestamp: item.timestamp || ticket.updated_at || ticket.date,
+          timestamp: item.timestamp || item.created_at || item.updated_at || ticket.updated_at || ticket.created_at || ticket.date,
           beforeAfter,
         });
       });
@@ -237,8 +255,8 @@ export default function TicketActivityTimeline({
     }
 
     return [...result].sort((a, b) => {
-      const dateA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-      const dateB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      const dateA = a.timestamp ? (parseUTCDate(a.timestamp)?.getTime() || new Date(a.timestamp).getTime()) : 0;
+      const dateB = b.timestamp ? (parseUTCDate(b.timestamp)?.getTime() || new Date(b.timestamp).getTime()) : 0;
       return sortOrder === 'asc' ? dateA - dateB : dateB - dateA;
     });
   }, [rawEvents, selectedFilter, sortOrder]);

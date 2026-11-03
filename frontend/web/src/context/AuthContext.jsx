@@ -76,40 +76,89 @@ export const resolveUserDepartment = (user) => {
   return '';
 };
 
-const checkIsCS = (user) => {
+export const checkIsItManager = (user) => {
   if (!user) return false;
+  const role = resolveUserRole(user).toLowerCase();
+  const dept = resolveUserDepartment(user).toLowerCase();
+  return (
+    role === 'it_manager' ||
+    role === 'it manager' ||
+    role === 'it department manager' ||
+    (dept.includes('it') && role.includes('manager'))
+  );
+};
+
+export const checkIsServiceManager = (user) => {
+  if (!user) return false;
+  const role = resolveUserRole(user).toLowerCase();
+  const dept = resolveUserDepartment(user).toLowerCase();
+  const posLevel = (user.position_level || user.profile?.position_level || '').toLowerCase();
+  const email = (user.email || '').toLowerCase();
+  if (email === 'carlos.mendoza@hospital.com') return true;
+  return (
+    role === 'service_manager' ||
+    role === 'service manager' ||
+    role === 'service department manager' ||
+    role === 'lead service engineer' ||
+    ((dept.includes('service') || dept.includes('biomedical') || dept.includes('radiology') || dept.includes('facilities')) && (role.includes('manager') || posLevel === 'manager'))
+  );
+};
+
+export const checkIsCSManager = (user) => {
+  if (!user) return false;
+  const role = resolveUserRole(user).toLowerCase();
+  const dept = resolveUserDepartment(user).toLowerCase();
+  const posLevel = (user.position_level || user.profile?.position_level || '').toLowerCase();
+  const email = (user.email || '').toLowerCase();
+  if (email === 'headofcs@gmail.com') return true;
+  return (
+    role === 'cs_manager' ||
+    role === 'cs manager' ||
+    role === 'customer_service_manager' ||
+    role === 'customer service manager' ||
+    role === 'customer support manager' ||
+    role === 'head of cs' ||
+    role === 'head of customer service' ||
+    role === 'head cs' ||
+    ((dept.includes('customer service') || dept.includes('customer support') || dept === 'cs') && (role.includes('manager') || role.includes('head') || posLevel === 'manager'))
+  );
+};
+
+export const checkIsCS = (user) => {
+  if (!user) return false;
+  if (checkIsCSManager(user)) return false;
   const dept = resolveUserDepartment(user).toLowerCase();
   const role = resolveUserRole(user).toLowerCase();
   if (dept.includes('customer service') || dept.includes('customer support') || dept === 'cs') return true;
   return (
     role.includes('customer service') ||
     role.includes('customer-service') ||
-    role.includes('head of cs') ||
-    role.includes('head of customer service') ||
-    role === 'cs' ||
-    role === 'head cs'
+    role === 'cs'
   );
 };
 
-const checkIsSuperAdmin = (user) => {
+export const checkIsSuperAdmin = (user) => {
   if (!user) return false;
   const role = resolveUserRole(user).toLowerCase();
   const dept = resolveUserDepartment(user).toLowerCase();
   return role === 'superadmin' || role === 'super admin' || dept === 'superadmin' || dept === 'super admin';
 };
 
-const checkIsAdmin = (user) => {
+export const checkIsAdmin = (user) => {
   if (!user) return false;
   const role = resolveUserRole(user).toLowerCase();
   const dept = resolveUserDepartment(user).toLowerCase();
   return role === 'admin' || role === 'it admin' || (dept === 'admin' && role !== 'superadmin' && role !== 'super admin');
 };
 
-const checkIsEmployee = (user) => {
+export const checkIsEmployee = (user) => {
   if (!user) return false;
   if (checkIsCS(user)) return false;
+  if (checkIsCSManager(user)) return false;
   if (checkIsAdmin(user)) return false;
   if (checkIsSuperAdmin(user)) return false;
+  if (checkIsItManager(user)) return false;
+  if (checkIsServiceManager(user)) return false;
   const dept = resolveUserDepartment(user).toLowerCase();
   const role = resolveUserRole(user).toLowerCase();
   if (dept === 'service' || dept.includes('engineer')) return true;

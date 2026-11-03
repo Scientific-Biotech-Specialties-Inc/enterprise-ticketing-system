@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Inbox, Clock, CheckCircle2, Archive, Bot, Eye, ArrowRight, Plus } from 'lucide-react';
+import { Inbox, Clock, CheckCircle2, Archive, Bot, Eye, ArrowRight } from 'lucide-react';
 import TicketModal from '@/components/TicketModal';
 import CustomerTicketDetailModal from '@/components/CustomerTicketDetailModal';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
@@ -181,6 +181,7 @@ export default function CustomerDashboard() {
         resolved_at: fullTicket.resolved_at || null,
         proofAttachments: fullTicket.proofAttachments || [],
         proofFiles: fullTicket.proofFiles || [],
+        attachments: fullTicket.attachments || fullTicket.ticket_attachments || t.attachments || [],
         can_discard: (fullTicket.status || t.status) === 'Open' && !fullTicket.assigned_to,
       });
     } catch (err) {
@@ -352,14 +353,6 @@ export default function CustomerDashboard() {
               AI Support Assistant
             </Button>
           </Link>
-          <Button
-            variant="secondary"
-            onClick={() => setIsTicketModalOpen(true)}
-            className="bg-white text-primary hover:bg-white/90 text-xs font-semibold"
-          >
-            <Plus className="h-4 w-4 mr-1" />
-            Create Ticket
-          </Button>
         </div>
       </div>
 
@@ -461,7 +454,7 @@ export default function CustomerDashboard() {
                     )}
                   </TableCell>
                   <TableCell>
-                    <Badge variant={getStatusBadgeVariant(t.status)} dot>
+                    <Badge variant={getStatusBadgeVariant(t.status)}>
                       {t.status}
                     </Badge>
                   </TableCell>

@@ -446,17 +446,34 @@ class EmailConfigurationController extends Controller
         $subject = str_replace(array_keys($placeholders), array_values($placeholders), $template->subject);
         $body = str_replace(array_keys($placeholders), array_values($placeholders), $template->body);
 
+        $ticketLink = $data['ticket_link'] ?? $placeholders['{ticket_link}'] ?? null;
+        if (!$ticketLink && (!empty($data['ticket_id']) || !empty($data['ticket_number']))) {
+            $tNum = preg_replace('/\D/', '', (string) ($data['ticket_id'] ?? $data['ticket_number'] ?? ''));
+            $customerUrl = env('CUSTOMER_PORTAL_URL', env('CUSTOMER_FRONTEND_URL', 'http://localhost:5006'));
+            $ticketLink = rtrim($customerUrl, '/') . "/my-tickets?ticketId={$tNum}";
+        }
+
+        $ctaButtonHtml = '';
+        if ($ticketLink) {
+            $ctaButtonHtml = '
+                <div style="margin-top: 28px; text-align: left;">
+                    <a href="' . htmlspecialchars($ticketLink) . '" target="_blank" style="display: inline-block; background-color: #252578; color: #ffffff !important; text-decoration: none; padding: 12px 26px; border-radius: 8px; font-weight: 700; font-size: 14px; box-shadow: 0 2px 4px rgba(37,37,120,0.2);">View Ticket Details</a>
+                </div>
+            ';
+        }
+
         $html = '
-            <div style="font-family: Arial, -apple-system, BlinkMacSystemFont, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
-                <div style="background-color: #252578; color: #ffffff; padding: 20px 24px;">
-                    <h2 style="margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.025em;">SBSI Enterprise Support Desk</h2>
-                    <p style="margin: 4px 0 0 0; font-size: 12px; opacity: 0.85;">' . htmlspecialchars($subject) . '</p>
+            <div style="font-family: Arial, -apple-system, BlinkMacSystemFont, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+                <div style="background-color: #252578; color: #ffffff; padding: 24px 28px;">
+                    <h2 style="margin: 0; font-size: 19px; font-weight: 700; color: #ffffff; letter-spacing: -0.025em;">SBSI Enterprise Support Desk</h2>
+                    <p style="margin: 6px 0 0 0; font-size: 12px; color: #cbd5e1;">' . htmlspecialchars($subject) . '</p>
                 </div>
-                <div style="padding: 24px; color: #374151; font-size: 14px; line-height: 1.6;">
+                <div style="padding: 28px; color: #1e293b; font-size: 14px; line-height: 1.6;">
                     ' . $body . '
+                    ' . $ctaButtonHtml . '
                 </div>
-                <div style="background-color: #f9fafb; border-top: 1px solid #e5e7eb; padding: 16px 24px; font-size: 12px; color: #6b7280;">
-                    <p style="margin: 0; font-size: 11px; color: #9ca3af;">This is an automated notification from SBSI Enterprise Ticketing System. Please do not reply directly to this email.</p>
+                <div style="background-color: #f8f9fa; border-top: 1px solid #e2e8f0; padding: 18px 28px; font-size: 12px; color: #8d8b8f;">
+                    <p style="margin: 0; font-size: 11px; color: #8d8b8f; line-height: 1.5;">This is an automated notification from SBSI Enterprise Ticketing System. Please do not reply directly to this email.</p>
                 </div>
             </div>
         ';

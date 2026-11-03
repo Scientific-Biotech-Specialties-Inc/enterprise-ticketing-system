@@ -1121,12 +1121,33 @@ class TicketService
         } else {
             $attachments = [];
             try {
-                $resp = Http::timeout(1.5)->get("http://attachment-service:8000/api/attachments?ticket_id={$ticketId}");
+                $resp = Http::timeout(5.0)->get("http://attachment-service:8000/api/attachments?ticket_id={$ticketId}");
                 if ($resp->successful()) {
                     $attachments = $resp->json('attachments') ?? [];
                 }
             } catch (\Exception $e) {
                 Log::warning("Failed to fetch attachments for ticket {$ticketId}: " . $e->getMessage());
+            }
+
+            if (empty($attachments)) {
+                try {
+                    $dbAttachments = DB::table('ticket_attachments')
+                        ->where('ticket_id', $ticketId)
+                        ->get()
+                        ->map(function ($row) {
+                            return [
+                                'id' => $row->attachment_id ?? $row->id,
+                                'name' => $row->file_name ?? $row->name,
+                                'url' => str_starts_with($row->file_path ?? '', 'http') ? $row->file_path : '/storage/' . ($row->file_path ?? ''),
+                                'file_type' => $row->file_type ?? null,
+                                'uploaded_at' => $row->uploaded_at ?? $row->created_at ?? null,
+                            ];
+                        })
+                        ->all();
+                    if (!empty($dbAttachments)) {
+                        $attachments = $dbAttachments;
+                    }
+                } catch (\Throwable $e) {}
             }
 
             $proofAttachments = [];

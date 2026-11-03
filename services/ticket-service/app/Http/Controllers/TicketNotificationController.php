@@ -31,6 +31,7 @@ class TicketNotificationController extends Controller
             ->orderBy('created_at', 'desc')
             ->get()
             ->map(function ($n) {
+                $n->is_read = (bool) $n->is_read;
                 if (!empty($n->created_at)) {
                     $n->created_at = \Carbon\Carbon::parse($n->created_at)->toISOString();
                 }
