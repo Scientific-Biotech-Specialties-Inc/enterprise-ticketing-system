@@ -10,7 +10,7 @@ let mockLocationSearch = '';
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
-  useLocation: () => ({ search: mockLocationSearch }),
+  useLocation: () => ({ pathname: '/superadmin/audit-logs', search: mockLocationSearch }),
 }));
 
 vi.mock('@/context/AuthContext', () => ({
@@ -153,23 +153,34 @@ describe('System & Security Alert Unit and Integration Tests', () => {
       },
     ]);
 
-    render(<SuperAdminAuditLogs />);
-
-    await waitFor(() => {
-      expect(screen.getByText(/All Audit Logs/i)).toBeInTheDocument();
-      expect(screen.getByText(/Security & System Incidents/i)).toBeInTheDocument();
-      expect(screen.getByText(/Updated ticket category name/i)).toBeInTheDocument();
+    ticketService.getSecurityIncidentDetail.mockResolvedValue({
+      incident: {
+        incident_id: 'INC-SQL-901',
+        category: 'sql_error',
+        severity: 'critical',
+        title: 'SQL query syntax error detected',
+        message: 'SQL query syntax error detected',
+        service: 'ticket-service',
+      },
+      context: {},
     });
 
-    // Switch to Security tab
-    const securityTab = screen.getByText(/Security & System Incidents/i);
-    fireEvent.click(securityTab);
+    render(<SuperAdminAuditLogs />);
+
+    // Incidents are merged into the single Audit Log Trail, shown inline with severity and burst badges.
+    await waitFor(() => {
+      expect(screen.getByText('Audit Log Trail')).toBeInTheDocument();
+      expect(screen.getByText(/Updated ticket category name/i)).toBeInTheDocument();
+      expect(screen.getByText(/SQL query syntax error detected/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/\+3 bursts/i)).toBeInTheDocument();
+    expect(screen.getByText(/critical/i)).toBeInTheDocument();
+
+    // Clicking the incident row opens the incident inspection modal.
+    fireEvent.click(screen.getByText(/\+3 bursts/i).closest('tr'));
 
     await waitFor(() => {
-      expect(screen.queryByText(/Updated ticket category name/i)).not.toBeInTheDocument();
-      expect(screen.getByText(/SQL query syntax error detected/i)).toBeInTheDocument();
-      expect(screen.getByText(/\+3 bursts/i)).toBeInTheDocument();
-      expect(screen.getByText(/critical/i)).toBeInTheDocument();
+      expect(ticketService.getSecurityIncidentDetail).toHaveBeenCalled();
     });
   });
 

@@ -19,7 +19,11 @@ import {
   getCSIncomingTickets,
   getReassignmentRequests,
   getTicketDetails,
+  getAssignableEmployees,
+  getDepartments,
+  acceptTicket,
 } from '@/services/ticketService';
+import { AssignModal } from '@/components/CSModals';
 import { useAuth } from '@/context/AuthContext';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import { formatDisplayDate } from '@/utils/dateUtils';
@@ -68,6 +72,24 @@ export default function CSDashboard() {
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [modalLoading, setModalLoading] = useState(false);
   const [newTicketId, setNewTicketId] = useState(null);
+  const [assignModalTicket, setAssignModalTicket] = useState(null);
+  const [assignEmployees, setAssignEmployees] = useState([]);
+  const [assignDepartments, setAssignDepartments] = useState([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    Promise.all([
+      getAssignableEmployees({ forceRefresh: false }).catch(() => []),
+      getDepartments({ forceRefresh: false }).catch(() => []),
+    ]).then(([emps, deps]) => {
+      if (!isMounted) return;
+      setAssignEmployees(Array.isArray(emps) ? emps : (emps?.data || []));
+      setAssignDepartments(Array.isArray(deps) ? deps : (deps?.data || ['Service', 'IT Department', 'Customer Service']));
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
   const newTicketTimerRef = useRef(null);
 
   const displayName = user?.first_name
@@ -259,8 +281,8 @@ export default function CSDashboard() {
     deferRefresh: false,
   });
 
-  // Read-only modal viewer (TS059: strictly read-only, no inline assign/resolve)
-  const handleViewTicketReadOnly = useCallback(async (t) => {
+  // Contextual ticket details modal viewer with assignment dispatch
+  const handleViewTicket = useCallback(async (t) => {
     setModalLoading(true);
     try {
       const ticketId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
@@ -272,6 +294,24 @@ export default function CSDashboard() {
       setModalLoading(false);
     }
   }, []);
+
+  // Assign employees to a ticket from the dashboard. Resolves true on success so
+  // AssignModal can close itself, or throws so the modal can show the error.
+  const handleAssignSave = useCallback(async (updated) => {
+    const priorityMap = { Low: 1, Medium: 2, High: 3, Critical: 4 };
+    const targetTicketId = updated.ticket_ID || Number(String(updated.id || '').replace(/\D/g, ''));
+
+    await acceptTicket({
+      ticketId: targetTicketId,
+      employeeIds: updated.assigned,
+      assignedByEmail: user?.email,
+      priorityId: priorityMap[updated.priority] ?? 1,
+    });
+
+    window.dispatchEvent(new Event('notifications:updated'));
+    loadDashboardData({ forceRefresh: true });
+    return true;
+  }, [user?.email, loadDashboardData]);
 
   return (
     <div className="space-y-6 w-full min-w-0 max-w-full">
@@ -446,7 +486,11 @@ export default function CSDashboard() {
               </TableHeader>
               <TableBody>
                 {attentionTickets.map((t) => (
-                  <TableRow key={t.id} className="hover:bg-muted/40 transition-colors">
+                  <TableRow
+                    key={t.id}
+                    onClick={() => handleViewTicket(t)}
+                    className="hover:bg-muted/40 transition-colors cursor-pointer"
+                  >
                     <TableCell className="font-semibold text-primary text-xs whitespace-nowrap">
                       {t.id}
                     </TableCell>
@@ -479,9 +523,12 @@ export default function CSDashboard() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => navigate('/ticketing/cs/incoming', { state: { focusTicketId: t.id } })}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleViewTicket(t);
+                        }}
                         className="text-xs text-primary hover:text-primary gap-1"
-                        title="Triage this ticket in Incoming Queue"
+                        title="Triage this ticket"
                       >
                         <span>Triage</span>
                         <ExternalLink className="w-3 h-3" />
@@ -543,7 +590,7 @@ export default function CSDashboard() {
               {queuedTickets.map((t) => (
                 <div
                   key={t.id}
-                  onClick={() => handleViewTicketReadOnly(t)}
+                  onClick={() => handleViewTicket(t)}
                   className="flex items-center justify-between p-3 rounded-lg border border-border/80 hover:bg-muted/40 transition-colors cursor-pointer"
                 >
                   <div className="min-w-0 pr-3">
@@ -646,7 +693,7 @@ export default function CSDashboard() {
 
       </div>
 
-      {/* ─── READ-ONLY TICKET DETAILS MODAL (No inline actions) ────────────── */}
+      {/* ─── TICKET DETAILS MODAL WITH ACTIVE ASSIGNMENT DISPATCH ────────────── */}
       {selectedTicket && (
         <CustomerTicketDetailModal
           ticket={selectedTicket}
@@ -656,11 +703,26 @@ export default function CSDashboard() {
           onResolve={null}
           allowReopen={false}
           customerName={selectedTicket.customer}
-          onAssign={null} // Read-only enforcement: no assignment from dashboard
+          onAssign={(t) => {
+            const ticketToAssign = t || selectedTicket;
+            setSelectedTicket(null);
+            setAssignModalTicket(ticketToAssign);
+          }}
           onViewTicket={(t) => {
             setSelectedTicket(null);
             navigate(`/cs/history/${t.ticket_ID || Number(String(t.id).replace(/\D/g, ''))}`);
           }}
+        />
+      )}
+
+      {assignModalTicket && (
+        <AssignModal
+          ticket={assignModalTicket}
+          employees={assignEmployees}
+          departments={assignDepartments}
+          priorityOptions={['Low', 'Medium', 'High', 'Critical']}
+          onClose={() => setAssignModalTicket(null)}
+          onSave={handleAssignSave}
         />
       )}
 

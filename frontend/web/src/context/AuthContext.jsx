@@ -160,32 +160,17 @@ const persistStoredUser = (userData) => {
       return;
     }
     sessionStorage.setItem('user', JSON.stringify(userData));
-    // For customers, also persist in localStorage. For employees/admins, keep existing localStorage
-    // user intact (do not delete) so Central Auth Module SSO session is preserved.
-    if (!checkIsSuperAdmin(userData) && !checkIsEmployee(userData) && !checkIsAdmin(userData)) {
-      localStorage.setItem('user', JSON.stringify(userData));
-    }
+
+    // Overwriting the key replaces any stale record from a different account or role.
+    localStorage.setItem('user', JSON.stringify(userData));
   } catch {}
 };
 
-const clearStoredUser = (forceAll = false) => {
+const clearStoredUser = () => {
   try {
     sessionStorage.removeItem('user');
-    if (forceAll) {
-      localStorage.removeItem('user');
-      return;
-    }
-    const raw = localStorage.getItem('user');
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw);
-        if (!checkIsSuperAdmin(parsed) && !checkIsEmployee(parsed) && !checkIsAdmin(parsed) && !checkIsCS(parsed)) {
-          localStorage.removeItem('user');
-        }
-      } catch {
-        localStorage.removeItem('user');
-      }
-    }
+    sessionStorage.removeItem('first_login_pending');
+    localStorage.removeItem('user');
   } catch {}
 };
 
@@ -542,7 +527,7 @@ export function AuthProvider({ children }) {
     } catch {
       // Background logout cleanup failed silently
     } finally {
-      clearStoredUser(true);
+      clearStoredUser();
       localStorage.removeItem(LOCKOUT_STORAGE_KEY);
       sessionStorage.removeItem('first_login_pending');
       tokenStore.clearToken();

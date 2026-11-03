@@ -150,7 +150,7 @@ export default function TicketActivityTimeline({
         let isSystem = false;
         let category = 'status';
 
-        const txt = String(item.text || '');
+        const txt = String(item.text || item.title || '');
 
         if (/by customer/i.test(txt)) {
           actorName = ticket.customer || 'Customer';
@@ -201,7 +201,7 @@ export default function TicketActivityTimeline({
           type: item.type || 'update',
           category,
           text: txt,
-          actorName: item.actorName || actorName,
+          actorName: item.actorName || item.actor || actorName,
           actorRole: item.actorRole || actorRole,
           isSystem,
           timestamp: item.timestamp || ticket.updated_at || ticket.date,
@@ -356,7 +356,9 @@ export default function TicketActivityTimeline({
                     )}
 
                     <span className="text-[10px] uppercase font-semibold text-muted-foreground">
-                      {evt.type === 'creation'
+                      {evt.type === 'reminder'
+                        ? 'CS Reminder'
+                        : evt.type === 'creation'
                         ? 'Ticket Created'
                         : evt.type === 'sla_breach'
                         ? 'SLA Breach'

@@ -1,3 +1,4 @@
+import SkeletonLoader from '@/components/SkeletonLoader.jsx';
 import React, { useEffect } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth, resolveUserRole, resolveUserDepartment } from '@/context/AuthContext';
@@ -131,12 +132,29 @@ export default function PrivateRoute({ children, role }) {
     }
   }, [isAuthenticated, location.pathname]);
 
-  if (isLoading) {
+  if (isLoading || (isAuthenticated && !user)) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500" />
-          <p className="mt-4 text-gray-600">Loading...</p>
+      <div className="min-h-screen flex flex-col justify-start p-8 bg-page text-dark-slate space-y-6">
+        <div className="flex justify-between items-center w-full mx-auto mb-4">
+          <SkeletonLoader className="h-10 w-48" />
+          <SkeletonLoader className="h-10 w-24 rounded-full" />
+        </div>
+        <div className="w-full mx-auto grid grid-cols-1 md:grid-cols-4 gap-6">
+          <SkeletonLoader className="h-32 rounded-2xl" variant="default" />
+          <SkeletonLoader className="h-32 rounded-2xl" variant="default" />
+          <SkeletonLoader className="h-32 rounded-2xl" variant="default" />
+          <SkeletonLoader className="h-32 rounded-2xl" variant="default" />
+        </div>
+        <div className="w-full mx-auto bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
+          <div className="space-y-4">
+            <SkeletonLoader className="h-8 w-1/3 mb-6" />
+            <div className="space-y-3">
+              <SkeletonLoader className="h-12 w-full rounded-xl" />
+              <SkeletonLoader className="h-12 w-full rounded-xl" />
+              <SkeletonLoader className="h-12 w-full rounded-xl" />
+              <SkeletonLoader className="h-12 w-full rounded-xl" />
+            </div>
+          </div>
         </div>
       </div>
     );

@@ -19,15 +19,21 @@ import {
   Briefcase,
   User,
   AlertCircle,
+  Loader2,
 } from 'lucide-react';
 import CustomerTicketDetailModal from '@/components/CustomerTicketDetailModal';
+import TicketDetailModal from '@/components/employee/TicketDetailModal';
+import TicketInfoModal from '@/components/employee/TicketInfoModal';
+import ReassignmentModal from '@/components/employee/ReassignmentModal';
 import { useAuth } from '@/context/AuthContext';
+import { useToast } from '@/context/ToastContext';
 import {
   getEmployeeAssignedTickets,
   getTicketDetails,
   getInternalTickets,
   getEmployeeProfile,
   clearEmployeeTicketsCache,
+  acceptTicket,
 } from '@/services/ticketService';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import { DashboardHeader } from '@/components/ui/page-header';
@@ -60,8 +66,13 @@ export default function EmployeeDashboard() {
   const [statusFilter, setStatusFilter] = useState('All Status');
   const [priorityFilter, setPriorityFilter] = useState('All Priority');
 
-  // Read-only Modal state
-  const [selectedTicket, setSelectedTicket] = useState(null);
+  // Contextual Modal states
+  const [pendingTicket, setPendingTicket] = useState(null);
+  const [infoTicket, setInfoTicket] = useState(null);
+  const [reassignTicket, setReassignTicket] = useState(null);
+  const [requestorDetailTicket, setRequestorDetailTicket] = useState(null);
+  const [isAccepting, setIsAccepting] = useState(false);
+  const toast = useToast();
   const [modalLoading, setModalLoading] = useState(false);
 
   const displayName = user?.first_name
@@ -240,19 +251,78 @@ export default function EmployeeDashboard() {
     }).slice(0, 4);
   }, [myRequests]);
 
-  // Read-only modal viewer (Strict Read-Only Enforcement)
-  const handleViewTicketReadOnly = useCallback(async (t) => {
+  const openContextualTicketModal = useCallback(async (t) => {
+    setModalLoading(true);
+    let fullTicket = t;
+    try {
+      const ticketId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
+      const full = await getTicketDetails(ticketId);
+      fullTicket = { ...t, ...full, description: full?.description || t.description || '' };
+    } catch {
+      // fallback
+    } finally {
+      setModalLoading(false);
+    }
+
+    if (!fullTicket.accepted) {
+      setPendingTicket(fullTicket);
+    } else {
+      setInfoTicket(fullTicket);
+    }
+  }, []);
+
+  const openRequestorModal = useCallback(async (t) => {
     setModalLoading(true);
     try {
       const ticketId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
       const full = await getTicketDetails(ticketId);
-      setSelectedTicket({ ...t, ...full, description: full?.description || t.description || '' });
+      setRequestorDetailTicket({ ...t, ...full, description: full?.description || t.description || '' });
     } catch {
-      setSelectedTicket(t);
+      setRequestorDetailTicket(t);
     } finally {
       setModalLoading(false);
     }
   }, []);
+
+  const handleAcceptAssignment = useCallback(async (id) => {
+    const numericId = typeof id === 'number' ? id : Number(String(id || '').replace(/\D/g, ''));
+    setIsAccepting(true);
+    try {
+      await acceptTicket({ ticketId: numericId });
+      setIsAccepting(false);
+      setPendingTicket(null);
+      setAssignedTickets((prev) =>
+        prev.map((t) => (t.id === id || t.ticket_ID === numericId ? { ...t, accepted: true, status: 'In Progress' } : t))
+      );
+      window.dispatchEvent(new Event('notifications:updated'));
+      loadAssigned({ forceRefresh: true });
+    } catch (err) {
+      console.error('Failed to accept assignment:', err);
+      setIsAccepting(false);
+      toast.error(
+        err?.response?.data?.message || 'Could not accept this assignment. It may have been reassigned or updated. Please refresh and try again.',
+        'Accept failed'
+      );
+    }
+  }, [loadAssigned, toast]);
+
+  const handleReassignSuccess = useCallback((id, reason) => {
+    setReassignTicket(null);
+    setAssignedTickets((prev) =>
+      prev.map((t) =>
+        t.id === id || t.ticket_ID === id
+          ? {
+              ...t,
+              reassignmentRequested: true,
+              reassignmentStatus: 'Pending',
+              reassignmentReason: reason,
+              status: 'Pending Reassignment',
+            }
+          : t
+      )
+    );
+    loadAssigned({ forceRefresh: true });
+  }, [loadAssigned]);
 
   return (
     <div className="space-y-6 w-full min-w-0 max-w-full">
@@ -415,7 +485,8 @@ export default function EmployeeDashboard() {
                     {assignedAttentionItems.map((t) => (
                       <div
                         key={t.id}
-                        className="bg-card border border-rose-200/80 rounded-xl p-3 flex items-center justify-between gap-3 shadow-xs"
+                        onClick={() => openContextualTicketModal(t)}
+                        className="bg-card border border-rose-200/80 rounded-xl p-3 flex items-center justify-between gap-3 shadow-xs cursor-pointer hover:bg-rose-50/50 transition-colors"
                       >
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
@@ -432,10 +503,13 @@ export default function EmployeeDashboard() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => navigate('/employee/assigned', { state: { focusTicketId: t.id } })}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openContextualTicketModal(t);
+                          }}
                           className="text-xs shrink-0"
                         >
-                          Review in Work Log
+                          {!t.accepted ? 'Accept / Review' : 'Update Ticket'}
                         </Button>
                       </div>
                     ))}
@@ -495,7 +569,11 @@ export default function EmployeeDashboard() {
                         </TableRow>
                       ) : (
                         filteredAssigned.slice(0, 5).map((t) => (
-                          <TableRow key={t.id} className="hover:bg-muted/40 transition-colors">
+                          <TableRow
+                            key={t.id}
+                            onClick={() => openContextualTicketModal(t)}
+                            className="hover:bg-muted/40 transition-colors cursor-pointer"
+                          >
                             <TableCell className="font-semibold text-primary text-xs">
                               {t.id}
                             </TableCell>
@@ -517,11 +595,14 @@ export default function EmployeeDashboard() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => handleViewTicketReadOnly(t)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openContextualTicketModal(t);
+                                }}
                                 className="text-xs text-primary hover:text-primary gap-1"
                               >
                                 <Eye className="w-3.5 h-3.5" />
-                                View
+                                {!t.accepted ? 'Review & Accept' : 'Update'}
                               </Button>
                             </TableCell>
                           </TableRow>
@@ -644,7 +725,8 @@ export default function EmployeeDashboard() {
                     {requestorAttentionItems.map((t) => (
                       <div
                         key={t.id}
-                        className="bg-card border border-amber-200/80 rounded-xl p-3 flex items-center justify-between gap-3 shadow-xs"
+                        onClick={() => openRequestorModal(t)}
+                        className="bg-card border border-amber-200/80 rounded-xl p-3 flex items-center justify-between gap-3 shadow-xs cursor-pointer hover:bg-amber-50/50 transition-colors"
                       >
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
@@ -659,10 +741,13 @@ export default function EmployeeDashboard() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => navigate('/employee/my-tickets', { state: { focusTicketId: t.id } })}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openRequestorModal(t);
+                          }}
                           className="text-xs shrink-0"
                         >
-                          Confirm in My Requests
+                          Confirm / View
                         </Button>
                       </div>
                     ))}
@@ -709,7 +794,11 @@ export default function EmployeeDashboard() {
                         </TableRow>
                       ) : (
                         myRequests.slice(0, 5).map((t) => (
-                          <TableRow key={t.id} className="hover:bg-muted/40 transition-colors">
+                          <TableRow
+                            key={t.id}
+                            onClick={() => openRequestorModal(t)}
+                            className="hover:bg-muted/40 transition-colors cursor-pointer"
+                          >
                             <TableCell className="font-semibold text-primary text-xs">
                               {t.id}
                             </TableCell>
@@ -726,7 +815,10 @@ export default function EmployeeDashboard() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => handleViewTicketReadOnly(t)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openRequestorModal(t);
+                                }}
                                 className="text-xs text-primary hover:text-primary gap-1"
                               >
                                 <Eye className="w-3.5 h-3.5" />
@@ -745,18 +837,50 @@ export default function EmployeeDashboard() {
         </div>
       )}
 
-      {/* ─── READ-ONLY TICKET DETAILS MODAL ────────────────────────────────── */}
-      {selectedTicket && (
+      {/* Modal: Unaccepted ticket (Accept / Request Reassignment) */}
+      {pendingTicket && (
+        <TicketDetailModal
+          ticket={pendingTicket}
+          onClose={() => setPendingTicket(null)}
+          onAccept={handleAcceptAssignment}
+          onRequestReassign={(t) => {
+            setPendingTicket(null);
+            setReassignTicket(t);
+          }}
+          isAccepting={isAccepting}
+        />
+      )}
+
+      {/* Modal: Accepted active ticket (Progress / Update) */}
+      {infoTicket && (
+        <TicketInfoModal
+          ticket={infoTicket}
+          onClose={() => setInfoTicket(null)}
+          onReassignSuccess={handleReassignSuccess}
+        />
+      )}
+
+      {/* Modal: Reassignment Request */}
+      {reassignTicket && (
+        <ReassignmentModal
+          ticket={reassignTicket}
+          onClose={() => setReassignTicket(null)}
+          onReassignSuccess={handleReassignSuccess}
+        />
+      )}
+
+      {/* Modal: Requestor details inspection */}
+      {requestorDetailTicket && (
         <CustomerTicketDetailModal
-          ticket={selectedTicket}
-          onClose={() => setSelectedTicket(null)}
+          ticket={requestorDetailTicket}
+          onClose={() => setRequestorDetailTicket(null)}
           onDiscard={null}
           onReopen={null}
           onResolve={null}
           allowReopen={false}
-          customerName={selectedTicket.customer}
+          customerName={requestorDetailTicket.customer}
           onViewTicket={(t) => {
-            setSelectedTicket(null);
+            setRequestorDetailTicket(null);
             navigate(`/employee/history/${t.ticket_ID || Number(String(t.id).replace(/\D/g, ''))}`);
           }}
         />
@@ -765,7 +889,7 @@ export default function EmployeeDashboard() {
       {modalLoading && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs">
           <div className="bg-card border border-border rounded-xl p-6 shadow-xl flex flex-col items-center gap-3 max-w-xs w-full mx-4">
-            <div className="w-8 h-8 border-3 border-primary/20 border-t-primary rounded-full animate-spin" />
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
             <p className="text-sm font-semibold text-foreground">Loading ticket details...</p>
           </div>
         </div>

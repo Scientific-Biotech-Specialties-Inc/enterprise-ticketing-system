@@ -892,6 +892,9 @@ class TicketDashboardService
         if ($preset === 'Today') {
             $dateFrom = $now->copy()->startOfDay();
             $dateTo = $now->copy()->endOfDay();
+        } elseif ($preset === 'Last 7 Days') {
+            $dateFrom = $now->copy()->subDays(6)->startOfDay();
+            $dateTo = $now->copy()->endOfDay();
         } elseif ($preset === 'Last 30 Days') {
             $dateFrom = $now->copy()->subDays(29)->startOfDay();
             $dateTo = $now->copy()->endOfDay();

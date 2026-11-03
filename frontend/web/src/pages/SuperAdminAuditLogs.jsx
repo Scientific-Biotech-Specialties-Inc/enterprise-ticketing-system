@@ -642,10 +642,7 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
                   </TableHeader>
                   <TableBody>
                     {paginatedLogs.map((log) => {
-                      const isSecurity = Boolean(
-                        log.module === 'Security' ||
-                        /malware|quarantine|threat|infected/i.test(log.action + ' ' + log.details)
-                      );
+                      const isSecurity = isSecurityLog(log);
                       const isSystemIssue = !isSecurity && Boolean(
                         log.module === 'System' ||
                         /sql error|database error|failed login|unusual login|application error|unhandled exception|system error/i.test(log.action + ' ' + log.details)
