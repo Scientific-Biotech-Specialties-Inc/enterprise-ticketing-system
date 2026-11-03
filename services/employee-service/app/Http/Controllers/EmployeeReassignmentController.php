@@ -71,4 +71,9 @@ class EmployeeReassignmentController extends Controller
             'requests' => $requests,
         ]);
     }
+
+    public function getReassignmentRequests(Request $request)
+    {
+        return $this->reassignmentRequests($request);
+    }
 }

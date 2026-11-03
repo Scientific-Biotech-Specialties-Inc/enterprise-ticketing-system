@@ -48,10 +48,6 @@ class AuthenticateSubsystem
                     if ($result === true && (Auth::check() || $request->user())) {
                         return $next($request);
                     }
-
-                    if ($response instanceof \Symfony\Component\HttpFoundation\Response) {
-                        return $response;
-                    }
                 } catch (\Throwable $e) {
                     // Ignore exception and fall through to local auth:api guard
                 }
@@ -59,6 +55,23 @@ class AuthenticateSubsystem
         }
 
         // 2. Fallback to local customer authentication via Passport (auth:api)
-        return app(\Illuminate\Auth\Middleware\Authenticate::class)->handle($request, $next, 'api');
+        try {
+            $apiGuard = Auth::guard('api');
+            if (method_exists($apiGuard, 'setRequest')) {
+                $apiGuard->setRequest($request);
+            }
+            if ($apiGuard->check()) {
+                $user = $apiGuard->user();
+                if ($user) {
+                    Auth::setUser($user);
+                    $request->setUserResolver(fn () => $user);
+                    return $next($request);
+                }
+            }
+        } catch (\Throwable $e) {
+            // Passport check failed
+        }
+
+        return response()->json(['message' => 'Unauthenticated.'], 401);
     }
 }

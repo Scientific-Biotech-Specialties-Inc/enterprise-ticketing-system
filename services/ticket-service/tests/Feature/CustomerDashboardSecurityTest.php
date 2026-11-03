@@ -27,6 +27,25 @@ class CustomerDashboardSecurityTest extends TestCase
             ['ticket_type_ID' => 2],
             ['type_name' => 'External', 'created_at' => now(), 'updated_at' => now()]
         );
+
+        DB::table('oauth_personal_access_clients')->updateOrInsert(
+            ['id' => 1],
+            ['client_id' => 1, 'created_at' => now(), 'updated_at' => now()]
+        );
+        DB::table('oauth_clients')->updateOrInsert(
+            ['id' => 1],
+            [
+                'name' => 'Personal Access Client',
+                'secret' => 'personal-secret',
+                'provider' => 'polymorphic_users',
+                'redirect' => 'http://localhost',
+                'personal_access_client' => 1,
+                'password_client' => 0,
+                'revoked' => 0,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]
+        );
     }
 
     /**
@@ -131,5 +150,24 @@ class CustomerDashboardSecurityTest extends TestCase
         $data = $authResponse->json();
         $this->assertArrayHasKey('statuses', $data);
         $this->assertArrayHasKey('categories', $data);
+    }
+
+    /**
+     * covers: Customer Passport authentication fallback
+     */
+    public function test_customer_dashboard_authenticates_with_passport_customer_guard(): void
+    {
+        $uid = uniqid();
+        $client = Client::create([
+            'client_name' => 'Dana Clinic ' . $uid,
+            'email' => 'dana.' . $uid . '@clinic-test.com',
+            'contact_number' => '333-444-5555',
+            'address' => '321 Health Road',
+        ]);
+
+        $response = $this->actingAs($client, 'api')->getJson('/api/customer-dashboard');
+
+        $response->assertStatus(200);
+        $this->assertArrayHasKey('summary', $response->json());
     }
 }
