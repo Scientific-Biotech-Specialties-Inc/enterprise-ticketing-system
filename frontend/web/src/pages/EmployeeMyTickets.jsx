@@ -538,7 +538,7 @@ export default function EmployeeMyTickets({ roleContext }) {
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <Badge variant={getStatusBadgeVariant(ticket.status)} dot>
+                    <Badge variant={getStatusBadgeVariant(ticket.status)}>
                       {ticket.status}
                     </Badge>
                     {(() => {

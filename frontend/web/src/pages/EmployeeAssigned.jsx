@@ -619,7 +619,7 @@ export default function EmployeeAssigned() {
                         </span>
                       ) : t.proofRejected ? (
                         <div className="flex flex-col gap-1 items-start">
-                          <Badge variant={getStatusBadgeVariant(t.status)} dot>
+                          <Badge variant={getStatusBadgeVariant(t.status)}>
                             {t.status}
                           </Badge>
                           <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs">
@@ -628,7 +628,7 @@ export default function EmployeeAssigned() {
                           </span>
                         </div>
                       ) : (
-                        <Badge variant={getStatusBadgeVariant(t.status)} dot>
+                        <Badge variant={getStatusBadgeVariant(t.status)}>
                           {t.status}
                         </Badge>
                       )}

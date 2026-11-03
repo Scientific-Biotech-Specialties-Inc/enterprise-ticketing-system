@@ -388,13 +388,96 @@ const loginStyles = `
 }
 .back-link-btn:hover { color: #252578; text-decoration: underline; }
 
+.mobile-brand-title {
+  display: none;
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: 0.02em;
+}
+
 /* ── RESPONSIVE ── */
 @media (max-width: 960px) {
-  .login-container { flex-direction: column; }
-  .left-panel { width: 100%; min-height: 240px; padding: 32px 24px; }
-  .left-title { font-size: 20px; margin-bottom: 8px; }
-  .right-panel { width: 100%; padding: 32px 16px; }
-  .login-card { padding: 32px 20px; box-shadow: none; background: transparent; }
+  .login-container {
+    flex-direction: column;
+    min-height: 100vh;
+    background-color: #f8f9fa;
+  }
+  .left-panel {
+    width: 100%;
+    min-height: 80px;
+    padding: 16px 20px;
+    justify-content: center;
+  }
+  .left-content {
+    display: none;
+  }
+  .left-badge {
+    display: none;
+  }
+  .mobile-brand-title {
+    display: inline-block;
+  }
+  .left-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+  }
+  .right-panel {
+    width: 100%;
+    flex: 1;
+    padding: 24px 16px 40px 16px;
+    align-items: flex-start;
+  }
+  .login-card {
+    width: 100%;
+    max-width: 440px;
+    margin: 0 auto;
+    padding: 32px 24px;
+    background-color: #ffffff;
+    border-radius: 20px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+    border: 1px solid #e2e8f0;
+  }
+  .card-title {
+    font-size: 24px;
+    margin-bottom: 6px;
+  }
+  .card-subtitle {
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 480px) {
+  .left-panel {
+    min-height: 110px;
+    padding: 16px 14px;
+  }
+  .right-panel {
+    padding: 16px 12px 32px 12px;
+  }
+  .login-card {
+    padding: 24px 16px;
+    border-radius: 16px;
+  }
+  .card-title {
+    font-size: 21px;
+  }
+  .card-subtitle {
+    font-size: 12px;
+  }
+  .form-body {
+    gap: 16px;
+  }
+  .input-field {
+    height: 46px;
+    font-size: 14px;
+  }
+  .login-btn {
+    height: 48px;
+    font-size: 15px;
+  }
 }
 `;
 
@@ -619,6 +702,7 @@ export function Loginpage({ mode = 'customer' }) {
             <ArrowLeft size={16} />
             <span>Back to Home</span>
           </button>
+          <span className="mobile-brand-title">SBSI Ticketing</span>
         </div>
 
         {/* Bottom Narrative */}

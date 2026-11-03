@@ -524,7 +524,8 @@ class TicketNotificationService
 
         $savedNumber = DB::table('tickets')->where('ticket_ID', $ticketId)->value('ticket_number');
         $ticketRef = $savedNumber ?: ('TKT-' . str_pad((string) $ticketId, 4, '0', STR_PAD_LEFT));
-        $ticketLink = url("/tickets/{$ticketId}");
+        $employeeBaseUrl = env('EMPLOYEE_PORTAL_URL', env('EMPLOYEE_FRONTEND_URL', 'http://localhost:5006/ticketing'));
+        $ticketLink = rtrim($employeeBaseUrl, '/') . "/machine";
 
         $inferredKey = $eventKey ?? $this->inferEventKey($subject);
         $templateDispatched = $this->dispatchTemplateEmail($employee->email, $inferredKey, array_merge([
@@ -602,7 +603,8 @@ class TicketNotificationService
 
         $savedNumber = DB::table('tickets')->where('ticket_ID', $ticketId)->value('ticket_number');
         $ticketRef = $savedNumber ?: ('TKT-' . str_pad((string) $ticketId, 4, '0', STR_PAD_LEFT));
-        $ticketLink = url("/tickets/{$ticketId}");
+        $customerBaseUrl = env('CUSTOMER_PORTAL_URL', env('CUSTOMER_FRONTEND_URL', 'http://localhost:5006'));
+        $ticketLink = rtrim($customerBaseUrl, '/') . "/my-tickets?ticketId={$ticketId}";
 
         $inferredKey = $eventKey ?? $this->inferEventKey($subject);
         $templateDispatched = $this->dispatchTemplateEmail($client->email, $inferredKey, array_merge([

@@ -252,6 +252,8 @@ function App() {
                 <Route path="customer-dashboard" element={<CustomerDashboard />} />
                 <Route path="create-ticket" element={<TicketCreation />} />
                 <Route path="my-tickets" element={<MyTickets />} />
+                <Route path="tickets/:ticketId" element={<MyTickets />} />
+                <Route path="my-tickets/:ticketId" element={<MyTickets />} />
                 <Route path="history" element={<CustomerHistory />} />
                 <Route path="messages" element={<MessagingPage />} />
                 <Route path="profile" element={<Profile />} />
