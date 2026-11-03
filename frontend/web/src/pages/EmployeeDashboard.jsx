@@ -77,7 +77,7 @@ export default function EmployeeDashboard() {
           can_discard: ticket.status === 'Open' && !ticket.assigned_to,
         }));
         setMyRecentTickets(mapped.slice(0, 5));
-        sessionStorage.setItem('employee_created_tickets', JSON.stringify(mapped));
+        // State updated directly
       } else {
         const stored = JSON.parse(sessionStorage.getItem('employee_created_tickets') || '[]');
         const updated = await Promise.all(
@@ -104,7 +104,7 @@ export default function EmployeeDashboard() {
           const found = updated.find((candidate) => candidate.id === item.id);
           return found ? { ...item, ...found } : item;
         });
-        sessionStorage.setItem('employee_created_tickets', JSON.stringify(updatedFullList));
+        // State updated directly
       }
     } catch (err) {
       console.error('Failed to load my tickets on dashboard:', err);
@@ -141,7 +141,7 @@ export default function EmployeeDashboard() {
         }
         return t;
       });
-      sessionStorage.setItem('employee_created_tickets', JSON.stringify(updatedList));
+      // State updated directly
       await loadMyTickets();
       setSelectedMyTicket(null);
       window.alert('Ticket resolved successfully.');
@@ -176,7 +176,7 @@ export default function EmployeeDashboard() {
         }
         return t;
       });
-      sessionStorage.setItem('employee_created_tickets', JSON.stringify(updatedList));
+      // State updated directly
       await loadMyTickets();
       setSelectedMyTicket(null);
       window.alert('Ticket reopened successfully.');

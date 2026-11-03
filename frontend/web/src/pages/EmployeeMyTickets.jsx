@@ -137,7 +137,7 @@ export default function EmployeeMyTickets({ roleContext }) {
           return t;
         });
         if (healed) {
-          sessionStorage.setItem(storageKey, JSON.stringify(mapped));
+          // State updated directly
         }
       }
       setTickets(mapped);
@@ -271,7 +271,7 @@ export default function EmployeeMyTickets({ roleContext }) {
         ...stored.filter((ticket) => ticket.id !== newTicket.id && ticket.ticket_ID !== numericTicketId),
       ];
 
-      sessionStorage.setItem(storageKey, JSON.stringify(updatedList));
+      // State updated directly
       setTickets(updatedList);
       setIsModalOpen(false);
 
@@ -373,7 +373,7 @@ export default function EmployeeMyTickets({ roleContext }) {
         }
         return t;
       });
-      sessionStorage.setItem(storageKey, JSON.stringify(updatedList));
+      // State updated directly
       setTickets(updatedList);
       setSelectedTicket(null);
       window.alert('Ticket resolved successfully.');
