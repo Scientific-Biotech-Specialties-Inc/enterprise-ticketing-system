@@ -123,35 +123,19 @@ class SuperAdminDashboardService
 
         // Escalated tickets
         $escalatedTickets = DB::table('tickets')
-            ->where(function ($q) {
-                $hasEscCheck = false;
-                if (\Illuminate\Support\Facades\Schema::hasColumn('tickets', 'is_escalated')) {
-                    $q->where('is_escalated', 1);
-                    $hasEscCheck = true;
-                }
-                if (\Illuminate\Support\Facades\Schema::hasColumn('tickets', 'escalation_reason')) {
-                    if ($hasEscCheck) {
-                        $q->orWhereNotNull('escalation_reason');
-                    } else {
-                        $q->whereNotNull('escalation_reason');
-                    }
-                }
-            })
+            ->whereNotNull('escalation_reason')
             ->whereNotIn('ticket_status_ID', [4, 10, 12])
             ->count();
 
         // SLA breaches in range
         $slaBreachesCount = (clone $ticketsQuery)
             ->where(function ($q) {
-                $q->where('sla_status', 'Breached');
-                if (\Illuminate\Support\Facades\Schema::hasColumn('tickets', 'is_sla_breached')) {
-                    $q->orWhere('is_sla_breached', 1);
-                }
-                $q->orWhere(function ($sub) {
-                    $sub->whereNotNull('resolution_due_at')
-                        ->where('resolution_due_at', '<', now())
-                        ->whereNull('resolved_at');
-                });
+                $q->where('sla_status', 'Breached')
+                    ->orWhere(function ($sub) {
+                        $sub->whereNotNull('resolution_due_at')
+                            ->where('resolution_due_at', '<', now())
+                            ->whereNull('resolved_at');
+                    });
             })
             ->count();
 
@@ -197,13 +181,11 @@ class SuperAdminDashboardService
         }
         $avgResolutionHours = $resolvedCount > 0 ? round($totalResHours / $resolvedCount, 1) : 0.0;
 
-        // CSAT score from ticket_feedback or default 4.8
-        $avgCsat = 0.0;
+        // CSAT comes only from real feedback rows. With no source or no ratings it is null (unavailable), never a made up score.
+        $avgCsat = null;
         if (DB::getSchemaBuilder()->hasTable('ticket_feedback')) {
             $csatVal = DB::table('ticket_feedback')->avg('rating');
-            $avgCsat = $csatVal ? round((float) $csatVal, 1) : 4.8;
-        } else {
-            $avgCsat = 4.8;
+            $avgCsat = $csatVal ? round((float) $csatVal, 1) : null;
         }
 
         // 4. Branch Comparisons
@@ -298,8 +280,12 @@ class SuperAdminDashboardService
         string $sortBy = 'total_tickets',
         string $sortDir = 'desc'
     ): array {
+        // Include inactive branches that still own tickets, otherwise their tickets vanish from the comparison.
+        $branchesWithTickets = DB::table('tickets')->whereNotNull('branch_id')->select('branch_id');
         $branches = DB::table('branches')
-            ->where('is_active', 1)
+            ->where(function ($q) use ($branchesWithTickets) {
+                $q->where('is_active', 1)->orWhereIn('id', $branchesWithTickets);
+            })
             ->get();
 
         $results = [];
@@ -366,15 +352,18 @@ class SuperAdminDashboardService
                 $resHoursSum += max(0, Carbon::parse($rt->created_at)->diffInMinutes(Carbon::parse($rt->resolved_at)) / 60);
             }
             $bAvgResHours = $resTickets->count() > 0 ? round($resHoursSum / $resTickets->count(), 1) : 0.0;
+            $bResolved = $resTickets->count();
 
-            // Branch CSAT score
-            $bCsat = 4.8;
+            // Branch CSAT is not stored in this service; report it as unavailable instead of inventing one.
+            $bCsat = null;
 
             $results[] = [
                 'branch_id' => $branchId,
                 'branch_name' => $branch->name,
                 'branch_code' => $branch->code ?? strtoupper(substr($branch->name, 0, 3)),
+                'region' => $branch->region ?? null,
                 'total_tickets' => (int) $bTotal,
+                'resolved_tickets' => (int) $bResolved,
                 'active_tickets' => (int) $bActive,
                 'escalated_tickets' => (int) $bEscalated,
                 'sla_breaches' => (int) $bBreaches,
@@ -417,10 +406,13 @@ class SuperAdminDashboardService
                     ->where('tal.actor_type', '=', 'customer');
             })
             ->leftJoin('tickets as t', 't.ticket_ID', '=', 'tal.ticket_ID')
+            ->leftJoin('branches as br', 'br.id', '=', 't.branch_id')
             ->select(
                 'tal.log_ID as log_id',
                 'tal.ticket_ID as ticket_id',
                 't.ticket_number',
+                't.title as ticket_title',
+                'br.name as branch_name',
                 'tal.action_type',
                 'tal.event_type',
                 'tal.action_by_ID as actor_id',
@@ -440,7 +432,7 @@ class SuperAdminDashboardService
 
         return $records->map(function ($row) {
             $actorName = 'System';
-            if ((bool) $row->is_system) {
+            if ((bool) $row->is_system || strtolower((string) $row->actor_type) === 'system') {
                 $actorName = 'System';
             } elseif ($row->actor_type === 'customer' && !empty($row->customer_name)) {
                 $actorName = $row->customer_name;
@@ -454,13 +446,15 @@ class SuperAdminDashboardService
                 'log_id' => (int) $row->log_id,
                 'ticket_id' => (int) $row->ticket_id,
                 'ticket_number' => $row->ticket_number,
+                'ticket_title' => $row->ticket_title,
+                'branch_name' => $row->branch_name,
                 'action_type' => $row->action_type,
                 'event_type' => $row->event_type ?: $row->action_type,
                 'actor_id' => (int) $row->actor_id,
                 'actor_name' => $actorName,
                 'actor_role' => $row->actor_role ?: $row->actor_type,
                 'details' => $row->details,
-                'is_system' => (bool) $row->is_system,
+                'is_system' => (bool) $row->is_system || strtolower((string) $row->actor_type) === 'system',
                 'is_internal' => (bool) $row->is_internal,
                 'created_at' => Carbon::parse($row->created_at)->toIso8601String(),
             ];

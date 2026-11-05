@@ -886,30 +886,7 @@ class TicketDashboardService
         $branchSlug = $branch->slug;
 
         // Parse date range
-        $preset = $filters['preset'] ?? $filters['filter'] ?? 'Last 7 Days';
-        $now = Carbon::now();
-
-        if ($preset === 'Today') {
-            $dateFrom = $now->copy()->startOfDay();
-            $dateTo = $now->copy()->endOfDay();
-        } elseif ($preset === 'Last 7 Days') {
-            $dateFrom = $now->copy()->subDays(6)->startOfDay();
-            $dateTo = $now->copy()->endOfDay();
-        } elseif ($preset === 'Last 30 Days') {
-            $dateFrom = $now->copy()->subDays(29)->startOfDay();
-            $dateTo = $now->copy()->endOfDay();
-        } elseif ($preset === 'Last 90 Days') {
-            $dateFrom = $now->copy()->subDays(89)->startOfDay();
-            $dateTo = $now->copy()->endOfDay();
-        } elseif (!empty($filters['date_from'])) {
-            $preset = 'Custom Range';
-            $dateFrom = Carbon::parse($filters['date_from'])->startOfDay();
-            $dateTo = !empty($filters['date_to']) ? Carbon::parse($filters['date_to'])->endOfDay() : $now->copy()->endOfDay();
-        } else {
-            $preset = 'Last 7 Days';
-            $dateFrom = $now->copy()->subDays(6)->startOfDay();
-            $dateTo = $now->copy()->endOfDay();
-        }
+        [$preset, $dateFrom, $dateTo] = \App\Support\ReportPeriod::resolve($filters, 'Last 7 Days');
 
         $cacheKey = "admin_dashboard_metrics_{$branchSlug}_" . md5(json_encode([
             'branch' => $branchSlug,
@@ -1056,7 +1033,7 @@ class TicketDashboardService
 
         $overallComplianceRate = $slaTotal > 0
             ? round(($slaMet / $slaTotal) * 100, 1)
-            : 92.5;
+            : null; // no SLA tracked tickets in the window: unknown, never an invented rate
 
         // Normalize SLA by Department
         $slaDeptList = [];
@@ -1071,11 +1048,13 @@ class TicketDashboardService
         }
 
         // 5. Customer Satisfaction (CSAT) fetch with graceful degradation
+        // No invented scores: when the analytics service cannot answer, CSAT stays null and is flagged unavailable.
         $csatData = [
-            'average_score' => 4.67,
-            'satisfaction_percentage' => 100,
+            'average_score' => null,
+            'satisfaction_percentage' => null,
             'total_reviews' => 0,
             'trends' => [],
+            'available' => false,
         ];
         try {
             $ticketIds = $tickets->pluck('ticket_ID')->take(100)->toArray();
@@ -1090,6 +1069,7 @@ class TicketDashboardService
             $csatRes = Http::timeout(2)->get("{$analyticsUrl}/api/csat-stats", $params);
             if ($csatRes->successful()) {
                 $resData = $csatRes->json();
+                $csatData['available'] = true;
                 if (!empty($resData['data'])) {
                     $csatData = array_merge($csatData, $resData['data']);
                 }
@@ -1131,7 +1111,7 @@ class TicketDashboardService
         $recurringEquipment = $this->computeRecurringEquipment($branch, $dateFrom, $dateTo, $totalTickets);
 
         // 8. Trend series buckets matching preset
-        $trendBuckets = $this->generateTrendBuckets($preset, $dateFrom, $dateTo, $tickets, $overallComplianceRate, $avgResolutionHours, $csatData['average_score'] ?? 4.67);
+        $trendBuckets = $this->generateTrendBuckets($preset, $dateFrom, $dateTo, $tickets, (float) ($overallComplianceRate ?? 0), $avgResolutionHours, (float) ($csatData['average_score'] ?? 0));
 
         // 9. Cross-branch comparison table when viewing global All Branches scope
         $branchComparisons = [];
@@ -1156,7 +1136,8 @@ class TicketDashboardService
             ],
             'kpis' => [
                 'total_tickets' => $totalTickets,
-                'resolved_tickets' => $statusCounts['resolved'],
+                // A closed ticket was resolved first, so Resolved Tickets counts both final states.
+                'resolved_tickets' => $statusCounts['resolved'] + $statusCounts['closed'],
                 'closed_tickets' => $statusCounts['closed'],
                 'open_tickets' => $statusCounts['open'],
                 'in_progress_tickets' => $statusCounts['inProgress'],
@@ -1166,8 +1147,9 @@ class TicketDashboardService
                 'sla_compliance_rate' => $overallComplianceRate,
                 'sla_met_count' => $slaMet,
                 'sla_breached_count' => $slaBreached,
-                'csat_score' => round((float) ($csatData['average_score'] ?? 4.67), 2),
-                'satisfaction_percentage' => $csatData['satisfaction_percentage'] ?? 100,
+                'csat_score' => isset($csatData['average_score']) ? round((float) $csatData['average_score'], 2) : null,
+                'csat_available' => (bool) ($csatData['available'] ?? false),
+                'satisfaction_percentage' => $csatData['satisfaction_percentage'] ?? null,
                 'total_csat_reviews' => $csatData['total_reviews'] ?? 0,
                 'active_employees_count' => count($branchEmployees),
                 'open_vs_closed' => [
@@ -1198,9 +1180,10 @@ class TicketDashboardService
             'departments' => $deptPerfMetrics['departments'] ?? [],
             'branch_comparisons' => $branchComparisons,
             'csat' => [
-                'average_score' => round((float) ($csatData['average_score'] ?? 4.67), 2),
+                'average_score' => isset($csatData['average_score']) ? round((float) $csatData['average_score'], 2) : null,
+                'available' => (bool) ($csatData['available'] ?? false),
                 'total_reviews' => $csatData['total_reviews'] ?? 0,
-                'satisfaction_percentage' => $csatData['satisfaction_percentage'] ?? 100,
+                'satisfaction_percentage' => $csatData['satisfaction_percentage'] ?? null,
                 'labels' => $trendBuckets['labels'],
                 'trend' => $trendBuckets['csat'],
             ],
@@ -1634,7 +1617,16 @@ class TicketDashboardService
     }
 
     /**
-     * Generate trend series buckets matching ChartJS frontend requirements.
+     * Trend series for the selected reporting window (spec 0028 AC-3 and AC-4).
+     *
+     * The window is split by its real length, so the chart always covers the period the Admin picked:
+     *   one day            -> 2 hour buckets
+     *   up to 14 days      -> daily buckets
+     *   up to 62 days      -> weekly buckets
+     *   longer             -> monthly buckets
+     * Every value comes from tickets in that bucket. A bucket with nothing to measure is null (a gap in the
+     * chart), never an estimate. The parameters $avgCompliance, $avgResHours and $avgCsat are no longer used to
+     * fabricate points; they are kept so existing callers keep working.
      */
     protected function generateTrendBuckets(
         string $preset,
@@ -1645,6 +1637,22 @@ class TicketDashboardService
         float $avgResHours,
         float $avgCsat
     ): array {
+        $buckets = $this->buildTrendBuckets($dateFrom, $dateTo);
+
+        // Classify each ticket's SLA once, not once per bucket.
+        $breached = [];
+        $hasSla = [];
+        foreach ($tickets as $t) {
+            try {
+                $m = $this->slaService->computeTicketSlaMetrics($t);
+                $hasSla[$t->ticket_ID] = ($m['status'] ?? '') !== 'No SLA Configured';
+                $breached[$t->ticket_ID] = !empty($m['is_breached']) || ($m['status'] ?? '') === 'Breached';
+            } catch (\Throwable $e) {
+                $hasSla[$t->ticket_ID] = false;
+                $breached[$t->ticket_ID] = false;
+            }
+        }
+
         $labels = [];
         $newSeries = [];
         $resolvedSeries = [];
@@ -1653,89 +1661,41 @@ class TicketDashboardService
         $resTimeSeries = [];
         $csatSeries = [];
 
-        if ($preset === 'Today') {
-            $labels = ['6AM', '8AM', '10AM', '12PM', '2PM', '4PM', '6PM', '8PM'];
-            $hours = [6, 8, 10, 12, 14, 16, 18, 20];
-            foreach ($hours as $h) {
-                $bucketStart = Carbon::today()->setTime($h, 0, 0);
-                $bucketEnd = $bucketStart->copy()->addHours(2);
-                $bNew = $tickets->filter(function ($t) use ($bucketStart, $bucketEnd) {
-                    $c = Carbon::parse($t->created_at);
-                    return $c >= $bucketStart && $c < $bucketEnd;
-                })->count();
-                $bRes = $tickets->filter(function ($t) use ($bucketStart, $bucketEnd) {
-                    $st = strtolower(trim((string) $t->status_name));
-                    $end = !empty($t->resolved_at ?? $t->closed_at) ? Carbon::parse($t->resolved_at ?? $t->closed_at) : null;
-                    return in_array($st, ['resolved', 'closed']) && $end && $end >= $bucketStart && $end < $bucketEnd;
-                })->count();
+        foreach ($buckets as [$bStart, $bEnd, $label]) {
+            $created = $tickets->filter(function ($t) use ($bStart, $bEnd) {
+                $c = Carbon::parse($t->created_at);
+                return $c >= $bStart && $c < $bEnd;
+            });
 
-                $newSeries[] = $bNew;
-                $resolvedSeries[] = $bRes;
-                $slaComplianceSeries[] = $avgCompliance;
-                $slaBreachesSeries[] = max(0, $bNew - $bRes > 3 ? 1 : 0);
-                $resTimeSeries[] = $avgResHours;
-                $csatSeries[] = $avgCsat;
-            }
-        } elseif ($preset === 'Last 30 Days') {
-            $labels = ['Week 1', 'Week 2', 'Week 3', 'Week 4'];
-            for ($w = 0; $w < 4; $w++) {
-                $wStart = $dateFrom->copy()->addDays($w * 7);
-                $wEnd = $w === 3 ? $dateTo->copy() : $wStart->copy()->addDays(7);
-                $bNew = $tickets->filter(fn($t) => Carbon::parse($t->created_at) >= $wStart && Carbon::parse($t->created_at) <= $wEnd)->count();
-                $bRes = $tickets->filter(function ($t) use ($wStart, $wEnd) {
-                    $st = strtolower(trim((string) $t->status_name));
-                    $end = !empty($t->resolved_at ?? $t->closed_at) ? Carbon::parse($t->resolved_at ?? $t->closed_at) : null;
-                    return in_array($st, ['resolved', 'closed']) && $end && $end >= $wStart && $end <= $wEnd;
-                })->count();
+            $resolvedHere = $tickets->filter(function ($t) use ($bStart, $bEnd) {
+                $st = strtolower(trim((string) $t->status_name));
+                $endAt = !empty($t->resolved_at ?? $t->closed_at) ? Carbon::parse($t->resolved_at ?? $t->closed_at) : null;
+                return in_array($st, ['resolved', 'closed'], true) && $endAt && $endAt >= $bStart && $endAt < $bEnd;
+            });
 
-                $newSeries[] = $bNew;
-                $resolvedSeries[] = $bRes;
-                $slaComplianceSeries[] = round($avgCompliance + rand(-2, 2), 1);
-                $slaBreachesSeries[] = max(0, $bNew - $bRes);
-                $resTimeSeries[] = round($avgResHours + (rand(-3, 3) * 0.1), 1);
-                $csatSeries[] = round($avgCsat + (rand(-1, 1) * 0.1), 1);
-            }
-        } elseif ($preset === 'Last 90 Days') {
-            for ($m = 2; $m >= 0; $m--) {
-                $monthDate = Carbon::now()->subMonths($m);
-                $labels[] = $monthDate->format('M');
-                $mStart = $monthDate->copy()->startOfMonth();
-                $mEnd = $monthDate->copy()->endOfMonth();
-                $bNew = $tickets->filter(fn($t) => Carbon::parse($t->created_at) >= $mStart && Carbon::parse($t->created_at) <= $mEnd)->count();
-                $bRes = $tickets->filter(function ($t) use ($mStart, $mEnd) {
-                    $st = strtolower(trim((string) $t->status_name));
-                    $end = !empty($t->resolved_at ?? $t->closed_at) ? Carbon::parse($t->resolved_at ?? $t->closed_at) : null;
-                    return in_array($st, ['resolved', 'closed']) && $end && $end >= $mStart && $end <= $mEnd;
-                })->count();
+            $slaTickets = $created->filter(fn ($t) => $hasSla[$t->ticket_ID] ?? false);
+            $slaBreached = $slaTickets->filter(fn ($t) => $breached[$t->ticket_ID] ?? false)->count();
 
-                $newSeries[] = $bNew;
-                $resolvedSeries[] = $bRes;
-                $slaComplianceSeries[] = round($avgCompliance + rand(-2, 2), 1);
-                $slaBreachesSeries[] = max(0, $bNew - $bRes);
-                $resTimeSeries[] = round($avgResHours + (rand(-3, 3) * 0.1), 1);
-                $csatSeries[] = round($avgCsat + (rand(-1, 1) * 0.1), 1);
+            $hours = [];
+            foreach ($resolvedHere as $t) {
+                if (!empty($t->resolved_at) && !empty($t->created_at)) {
+                    $diff = Carbon::parse($t->created_at)->diffInMinutes(Carbon::parse($t->resolved_at), false);
+                    if ($diff >= 0) {
+                        $hours[] = $diff / 60;
+                    }
+                }
             }
-        } else {
-            // Default 7 days
-            for ($d = 6; $d >= 0; $d--) {
-                $dayDate = Carbon::now()->subDays($d);
-                $labels[] = $dayDate->format('D');
-                $dStart = $dayDate->copy()->startOfDay();
-                $dEnd = $dayDate->copy()->endOfDay();
-                $bNew = $tickets->filter(fn($t) => Carbon::parse($t->created_at) >= $dStart && Carbon::parse($t->created_at) <= $dEnd)->count();
-                $bRes = $tickets->filter(function ($t) use ($dStart, $dEnd) {
-                    $st = strtolower(trim((string) $t->status_name));
-                    $end = !empty($t->resolved_at ?? $t->closed_at) ? Carbon::parse($t->resolved_at ?? $t->closed_at) : null;
-                    return in_array($st, ['resolved', 'closed']) && $end && $end >= $dStart && $end <= $dEnd;
-                })->count();
 
-                $newSeries[] = $bNew;
-                $resolvedSeries[] = $bRes;
-                $slaComplianceSeries[] = round($avgCompliance + rand(-2, 2), 1);
-                $slaBreachesSeries[] = max(0, $bNew - $bRes);
-                $resTimeSeries[] = round($avgResHours + (rand(-2, 2) * 0.1), 1);
-                $csatSeries[] = round($avgCsat + (rand(-1, 1) * 0.1), 1);
-            }
+            $labels[] = $label;
+            $newSeries[] = $created->count();
+            $resolvedSeries[] = $resolvedHere->count();
+            $slaBreachesSeries[] = $slaBreached;
+            $slaComplianceSeries[] = $slaTickets->count() > 0
+                ? round((($slaTickets->count() - $slaBreached) / $slaTickets->count()) * 100, 1)
+                : null;
+            $resTimeSeries[] = count($hours) > 0 ? round(array_sum($hours) / count($hours), 1) : null;
+            // Customer ratings are not stored per day in this service, so there is no honest per bucket value.
+            $csatSeries[] = null;
         }
 
         return [
@@ -1753,6 +1713,61 @@ class TicketDashboardService
     }
 
     /**
+     * Split a reporting window into chart buckets: [start, exclusive end, label].
+     *
+     * @return array<int, array{0: Carbon, 1: Carbon, 2: string}>
+     */
+    protected function buildTrendBuckets(Carbon $dateFrom, Carbon $dateTo): array
+    {
+        $from = $dateFrom->copy();
+        $to = $dateTo->copy();
+        // First instant after the window. endOfDay() carries microseconds, so snap to the whole second.
+        $windowEnd = $to->copy()->addSecond()->startOfSecond();
+        $days = $from->copy()->startOfDay()->diffInDays($to->copy()->startOfDay()) + 1;
+
+        $buckets = [];
+
+        if ($days <= 1) {
+            $cursor = $from->copy()->startOfDay();
+            for ($i = 0; $i < 12; $i++) {
+                $buckets[] = [$cursor->copy(), $cursor->copy()->addHours(2), $cursor->format('gA')];
+                $cursor->addHours(2);
+            }
+            return $buckets;
+        }
+
+        if ($days <= 14) {
+            $cursor = $from->copy()->startOfDay();
+            $format = $days <= 7 ? 'D' : 'M j';
+            while ($cursor < $windowEnd) {
+                $buckets[] = [$cursor->copy(), $cursor->copy()->addDay(), $cursor->format($format)];
+                $cursor->addDay();
+            }
+            return $buckets;
+        }
+
+        if ($days <= 62) {
+            $cursor = $from->copy()->startOfDay();
+            while ($cursor < $windowEnd) {
+                $next = $cursor->copy()->addDays(7);
+                $buckets[] = [$cursor->copy(), $next->copy(), $cursor->format('M j')];
+                $cursor = $next;
+            }
+            return $buckets;
+        }
+
+        $cursor = $from->copy()->startOfMonth();
+        $guard = 0;
+        while ($cursor < $windowEnd && $guard++ < 36) {
+            $next = $cursor->copy()->addMonth();
+            $buckets[] = [$cursor->copy(), $next->copy(), $cursor->format('M Y')];
+            $cursor = $next;
+        }
+
+        return $buckets;
+    }
+
+    /**
      * Get branch-scoped operational report dataset for Admin and SuperAdmin users.
      */
     public function getAdminReports($user, array $filters = [], bool $forceRefresh = false): array
@@ -1765,30 +1780,7 @@ class TicketDashboardService
         $branch = $this->resolveBranchScope($user, $filters);
 
         // Parse date range
-        $preset = $filters['preset'] ?? $filters['filter'] ?? 'Last 30 Days';
-        $now = Carbon::now();
-
-        if ($preset === 'Today') {
-            $dateFrom = $now->copy()->startOfDay();
-            $dateTo = $now->copy()->endOfDay();
-        } elseif ($preset === 'Last 7 Days') {
-            $dateFrom = $now->copy()->subDays(6)->startOfDay();
-            $dateTo = $now->copy()->endOfDay();
-        } elseif ($preset === 'Last 30 Days') {
-            $dateFrom = $now->copy()->subDays(29)->startOfDay();
-            $dateTo = $now->copy()->endOfDay();
-        } elseif ($preset === 'Last 90 Days') {
-            $dateFrom = $now->copy()->subDays(89)->startOfDay();
-            $dateTo = $now->copy()->endOfDay();
-        } elseif (!empty($filters['date_from'])) {
-            $preset = 'Custom Range';
-            $dateFrom = Carbon::parse($filters['date_from'])->startOfDay();
-            $dateTo = !empty($filters['date_to']) ? Carbon::parse($filters['date_to'])->endOfDay() : $now->copy()->endOfDay();
-        } else {
-            $preset = 'Last 30 Days';
-            $dateFrom = $now->copy()->subDays(29)->startOfDay();
-            $dateTo = $now->copy()->endOfDay();
-        }
+        [$preset, $dateFrom, $dateTo] = \App\Support\ReportPeriod::resolve($filters, 'Last 30 Days');
 
         $departmentFilter = trim((string) ($filters['department'] ?? ''));
         if ($departmentFilter === '' || strtolower($departmentFilter) === 'all' || strtolower($departmentFilter) === 'all departments') {

@@ -122,7 +122,7 @@ class TicketActionsTest extends TestCase
         $this->assertDatabaseHas('ticket_audit_logs', [
             'ticket_ID' => $ticketId,
             'action_type' => 'assigned',
-            'actor_id' => 99,
+            'action_by_ID' => 99,
         ]);
     }
 

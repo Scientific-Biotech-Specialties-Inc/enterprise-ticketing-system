@@ -100,11 +100,13 @@ class AdminReportController extends Controller
         }
 
         $filters = [
-            'preset' => $request->query('preset') ?? $request->query('filter'),
+            'preset' => $request->query('preset') ?? $request->query('filter') ?? $request->query('period') ?? $request->query('date_range'),
             'date_from' => $request->query('date_from'),
             'date_to' => $request->query('date_to'),
             'department' => $request->query('department'),
             'employee_id' => $request->query('employee_id'),
+            'sort_by' => $request->query('sort_by'),
+            'sort_dir' => $request->query('sort_dir', 'desc'),
             'branch' => $request->query('branch'),
             'branch_id' => $request->query('branch_id'),
         ];
@@ -132,7 +134,7 @@ class AdminReportController extends Controller
         }
 
         $filters = [
-            'preset' => $request->query('preset') ?? $request->query('filter'),
+            'preset' => $request->query('preset') ?? $request->query('filter') ?? $request->query('period') ?? $request->query('date_range'),
             'date_from' => $request->query('date_from'),
             'date_to' => $request->query('date_to'),
             'sort_by' => $request->query('sort_by', 'total_tickets'),

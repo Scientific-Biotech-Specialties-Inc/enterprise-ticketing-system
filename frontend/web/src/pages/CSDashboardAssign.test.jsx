@@ -7,9 +7,7 @@ import * as ticketService from '@/services/ticketService';
 import { useAuth } from '@/context/AuthContext';
 
 vi.mock('@/services/ticketService', () => ({
-  getCSDashboard: vi.fn(),
-  getCSIncomingTickets: vi.fn(),
-  getReassignmentRequests: vi.fn(),
+  getCSDashboardSummary: vi.fn(),
   getTicketDetails: vi.fn(),
   getAssignableEmployees: vi.fn(),
   getDepartments: vi.fn(),
@@ -58,19 +56,26 @@ describe('CSDashboard assignment flow', () => {
     });
     ticketService.getAssignableEmployees.mockResolvedValue([]);
     ticketService.getDepartments.mockResolvedValue([]);
-    ticketService.getCSDashboard.mockResolvedValue({ summary: {}, recent_tickets: [] });
-    ticketService.getReassignmentRequests.mockResolvedValue([]);
-    ticketService.getCSIncomingTickets.mockResolvedValue([
-      {
-        id: 'TKT-201',
-        ticket_ID: 201,
-        title: 'Network Switch Error',
-        customer: 'St Jude Hospital',
-        status: 'Open',
-        priority: 'High',
-        created_at: '2026-11-03T09:00:00Z',
+    ticketService.getCSDashboardSummary.mockResolvedValue({
+      queued_tickets: {
+        count: 1,
+        items: [
+          {
+            ref: 'TKT-201',
+            ticket_ID: 201,
+            title: 'Network Switch Error',
+            customer: 'St Jude Hospital',
+            status: 'Open',
+            priority: 'High',
+            created_at: '2026-11-03T09:00:00Z',
+          },
+        ],
       },
-    ]);
+      assigned_monitored: { count: 0, by_status: {} },
+      workload_metrics: { active_tickets: 0, at_risk: 0, breached: 0, pending_reassignments: 0 },
+      needs_attention: { count: 0, items: [] },
+      partial_errors: [],
+    });
     ticketService.getTicketDetails.mockResolvedValue({ ticket_ID: 201, title: 'Network Switch Error' });
     ticketService.acceptTicket.mockResolvedValue({});
   });
@@ -103,11 +108,9 @@ describe('CSDashboard assignment flow', () => {
       });
     });
 
-    // Modal closes and the dashboard refetches with forceRefresh after a successful save.
+    // Modal closes and the dashboard reloads its summary after a successful save.
     await waitFor(() => expect(screen.queryByText('assign-modal-201')).not.toBeInTheDocument());
-    expect(ticketService.getCSDashboard).toHaveBeenLastCalledWith(
-      expect.objectContaining({ forceRefresh: true })
-    );
+    await waitFor(() => expect(ticketService.getCSDashboardSummary.mock.calls.length).toBeGreaterThanOrEqual(2));
   });
 });
 

@@ -135,6 +135,42 @@ services:
     networks:
       - default
 
+  ticket-scheduler:
+    build:
+      context: ./services/ticket-service
+    container_name: ticket-scheduler-prod
+    restart: always
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      DB_CONNECTION: mysql
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_DATABASE: ${MYSQL_DATABASE}
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      CACHE_DRIVER: redis
+      BROADCAST_DRIVER: reverb
+      QUEUE_CONNECTION: redis
+      SESSION_DRIVER: redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REVERB_APP_ID: local
+      REVERB_APP_KEY: local
+      REVERB_APP_SECRET: local
+      REVERB_HOST: reverb
+      REVERB_PORT: 6001
+    command: php artisan schedule:work
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      ticket-service:
+        condition: service_started
+    networks:
+      - default
+
   ticket-service:
     build:
       context: ./services/ticket-service

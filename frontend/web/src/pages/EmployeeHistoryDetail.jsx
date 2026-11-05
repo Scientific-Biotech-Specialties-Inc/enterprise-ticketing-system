@@ -773,7 +773,7 @@ export default function EmployeeHistoryDetail() {
       {/* Chronological Activity Timeline (TS086) */}
       <TicketActivityTimeline
         ticket={ticket}
-        userRole={user?.role || 'cs'}
+        ticketId={numericId}
         pageSize={8}
       />
 

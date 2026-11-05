@@ -135,10 +135,10 @@ class CreateTicketAction
             DB::table('ticket_audit_logs')->insert([
                 'ticket_ID' => $ticketId,
                 'action_type' => 'created',
-                'actor_type' => 'Customer',
-                'actor_id' => $clientId,
-                'actor_name' => DB::table('clients')->where('id', $clientId)->value('client_name') ?? 'Customer',
-                'details' => json_encode(['ticket_number' => $ticketNumber, 'origin' => $ticketData['origin']]),
+                'event_type' => 'ticket_created',
+                'actor_type' => 'customer',
+                'action_by_ID' => $clientId,
+                'details' => json_encode(['ticket_number' => $ticketNumber, 'origin' => $ticketData['origin'], 'actor_name' => DB::table('clients')->where('id', $clientId)->value('client_name') ?? 'Customer']),
                 'created_at' => now(),
             ]);
 

@@ -99,9 +99,9 @@ class EmployeeDashboardService
 
         foreach ($tickets as $t) {
             $statusName = strtolower(trim((string) ($t->status_name ?? '')));
-            if ($statusName === 'open') {
+            if (in_array($statusName, ['open', 'pending assignment', 'pending_assignment'], true)) {
                 $statusBreakdown['open']++;
-            } elseif (in_array($statusName, ['in progress', 'in_progress', 'assigned'], true)) {
+            } elseif (in_array($statusName, ['in progress', 'in_progress', 'assigned', 'escalated'], true)) {
                 $statusBreakdown['in_progress']++;
             } elseif (in_array($statusName, ['on hold', 'on_hold', 'paused'], true) || (int) $t->ticket_status_ID === 11) {
                 $statusBreakdown['on_hold']++;
@@ -165,12 +165,7 @@ class EmployeeDashboardService
                 't.created_at'
             );
 
-        if (Schema::hasColumn('tickets', 'auto_close_at')) {
-            $ticketsQuery->addSelect('t.auto_close_at');
-        }
-        if (Schema::hasColumn('tickets', 'reopened_at')) {
-            $ticketsQuery->addSelect('t.reopened_at');
-        }
+
 
         // Scope strictly to tickets requested by this employee (requested_by) or created by (created_by)
         $ticketsQuery->where(function ($q) use ($employeeId, $userId) {
@@ -198,9 +193,9 @@ class EmployeeDashboardService
 
         foreach ($tickets as $t) {
             $statusName = strtolower(trim((string) ($t->status_name ?? '')));
-            if ($statusName === 'open') {
+            if (in_array($statusName, ['open', 'pending assignment', 'pending_assignment'], true)) {
                 $statusBreakdown['open']++;
-            } elseif (in_array($statusName, ['in progress', 'in_progress', 'assigned'], true)) {
+            } elseif (in_array($statusName, ['in progress', 'in_progress', 'assigned', 'escalated'], true)) {
                 $statusBreakdown['in_progress']++;
             } elseif (in_array($statusName, ['on hold', 'on_hold', 'paused'], true) || (int) $t->ticket_status_ID === 11) {
                 $statusBreakdown['on_hold']++;

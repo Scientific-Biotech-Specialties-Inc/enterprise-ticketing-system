@@ -31,16 +31,19 @@ class CalculateTicketSlaAction
         $problemCategoryId = $ticketObj->problem_category_ID ?? 1;
         $branchId = $ticketObj->branch_id ?? null;
 
-        $tracking = DB::table('sla_trackings')->where('ticket_id', $ticketObj->ticket_ID)->first();
+        $responseDueAt = $ticketObj->response_due_at ?? null;
+        $resolutionDueAt = $ticketObj->resolution_due_at ?? null;
+        $slaStatus = $ticketObj->resolution_sla_status ?? ($ticketObj->sla_status ?? 'within_sla');
+        $isBreached = ($ticketObj->sla_status ?? '') === 'Breached' || ($ticketObj->resolution_sla_status ?? '') === 'Breached';
 
         return [
             'success' => true,
             'ticket_id' => $ticketObj->ticket_ID,
             'priority' => $priorityName,
-            'response_due_at' => $tracking->response_due_at ?? null,
-            'resolution_due_at' => $tracking->resolution_due_at ?? null,
-            'sla_status' => $tracking->sla_status ?? 'within_sla',
-            'is_breached' => $tracking ? (bool) $tracking->is_breached : false,
+            'response_due_at' => $responseDueAt,
+            'resolution_due_at' => $resolutionDueAt,
+            'sla_status' => $slaStatus,
+            'is_breached' => $isBreached,
         ];
     }
 }

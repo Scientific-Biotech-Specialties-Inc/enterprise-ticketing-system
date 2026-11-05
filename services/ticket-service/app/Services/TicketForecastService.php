@@ -30,33 +30,50 @@ class TicketForecastService
 
         $isAllBranches = ($branch->slug === 'all' || (string)($branch->id ?? '') === 'all');
         if ($isAllBranches) {
-            $existingForecasts = BranchTicketForecast::where('forecast_date', '>=', Carbon::today()->toDateString())
+            // Statuses are 'success' or 'insufficient_data', so MAX() is 'success' whenever at least one branch has a real forecast.
+            $loadAllBranches = fn () => BranchTicketForecast::where('forecast_date', '>=', Carbon::today()->toDateString())
                 ->select(
                     'forecast_date',
                     DB::raw('SUM(predicted_volume) as predicted_volume'),
                     DB::raw('SUM(lower_bound) as lower_bound'),
                     DB::raw('SUM(upper_bound) as upper_bound'),
-                    DB::raw('MAX(calculation_status) as calculation_status')
+                    DB::raw('MAX(calculation_status) as calculation_status'),
+                    DB::raw('MAX(historical_days_used) as max_days_used'),
+                    DB::raw("MAX(CASE WHEN calculation_status = 'success' THEN historical_days_used END) as success_days_used")
                 )
                 ->groupBy('forecast_date')
                 ->orderBy('forecast_date', 'asc')
                 ->limit($horizonDays)
                 ->get();
 
-            if ($forceRefresh || $existingForecasts->isEmpty()) {
+            $existingForecasts = $loadAllBranches();
+
+            // The nightly job stores a shorter horizon than a 30 day request needs, so top up instead of serving a short window.
+            if ($forceRefresh || $existingForecasts->count() < $horizonDays) {
                 $this->calculateAndPersistAllBranches($horizonDays);
-                $existingForecasts = BranchTicketForecast::where('forecast_date', '>=', Carbon::today()->toDateString())
-                    ->select(
-                        'forecast_date',
-                        DB::raw('SUM(predicted_volume) as predicted_volume'),
-                        DB::raw('SUM(lower_bound) as lower_bound'),
-                        DB::raw('SUM(upper_bound) as upper_bound'),
-                        DB::raw('MAX(calculation_status) as calculation_status')
-                    )
-                    ->groupBy('forecast_date')
-                    ->orderBy('forecast_date', 'asc')
-                    ->limit($horizonDays)
-                    ->get();
+                $existingForecasts = $loadAllBranches();
+            }
+
+            $firstAggregate = $existingForecasts->first();
+            if ($firstAggregate && $firstAggregate->calculation_status === 'insufficient_data') {
+                return [
+                    'status' => 'insufficient_data',
+                    'branch' => [
+                        'id' => 'all',
+                        'name' => 'All Branches',
+                        'slug' => 'all',
+                    ],
+                    'historical_basis' => [
+                        'days_used' => (int) $firstAggregate->max_days_used,
+                        'minimum_days_required' => self::MINIMUM_HISTORICAL_DAYS,
+                    ],
+                    'message' => 'Insufficient historical data for reliable projection in any branch. Minimum ' . self::MINIMUM_HISTORICAL_DAYS . ' days required.',
+                    'volume_forecast' => [],
+                    'recurring_issues' => [
+                        'categories' => [],
+                        'machines' => [],
+                    ],
+                ];
             }
 
             $trends = BranchRecurringIssueTrend::select(
@@ -93,7 +110,7 @@ class TicketForecastService
                     'slug' => 'all',
                 ],
                 'historical_basis' => [
-                    'days_used' => 60,
+                    'days_used' => (int) ($firstAggregate->success_days_used ?? 0),
                     'minimum_days_required' => self::MINIMUM_HISTORICAL_DAYS,
                     'model' => '7-day Weighted Moving Average with Day-of-Week Seasonality (Global)',
                 ],
@@ -114,7 +131,7 @@ class TicketForecastService
             ->limit($horizonDays)
             ->get();
 
-        if ($forceRefresh || $existingForecasts->isEmpty()) {
+        if ($forceRefresh || $existingForecasts->count() < $horizonDays) {
             $this->calculateAndPersistBranchForecasts($branch, $horizonDays);
             $existingForecasts = BranchTicketForecast::where('branch_id', $branchId)
                 ->where('forecast_date', '>=', Carbon::today()->toDateString())

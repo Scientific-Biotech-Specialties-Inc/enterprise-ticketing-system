@@ -438,5 +438,146 @@ class TicketTimelineTest extends TestCase
             ->getJson('/api/tickets/999999999/timeline')
             ->assertStatus(404);
     }
-}
 
+    /**
+     * Spec 0028 AC-17: background job entries read as system actions, and older raw field changes
+     * show readable before and after values with a plain language sentence.
+     */
+    public function test_system_entries_are_flagged_and_changes_read_in_plain_language(): void
+    {
+        $now = Carbon::now();
+        $ticketId = DB::table('tickets')->insertGetId([
+            'ticket_number' => 'TCK-TIME-SYS',
+            'title' => 'System flag ticket',
+            'description' => 'System flag ticket',
+            'created_by' => 9301,
+            'assigned_to' => $this->technician->emp_id,
+            'branch_id' => 931,
+            'problem_category_ID' => 1,
+            'ticket_type_ID' => 1,
+            'ticket_status_ID' => 1,
+            'priority_ID' => 1,
+            'created_at' => $now->copy()->subHours(5),
+            'updated_at' => $now,
+        ]);
+
+        // Written the way the SLA job writes it: actor_type "system" with the is_system column left at its default.
+        DB::table('ticket_audit_logs')->insert([
+            'ticket_ID' => $ticketId,
+            'action_type' => 'sla_breached',
+            'action_by_ID' => $this->admin->emp_id,
+            'actor_type' => 'system',
+            'details' => json_encode(['sla_status' => 'Breached', 'overdue_duration' => '2.0 hours overdue']),
+            'created_at' => $now->copy()->subHour(),
+        ]);
+        // Legacy shape: the change only exists as JSON in details.
+        DB::table('ticket_audit_logs')->insert([
+            'ticket_ID' => $ticketId,
+            'action_type' => 'update',
+            'action_by_ID' => $this->admin->emp_id,
+            'actor_type' => 'admin',
+            'details' => json_encode(['field' => 'ticket_status_ID', 'old' => 1, 'new' => 2]),
+            'created_at' => $now->copy()->subMinutes(30),
+        ]);
+
+        $entries = $this->actingAs($this->admin, 'api')
+            ->getJson("/api/tickets/{$ticketId}/timeline?order=asc&per_page=10")
+            ->assertOk()
+            ->json('data');
+
+        $sla = collect($entries)->firstWhere('action_type', 'sla_breached');
+        $this->assertTrue($sla['is_system']);
+        $this->assertSame('System', $sla['actor']['name']);
+        $this->assertSame('system', $sla['actor']['role']);
+        $this->assertSame('SLA breached (2.0 hours overdue)', $sla['description']);
+
+        $change = collect($entries)->firstWhere('action_type', 'update');
+        $this->assertFalse($change['is_system']);
+        $this->assertSame('Open', $change['before_state']['ticket_status_ID']);
+        $this->assertSame('In Progress', $change['after_state']['ticket_status_ID']);
+        $this->assertSame('Status changed from Open to In Progress', $change['description']);
+    }
+
+    /**
+     * Older internal notes were stored with is_internal = 0. A customer must still never see them.
+     */
+    public function test_customer_never_sees_internal_note_rows_even_when_flag_is_zero(): void
+    {
+        $ticketId = DB::table('tickets')->insertGetId([
+            'ticket_number' => 'TCK-TIME-LEGACY',
+            'title' => 'Legacy Internal Note Ticket',
+            'description' => 'Legacy note rows',
+            'created_by' => 9301,
+            'branch_id' => 931,
+            'problem_category_ID' => 1,
+            'ticket_type_ID' => 1,
+            'ticket_status_ID' => 1,
+            'priority_ID' => 1,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->timelineService->recordEvent($ticketId, 'create', 'ticket_created', 9301, 'customer', 'customer');
+        $this->timelineService->recordEvent(
+            $ticketId,
+            'internal_note_added',
+            'internal_note_added',
+            $this->technician->emp_id,
+            'employee',
+            'technician',
+            null,
+            null,
+            '{"text":"Escalation reason that only staff may read"}',
+            false,
+            false // flag not set, as in older rows
+        );
+
+        $customerTypes = array_column(
+            $this->actingAs($this->customerOwner, 'api')->getJson("/api/tickets/{$ticketId}/timeline")->assertOk()->json('data'),
+            'action_type'
+        );
+        $this->assertSame(['create'], $customerTypes);
+
+        $staffTypes = array_column(
+            $this->actingAs($this->technician, 'api')->getJson("/api/tickets/{$ticketId}/timeline")->assertOk()->json('data'),
+            'action_type'
+        );
+        $this->assertContains('internal_note_added', $staffTypes);
+    }
+
+    /**
+     * Staff actors with any actor type (such as "customer service") show a real name, never "User #id".
+     */
+    public function test_actor_name_resolves_for_customer_service_actor_type(): void
+    {
+        $ticketId = DB::table('tickets')->insertGetId([
+            'ticket_number' => 'TCK-TIME-ACTOR',
+            'title' => 'Actor Name Ticket',
+            'description' => 'Actor type check',
+            'created_by' => 9301,
+            'branch_id' => 931,
+            'problem_category_ID' => 1,
+            'ticket_type_ID' => 1,
+            'ticket_status_ID' => 1,
+            'priority_ID' => 1,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->timelineService->recordEvent(
+            $ticketId,
+            'status_change',
+            'status_change',
+            $this->admin->emp_id,
+            'customer service',
+            'customer service'
+        );
+
+        $actor = $this->actingAs($this->admin, 'api')
+            ->getJson("/api/tickets/{$ticketId}/timeline")
+            ->assertOk()
+            ->json('data.0.actor');
+
+        $this->assertSame('Amanda Admin', $actor['name']);
+    }
+}

@@ -64,6 +64,7 @@ class AssignTicketAction
                 'old' => $oldAssignedTo,
                 'new' => $assignedTo,
                 'assignee_name' => trim(($employee->first_name ?? '') . ' ' . ($employee->last_name ?? '')),
+                'actor_name' => $actorName,
             ];
             if ($reason) {
                 $details['reason'] = $reason;
@@ -73,8 +74,7 @@ class AssignTicketAction
                 'ticket_ID' => $ticketId,
                 'action_type' => 'assigned',
                 'actor_type' => 'Employee',
-                'actor_id' => $actorId,
-                'actor_name' => $actorName,
+                'action_by_ID' => $actorId,
                 'details' => json_encode($details),
                 'created_at' => now(),
             ]);

@@ -282,7 +282,23 @@ class TicketReminderTest extends TestCase
             'updated_at' => now(),
         ]);
 
-        $response = $this->getJson('/api/cs-dashboard')
+        // CS dashboard requires authentication, so call it as a seeded CS employee.
+        $csDashEmpId = 99456;
+        DB::table('employees')->where('emp_id', $csDashEmpId)->delete();
+        DB::table('employees')->insert([
+            'emp_id' => $csDashEmpId,
+            'first_name' => 'Dash',
+            'last_name' => 'Agent',
+            'email' => 'dash.agent_' . uniqid() . '@example.com',
+            'role' => 'customer service',
+            'department' => 'Customer Service',
+            'is_active' => 1,
+            'password_hash' => 'secret',
+        ]);
+        $csDashUser = Employee::where('emp_id', $csDashEmpId)->first();
+
+        $response = $this->actingAs($csDashUser, 'api')
+            ->getJson('/api/cs-dashboard')
             ->assertOk();
 
         $data = $response->json();

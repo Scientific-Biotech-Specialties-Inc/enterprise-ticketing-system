@@ -15,9 +15,7 @@ import {
   UserCheck,
 } from 'lucide-react';
 import {
-  getCSDashboard,
-  getCSIncomingTickets,
-  getReassignmentRequests,
+  getCSDashboardSummary,
   getTicketDetails,
   getAssignableEmployees,
   getDepartments,
@@ -97,27 +95,10 @@ export default function CSDashboard() {
     : user?.name || 'Customer Service Representative';
 
   // ─── SLA helper ───────────────────────────────────────────────────────────
-  const evaluateSlaRisk = useCallback((ticket) => {
-    if (['Resolved', 'Closed', 'Discarded'].includes(ticket.status)) return 'normal';
-    const statusStr = String(ticket.sla_status || ticket.slaStatus || (ticket.sla?.resolution?.status) || '').toLowerCase();
-    if (statusStr.includes('breach') || statusStr.includes('violated') || ticket.sla_breached) {
-      return 'breached';
-    }
-    if (statusStr.includes('risk') || statusStr.includes('warning')) {
-      return 'at_risk';
-    }
-    // Check due dates if present
-    const due = ticket.resolution_due_at || ticket.due_at;
-    if (due) {
-      const msLeft = new Date(due).getTime() - Date.now();
-      if (msLeft < 0) return 'breached';
-      if (msLeft < 2 * 60 * 60 * 1000) return 'at_risk'; // within 2 hours
-    }
-    return 'normal';
-  }, []);
-
-  // ─── Load Workload & Attention Tickets ─────────────────────────────────────
-  const loadDashboardData = useCallback(async ({ forceRefresh = false } = {}) => {
+  // ─── Load the signed in agent's own summary ─────────────────────────────────
+  // One call returns queue, monitored tickets, workload and attention items for this agent only.
+  // Sections the server could not compute come back in partial_errors and show their own error state.
+  const loadDashboardData = useCallback(async () => {
     setLoadingWorkload(true);
     setLoadingQueued(true);
     setLoadingAttention(true);
@@ -125,120 +106,67 @@ export default function CSDashboard() {
     setQueuedError(null);
     setAttentionError(null);
 
-    // 1. Fetch CS Dashboard Summary
     try {
-      const summaryPayload = await getCSDashboard({ limit: 20, forceRefresh });
-      const recent = (summaryPayload?.recent_tickets || []).map((t) => ({
-        ...t,
-        updated: t.updated_at ? formatDisplayDate(t.updated_at) : t.updated || 'Just now',
-        priority: t.priority || 'Unassigned',
-      }));
+      const summary = await getCSDashboardSummary({ limit: 20 });
+      const failed = new Set((summary?.partial_errors || []).map((e) => e.section));
 
-      // Calculate SLA counts
-      let breached = 0;
-      let atRisk = 0;
-      let onHold = 0;
-      recent.forEach((t) => {
-        const risk = evaluateSlaRisk(t);
-        if (risk === 'breached') breached++;
-        if (risk === 'at_risk') atRisk++;
-        if (t.status === 'On Hold') onHold++;
-      });
+      if (failed.has('queued_tickets')) {
+        setQueuedError('Incoming queued tickets failed to load.');
+      } else {
+        setQueuedTickets(
+          (summary?.queued_tickets?.items || []).slice(0, 6).map((t) => ({
+            ...t,
+            id: t.ref || `TKT-${t.ticket_ID}`,
+            updated: t.created_at ? formatDisplayDate(t.created_at) : 'Recently',
+          }))
+        );
+      }
 
-      setAssignedStatusCounts({
-        open: summaryPayload?.summary?.open ?? recent.filter((t) => t.status === 'Open').length,
-        inProgress: summaryPayload?.summary?.in_progress ?? recent.filter((t) => t.status === 'In Progress').length,
-        onHold: onHold || (recent.filter((t) => t.status === 'On Hold').length),
-        resolved: summaryPayload?.summary?.resolved ?? recent.filter((t) => t.status === 'Resolved').length,
-      });
+      if (failed.has('assigned_monitored') || failed.has('workload_metrics')) {
+        setWorkloadError('Workload summary data is temporarily unavailable.');
+      } else {
+        const byStatus = summary?.assigned_monitored?.by_status || {};
+        setAssignedStatusCounts({
+          open: byStatus['Open'] ?? 0,
+          inProgress: byStatus['In Progress'] ?? 0,
+          onHold: byStatus['On Hold'] ?? 0,
+          resolved: byStatus['Resolved'] ?? 0,
+        });
+        setWorkloadMetrics({
+          queuedCount: summary?.queued_tickets?.count ?? 0,
+          assignedCount: summary?.workload_metrics?.active_tickets ?? 0,
+          atRiskCount: summary?.workload_metrics?.at_risk ?? 0,
+          breachedCount: summary?.workload_metrics?.breached ?? 0,
+          pendingReassignCount: summary?.workload_metrics?.pending_reassignments ?? 0,
+          escalatedCount: byStatus['Escalated'] ?? 0,
+        });
+      }
 
-      setWorkloadMetrics((prev) => ({
-        ...prev,
-        queuedCount: summaryPayload?.summary?.open ?? 7,
-        assignedCount: summaryPayload?.summary?.in_progress ?? 9,
-        atRiskCount: atRisk || 3,
-        breachedCount: summaryPayload?.summary?.sla_breached ?? breached,
-        escalatedCount: summaryPayload?.summary?.high_priority ?? recent.filter((t) => t.priority === 'Critical' || t.priority === 'High').length,
-      }));
-    } catch {
-      setWorkloadError('Workload summary data is temporarily unavailable.');
-    } finally {
-      setLoadingWorkload(false);
-    }
-
-    // 2. Fetch Queued Incoming Tickets
-    try {
-      const incomingRes = await getCSIncomingTickets({ limit: 10, page: 1, forceRefresh });
-      const incomingList = Array.isArray(incomingRes) ? incomingRes : (incomingRes?.data || []);
-      setQueuedTickets(
-        incomingList.slice(0, 6).map((t) => ({
-          ...t,
-          id: t.id || `TKT-${t.ticket_ID}`,
-          updated: t.updated_at ? formatDisplayDate(t.updated_at) : 'Recently',
-        }))
-      );
+      if (failed.has('needs_attention') || failed.has('pending_reassignments')) {
+        setAttentionError('Tickets needing immediate attention could not be fetched.');
+      } else {
+        setAttentionTickets(
+          (summary?.needs_attention?.items || []).slice(0, 5).map((t) => ({
+            ...t,
+            id: t.ref || `TKT-${t.ticket_ID}`,
+            attentionType: t.reason === 'Breached' ? 'breached' : t.reason === 'At Risk' ? 'at_risk' : 'reassign',
+            updated: t.requested_at || t.created_at ? formatDisplayDate(t.requested_at || t.created_at) : 'Recently',
+          }))
+        );
+      }
     } catch {
       setQueuedError('Incoming queued tickets failed to load.');
-    } finally {
-      setLoadingQueued(false);
-    }
-
-    // 3. Fetch Reassignment Requests & Attention Items
-    try {
-      const [reassignRes, incomingAll] = await Promise.allSettled([
-        getReassignmentRequests({ status: 'pending' }),
-        getCSIncomingTickets({ limit: 30, forceRefresh }),
-      ]);
-
-      const attentionList = [];
-
-      // Add pending reassignment requests
-      if (reassignRes.status === 'fulfilled') {
-        const reassigns = Array.isArray(reassignRes.value) ? reassignRes.value : (reassignRes.value?.data || []);
-        reassigns.forEach((r) => {
-          attentionList.push({
-            id: r.ticket_ref || `TKT-${r.ticket_id}`,
-            ticket_ID: r.ticket_id,
-            title: r.ticket_title || `Reassignment Request from ${r.requesting_employee_name || 'Technician'}`,
-            customer: r.requesting_employee_department || 'Service Department',
-            status: 'Pending Reassignment',
-            priority: r.priority || 'High',
-            reason: r.reason || 'Technician requested reassignment',
-            attentionType: 'reassign',
-            updated: r.created_at ? formatDisplayDate(r.created_at) : 'Pending review',
-          });
-        });
-        setWorkloadMetrics((prev) => ({ ...prev, pendingReassignCount: reassigns.length }));
-      }
-
-      // Add Breached and At-Risk tickets
-      if (incomingAll.status === 'fulfilled') {
-        const incList = Array.isArray(incomingAll.value) ? incomingAll.value : (incomingAll.value?.data || []);
-        incList.forEach((t) => {
-          const risk = evaluateSlaRisk(t);
-          if (risk === 'breached' || risk === 'at_risk' || t.priority === 'Critical') {
-            if (!attentionList.some((item) => item.id === t.id || item.ticket_ID === t.ticket_ID)) {
-              attentionList.push({
-                ...t,
-                id: t.id || `TKT-${t.ticket_ID}`,
-                attentionType: risk === 'breached' ? 'breached' : risk === 'at_risk' ? 'at_risk' : 'critical',
-                updated: t.updated_at ? formatDisplayDate(t.updated_at) : 'Recently',
-              });
-            }
-          }
-        });
-      }
-
-      setAttentionTickets(attentionList.slice(0, 5));
-    } catch {
+      setWorkloadError('Workload summary data is temporarily unavailable.');
       setAttentionError('Tickets needing immediate attention could not be fetched.');
     } finally {
+      setLoadingWorkload(false);
+      setLoadingQueued(false);
       setLoadingAttention(false);
     }
-  }, [evaluateSlaRisk]);
+  }, []);
 
   useEffect(() => {
-    loadDashboardData({ forceRefresh: false });
+    loadDashboardData();
   }, [loadDashboardData, refreshKey]);
 
   // Real-time listener for near-real-time updates
@@ -309,7 +237,7 @@ export default function CSDashboard() {
     });
 
     window.dispatchEvent(new Event('notifications:updated'));
-    loadDashboardData({ forceRefresh: true });
+    loadDashboardData();
     return true;
   }, [user?.email, loadDashboardData]);
 
@@ -339,7 +267,7 @@ export default function CSDashboard() {
         {workloadError ? (
           <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive flex items-center justify-between">
             <span>{workloadError}</span>
-            <Button variant="outline" size="sm" onClick={() => loadDashboardData({ forceRefresh: true })} className="h-7 text-xs">
+            <Button variant="outline" size="sm" onClick={() => loadDashboardData()} className="h-7 text-xs">
               <RefreshCw className="w-3.5 h-3.5 mr-1" /> Retry
             </Button>
           </div>
@@ -445,7 +373,7 @@ export default function CSDashboard() {
         {attentionError ? (
           <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive flex items-center justify-between">
             <span>{attentionError}</span>
-            <Button variant="outline" size="sm" onClick={() => loadDashboardData({ forceRefresh: true })} className="h-7 text-xs">
+            <Button variant="outline" size="sm" onClick={() => loadDashboardData()} className="h-7 text-xs">
               <RefreshCw className="w-3.5 h-3.5 mr-1" /> Retry
             </Button>
           </div>
@@ -569,7 +497,7 @@ export default function CSDashboard() {
           {queuedError ? (
             <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive flex items-center justify-between">
               <span>{queuedError}</span>
-              <Button variant="outline" size="sm" onClick={() => loadDashboardData({ forceRefresh: true })} className="h-7 text-xs">
+              <Button variant="outline" size="sm" onClick={() => loadDashboardData()} className="h-7 text-xs">
                 Retry
               </Button>
             </div>

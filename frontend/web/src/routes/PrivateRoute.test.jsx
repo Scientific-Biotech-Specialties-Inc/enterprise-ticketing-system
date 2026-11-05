@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import PrivateRoute from './PrivateRoute';
+import PrivateRoute, { checkIsCSManager, checkIsServiceManager } from './PrivateRoute';
 import * as authContextModule from '@/context/AuthContext';
 
 vi.mock('@/context/AuthContext', () => ({
@@ -14,6 +14,16 @@ vi.mock('@/context/AuthContext', () => ({
 describe('PrivateRoute authorization guard (AC-1, AC-8, AC-12, AC-15, AC-20)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('treats a Customer Service manager as a CS manager only, never also a service manager (prevents a redirect loop)', () => {
+    const csManager = { role: 'Manager', department: 'Customer Service', email: 'cs.lead@example.com' };
+    const serviceManager = { role: 'Manager', department: 'Service', email: 'svc.lead@example.com' };
+
+    expect(checkIsCSManager(csManager)).toBe(true);
+    expect(checkIsServiceManager(csManager)).toBe(false);
+    expect(checkIsServiceManager(serviceManager)).toBe(true);
+    expect(checkIsCSManager(serviceManager)).toBe(false);
   });
 
   it('renders skeleton loader when loading or validating authenticated session (covers: AC-20)', () => {

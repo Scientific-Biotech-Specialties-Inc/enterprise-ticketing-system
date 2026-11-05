@@ -158,6 +158,29 @@ describe('PredictiveAnalytics Component Tests', () => {
     expect(screen.getByText('8')).toBeInTheDocument();
   });
 
+  it('covers AC-12: shows the insufficient history notice for the real API payload shape', () => {
+    const apiPayload = {
+      predictive: {
+        status: 'insufficient_data',
+        historical_basis: { days_used: 4, minimum_days_required: 14 },
+        volume_forecast: [],
+      },
+    };
+
+    render(
+      <PredictiveAnalytics
+        selectedPreset="Last 7 Days"
+        analyticsData={apiPayload}
+        branch={mockBranch}
+      />
+    );
+
+    expect(screen.getByText('Insufficient History')).toBeInTheDocument();
+    expect(screen.getByText('4')).toBeInTheDocument();
+    expect(screen.getByText(/minimum required: 14/i)).toBeInTheDocument();
+    expect(screen.queryByText('Predicted Tickets')).not.toBeInTheDocument();
+  });
+
   it('covers AC-12: renders calculation error card and handles retry callback', () => {
     const onRetryMock = vi.fn();
     const errorData = {

@@ -459,3 +459,121 @@ export function getDepartmentPerformanceData(branchId = 'main', period = 'Last 7
   };
 }
 
+
+/**
+ * Maps the real `/superadmin/system-dashboard` response onto the shape the System Dashboard page renders.
+ * Values the API cannot supply stay null so the page can show "Unavailable" instead of an invented number.
+ * Called with no payload it returns an all zero structure used before the first response arrives.
+ */
+export function adaptSystemDashboard(api, period = 'Last 7 Days') {
+  const summary = api?.summary || {};
+  const users = summary.users_by_role || {};
+  const kpis = api?.kpis || {};
+
+  const branchComparison = (api?.branch_comparisons || []).map((b) => {
+    const sla = b.sla_compliance_rate ?? null;
+    const total = b.total_tickets ?? 0;
+    return {
+      id: b.branch_id,
+      name: b.branch_name || 'Unknown branch',
+      code: b.branch_code || '',
+      region: b.region || '',
+      totalTickets: total,
+      resolvedTickets: b.resolved_tickets ?? 0,
+      slaCompliance: sla,
+      avgResolutionTime: b.avg_resolution_hours ?? 0,
+      avgCsat: b.csat_score ?? null,
+      activeTickets: b.active_tickets ?? 0,
+      escalatedTickets: b.escalated_tickets ?? 0,
+      healthStatus: total === 0 ? 'No Data' : sla >= 92 ? 'Healthy' : sla >= 88 ? 'Attention' : 'Critical',
+    };
+  });
+
+  const recentActivity = (api?.recent_activity || []).map((a) => ({
+    id: a.log_id,
+    ticketId: a.ticket_number || (a.ticket_id ? `Ticket #${a.ticket_id}` : '—'),
+    ticketDbId: a.ticket_id ?? null,
+    ticketSubject: a.ticket_title || '',
+    eventType: String(a.event_type || a.action_type || 'update').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+    branch: a.branch_name || '—',
+    actor: a.is_system ? 'System' : a.actor_name || 'System',
+    timestamp: a.created_at,
+    priority: '',
+    status: '',
+    details: a.details || '',
+  }));
+
+  return {
+    period,
+    totalUsers: {
+      total: users.total ?? 0,
+      customer: users.customer ?? 0,
+      employee: users.employee ?? 0,
+      cs: users.cs ?? 0,
+      admin: users.admin ?? 0,
+      superAdmin: users.superadmin ?? 0,
+    },
+    totalTickets: summary.total_tickets ?? 0,
+    activeEscalated: summary.active_tickets ?? 0,
+    escalatedTickets: summary.escalated_tickets ?? 0,
+    slaBreaches: summary.sla_breaches ?? 0,
+    ticketsCreatedToday: summary.tickets_created_today ?? 0,
+    systemKpis: {
+      overallSlaCompliance: kpis.sla_compliance_rate ?? null,
+      overallAvgCsat: kpis.csat_score ?? null,
+      overallResolutionTime: kpis.avg_resolution_hours ?? null,
+    },
+    branchComparison,
+    recentActivity,
+  };
+}
+
+/**
+ * How uneven a department's open work is across its own staff.
+ * Rule (shown to the Admin as help text): compare the busiest employee with the department average.
+ *   busiest >= 2x average  -> "High Imbalance"
+ *   busiest >= 1.5x average -> "Moderate"
+ *   otherwise              -> "Balanced"
+ * Needs at least two staff and three open tickets, otherwise there is nothing meaningful to compare.
+ */
+export function classifyWorkloadImbalance(distribution = []) {
+  const counts = distribution.map((e) => e.activeTickets);
+  const total = counts.reduce((a, b) => a + b, 0);
+  if (counts.length < 2 || total < 3) return 'Balanced';
+  const average = total / counts.length;
+  const busiest = Math.max(...counts);
+  if (busiest >= average * 2) return 'High Imbalance';
+  if (busiest >= average * 1.5) return 'Moderate';
+  return 'Balanced';
+}
+
+/** Maps `GET /admin-reports/departments` onto the rows the Department Performance view renders. */
+export function adaptDepartmentPerformance(api) {
+  const departments = (api?.departments || []).map((d) => {
+    const employees = (d.workload_distribution || []).map((e) => ({
+      id: e.employee_id,
+      name: e.name,
+      activeTickets: e.active_tickets_count ?? 0,
+      share: e.share_percentage ?? 0,
+    }));
+    const unclosed = d.unclosed_tickets_count ?? (d.open_tickets_count ?? 0) + (d.overdue_tickets_count ?? 0);
+    return {
+      id: d.department,
+      name: d.department,
+      employeeCount: d.staff_count ?? 0,
+      hasData: Boolean(d.has_data),
+      totalTicketsHandled: d.total_tickets ?? 0,
+      resolvedCount: d.resolved_tickets ?? 0,
+      avgResolutionTime: d.avg_resolution_hours ?? null,
+      slaCompliance: d.sla_compliance_rate ?? null,
+      avgCsat: d.csat_score ?? null,
+      openCount: d.open_tickets_count ?? 0,
+      overdueCount: d.overdue_tickets_count ?? 0,
+      workloadPerEmployee: employees.length > 0 ? Number((unclosed / employees.length).toFixed(1)) : 0,
+      imbalanceLevel: classifyWorkloadImbalance(employees),
+      employees,
+    };
+  });
+
+  return { period: api?.preset || '', departments };
+}

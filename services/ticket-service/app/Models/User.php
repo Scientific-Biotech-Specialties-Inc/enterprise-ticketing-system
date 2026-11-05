@@ -16,6 +16,11 @@ class User extends Authenticatable
 
     protected $primaryKey = 'emp_id';
 
+    protected $attributes = [
+        'password_hash' => '',
+        'is_active' => true,
+    ];
+
     /**
      * The attributes that are mass assignable.
      *

@@ -1081,6 +1081,8 @@ class SLAService
                 'action_type' => 'sla_breached',
                 'action_by_ID' => $systemEmpId,
                 'actor_type' => 'system',
+                'actor_role' => 'system',
+                'is_system' => 1,
                 'details' => json_encode([
                     'sla_status' => 'Breached',
                     'due_at' => $dueAt,
@@ -1189,6 +1191,8 @@ class SLAService
             DB::table('ticket_audit_logs')->insert([
                 'ticket_ID' => $ticketId,
                 'action_type' => 'sla_breached_reassigned',
+                'is_system' => 1,
+                'actor_role' => 'system',
                 'action_by_ID' => $systemEmpId,
                 'actor_type' => 'system',
                 'details' => json_encode([
@@ -1306,7 +1310,7 @@ class SLAService
             $assignedDept = (string) (DB::table('employees')->where('emp_id', $ticket->assigned_to)->value('department') ?? '');
         }
 
-        $hasPosLevel = \Illuminate\Support\Facades\Schema::hasColumn('employees', 'position_level');
+        $hasPosLevel = true;
 
         $targetDept = $assignedDept;
         if (empty($targetDept) && !empty($ticket->department_id)) {
@@ -1459,7 +1463,7 @@ class SLAService
             $assignedDept = (string) (DB::table('employees')->where('emp_id', $ticket->assigned_to)->value('department') ?? '');
         }
 
-        $hasPosLevel = \Illuminate\Support\Facades\Schema::hasColumn('employees', 'position_level');
+        $hasPosLevel = true;
 
         // 1. Direct department match from ticket or assigned employee
         $targetDept = $assignedDept;

@@ -37,7 +37,7 @@ class TicketDashboardController extends Controller
             'date_to' => $request->query('date_to'),
         ];
 
-        $data = $this->dashboardService->getCustomerDashboard($createdBy, $limit, $filters);
+        $data = app(\App\Actions\Dashboards\GetCustomerDashboardMetricsAction::class)->execute($createdBy, $limit, $filters);
         return response()->json($data);
     }
 
@@ -53,8 +53,30 @@ class TicketDashboardController extends Controller
     {
         $limit = max(1, min((int) $request->query('limit', 10), 50));
 
-        $data = $this->dashboardService->getCsDashboard($limit);
+        $data = app(\App\Actions\Dashboards\GetCsDashboardMetricsAction::class)->execute($limit);
         return response()->json($data);
+    }
+
+    /**
+     * GET /cs-dashboard-summary: the signed in CS agent's own queue, monitored tickets, workload and attention items.
+     * Read only. Customers and other staff roles are rejected.
+     */
+    public function csDashboardSummary(Request $request)
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['status' => 'error', 'message' => 'Unauthenticated.'], 401);
+        }
+
+        $role = strtolower(trim((string) ($user->role ?? '')));
+        $allowed = in_array($role, ['customer service', 'customer support', 'cs', 'admin', 'superadmin', 'super admin', 'systemadministrator', 'itadmin'], true);
+        if (!$allowed) {
+            return response()->json(['status' => 'error', 'message' => 'Access denied: Customer Service role required.'], 403);
+        }
+
+        $limit = max(1, min((int) $request->query('limit', 10), 50));
+
+        return response()->json(app(\App\Services\CsDashboardSummaryService::class)->getSummary($user, $limit));
     }
 
     public function csIncoming(Request $request)
@@ -96,8 +118,18 @@ class TicketDashboardController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
+        // Branch dashboard is Admin and Super Admin only (same allow list as adminReports).
+        $role = strtolower(trim((string) ($user->role ?? '')));
+        $allowedRoles = ['superadmin', 'super admin', 'admin', 'systemadministrator', 'itadmin', 'it admin'];
+        if (!in_array($role, $allowedRoles, true)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Access denied: Admin role required to view the branch dashboard.',
+            ], 403);
+        }
+
         $filters = [
-            'preset' => $request->query('preset') ?? $request->query('filter'),
+            'preset' => $request->query('preset') ?? $request->query('filter') ?? $request->query('period') ?? $request->query('date_range'),
             'date_from' => $request->query('date_from'),
             'date_to' => $request->query('date_to'),
             'branch' => $request->query('branch'),
@@ -106,7 +138,7 @@ class TicketDashboardController extends Controller
 
         $forceRefresh = filter_var($request->query('forceRefresh', $request->query('force_refresh', false)), FILTER_VALIDATE_BOOLEAN);
 
-        $data = $this->dashboardService->getAdminDashboard($user, $filters, $forceRefresh);
+        $data = app(\App\Actions\Dashboards\GetAdminDashboardMetricsAction::class)->execute($user, $filters, $forceRefresh);
         return response()->json($data);
     }
 
@@ -130,7 +162,7 @@ class TicketDashboardController extends Controller
             'report_type' => $request->query('report_type'),
             'department' => $request->query('department'),
             'priority' => $request->query('priority'),
-            'preset' => $request->query('preset') ?? $request->query('filter'),
+            'preset' => $request->query('preset') ?? $request->query('filter') ?? $request->query('period') ?? $request->query('date_range'),
             'date_from' => $request->query('date_from'),
             'date_to' => $request->query('date_to'),
             'branch' => $request->query('branch'),
@@ -138,6 +170,14 @@ class TicketDashboardController extends Controller
         ];
 
         $forceRefresh = filter_var($request->query('forceRefresh', $request->query('force_refresh', false)), FILTER_VALIDATE_BOOLEAN);
+
+        $reportType = trim((string) ($filters['report_type'] ?? ''));
+        if ($reportType !== '' && !in_array($reportType, \App\Services\ReportExportService::REPORT_TYPES, true)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Invalid report_type. Allowed: ' . implode(', ', \App\Services\ReportExportService::REPORT_TYPES) . '.',
+            ], 422);
+        }
 
         $data = $this->dashboardService->getAdminReports($user, $filters, $forceRefresh);
         return response()->json($data);

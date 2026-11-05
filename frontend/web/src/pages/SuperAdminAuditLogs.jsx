@@ -28,6 +28,8 @@ import {
 } from 'lucide-react';
 import {
   getSuperAdminAuditLogs,
+  getAuditLogFilterOptions,
+  getAuditLogRetentionImpact,
   getAuditLogRetentionConfig,
   updateAuditLogRetentionConfig,
   purgeAuditLogs,
@@ -39,12 +41,10 @@ import { DataTableSkeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { DEFAULT_BRANCHES } from '@/data/branchConfig';
 import SecurityIncidentModal from '@/components/security/SecurityIncidentModal';
 import SystemAlertModal from '@/components/security/SystemAlertModal';
 import { formatDisplayDate } from '@/utils/dateUtils';
 
-const RETENTION_STORAGE_KEY = 'superadmin_audit_log_retention_days';
 const DEFAULT_RETENTION_DAYS = 365;
 
 export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
@@ -123,14 +123,11 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
   }, []);
 
   // Retention & Purge States (TS088)
-  const [retentionDays, setRetentionDays] = useState(() => {
-    const saved = localStorage.getItem(RETENTION_STORAGE_KEY);
-    return saved ? Number(saved) : DEFAULT_RETENTION_DAYS;
-  });
-  const [selectedRetentionPreset, setSelectedRetentionPreset] = useState(() => {
-    const saved = localStorage.getItem(RETENTION_STORAGE_KEY);
-    return saved ? String(saved) : String(DEFAULT_RETENTION_DAYS);
-  });
+  const [retentionDays, setRetentionDays] = useState(DEFAULT_RETENTION_DAYS);
+  const [selectedRetentionPreset, setSelectedRetentionPreset] = useState(String(DEFAULT_RETENTION_DAYS));
+  const [affectedPurgeCount, setAffectedPurgeCount] = useState(0);
+  const [retentionError, setRetentionError] = useState('');
+  const [filterOptions, setFilterOptions] = useState({ action_types: [], branches: [] });
   const [customRetentionDays, setCustomRetentionDays] = useState('');
   const [confirmModal, setConfirmModal] = useState(null); // { type: 'reduction' | 'purge', targetDays, affectedCount }
   const [retentionSuccessMsg, setRetentionSuccessMsg] = useState('');
@@ -155,48 +152,25 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
   }, [location.pathname, location.search]);
 
   // ─── Fetch Logs ─────────────────────────────────────────────────────────────
+  // Action and branch narrowing is done by the server so results are real, not guessed client side.
   const loadLogs = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
     try {
-      const data = await getSuperAdminAuditLogs();
+      const params = {};
+      if (filterAction) params.event_type = filterAction;
+      if (filterBranch) params.branch_id = filterBranch;
+      const data = await getSuperAdminAuditLogs(params);
       const serverLogs = Array.isArray(data) ? data : [];
-
-      let simulatedLogs = [];
-      try {
-        const stored = localStorage.getItem('superadmin_simulated_audit_logs');
-        if (stored) {
-          simulatedLogs = JSON.parse(stored);
-        }
-      } catch (e) {
-        console.error('Failed to parse simulated audit logs:', e);
-      }
-
-      // Assign realistic branch scopes to logs if not set
-      const branchNames = DEFAULT_BRANCHES.map((b) => b.name);
-      const merged = [...simulatedLogs, ...serverLogs].map((l, idx) => ({
-        ...l,
-        branch: l.branch || branchNames[idx % branchNames.length],
-      })).sort((a, b) => {
-        const timeA = new Date(a.timestamp || 0).getTime();
-        const timeB = new Date(b.timestamp || 0).getTime();
-        return timeB - timeA;
-      });
-
-      setLogs(merged);
+      setLogs(serverLogs);
     } catch (err) {
       console.error('Failed to load superadmin audit logs:', err);
-      setLoadError('Unable to connect to the audit log service. Please check network connectivity or try again.');
-      try {
-        const stored = localStorage.getItem('superadmin_simulated_audit_logs');
-        if (stored) {
-          setLogs(JSON.parse(stored));
-        }
-      } catch {}
+      setLogs([]);
+      setLoadError('Unable to load audit logs. Check your connection and select Refresh to try again.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [filterAction, filterBranch]);
 
   useEffect(() => {
     loadLogs();
@@ -209,10 +183,11 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
   });
 
   // ─── Dynamic Dropdown Options (TS087 Criteria) ─────────────────────────────
-  const actionOptions = useMemo(() => [...new Set(logs.map((l) => l.action).filter(Boolean))].sort(), [logs]);
+  const humanize = (v) => String(v).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const actionOptions = filterOptions.action_types;
   const actorOptions = useMemo(() => [...new Set(logs.map((l) => l.user).filter(Boolean))].sort(), [logs]);
   const moduleOptions = useMemo(() => [...new Set(logs.map((l) => l.module).filter(Boolean))].sort(), [logs]);
-  const branchOptions = useMemo(() => DEFAULT_BRANCHES.map((b) => b.name), []);
+  const branchOptions = filterOptions.branches;
 
   // ─── Multi-Filter Engine (TS087 Criteria) ───────────────────────────────────
   const filtered = useMemo(() => {
@@ -260,13 +235,11 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
     }
 
     // Specific category filters
-    if (filterAction) result = result.filter((l) => l.action === filterAction);
     if (filterActor) result = result.filter((l) => l.user === filterActor);
     if (filterModule) result = result.filter((l) => l.module === filterModule);
-    if (filterBranch) result = result.filter((l) => l.branch === filterBranch);
 
     return result;
-  }, [logs, search, datePreset, customStart, customEnd, filterAction, filterActor, filterModule, filterBranch]);
+  }, [logs, search, datePreset, customStart, customEnd, filterActor, filterModule]);
 
   // Reset pagination when filters change
   useEffect(() => {
@@ -289,12 +262,12 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
       const label = datePreset === 'custom' ? `Date: ${customStart || '...'} to ${customEnd || '...'}` : `Date: ${datePreset.toUpperCase()}`;
       list.push({ key: 'date', label, clear: () => { setDatePreset('all'); setCustomStart(''); setCustomEnd(''); } });
     }
-    if (filterAction) list.push({ key: 'action', label: `Action: ${filterAction}`, clear: () => setFilterAction('') });
+    if (filterAction) list.push({ key: 'action', label: `Action: ${humanize(filterAction)}`, clear: () => setFilterAction('') });
     if (filterActor) list.push({ key: 'actor', label: `Actor: ${filterActor}`, clear: () => setFilterActor('') });
     if (filterModule) list.push({ key: 'module', label: `Module: ${filterModule}`, clear: () => setFilterModule('') });
-    if (filterBranch) list.push({ key: 'branch', label: `Branch: ${filterBranch}`, clear: () => setFilterBranch('') });
+    if (filterBranch) list.push({ key: 'branch', label: `Branch: ${filterOptions.branches.find((b) => String(b.id) === String(filterBranch))?.name || filterBranch}`, clear: () => setFilterBranch('') });
     return list;
-  }, [search, datePreset, customStart, customEnd, filterAction, filterActor, filterModule, filterBranch]);
+  }, [search, datePreset, customStart, customEnd, filterAction, filterActor, filterModule, filterBranch, filterOptions]);
 
   const handleResetAllFilters = () => {
     setSearch('');
@@ -315,45 +288,79 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
     return d;
   }, [retentionDays]);
 
-  const affectedPurgeCount = useMemo(() => {
-    return logs.filter((l) => new Date(l.timestamp || 0) < thresholdDate).length;
-  }, [logs, thresholdDate]);
+  // Load the saved policy, the dropdown values and the pending purge count from the server.
+  const refreshRetention = useCallback(async () => {
+    try {
+      const cfg = await getAuditLogRetentionConfig();
+      if (cfg?.retention_days) {
+        setRetentionDays(Number(cfg.retention_days));
+        setSelectedRetentionPreset((prev) => (['30', '90', '180', '365', 'custom'].includes(prev) && prev !== 'custom' ? String(cfg.retention_days) : prev));
+      }
+      setAffectedPurgeCount(Number(cfg?.pending_purge_estimate ?? cfg?.affected_records_count ?? 0));
+    } catch (err) {
+      console.error('Failed to load retention policy:', err);
+      setRetentionError('Unable to load the saved retention policy from the server.');
+    }
+  }, []);
 
-  const handleApplyRetentionSetting = () => {
+  useEffect(() => {
+    refreshRetention();
+    getAuditLogFilterOptions()
+      .then((opts) => setFilterOptions({ action_types: opts?.action_types || [], branches: opts?.branches || [] }))
+      .catch((err) => console.error('Failed to load audit log filter options:', err));
+  }, [refreshRetention]);
+
+  const handleApplyRetentionSetting = async () => {
+    setRetentionError('');
     const targetDays = selectedRetentionPreset === 'custom'
-      ? Number(customRetentionDays) || 365
+      ? Number(customRetentionDays) || DEFAULT_RETENTION_DAYS
       : Number(selectedRetentionPreset);
 
     if (targetDays < retentionDays) {
-      // Shorter retention triggers confirmation modal (TS088 Criteria)
-      const futureThreshold = new Date();
-      futureThreshold.setDate(futureThreshold.getDate() - targetDays);
-      const affected = logs.filter((l) => new Date(l.timestamp || 0) < futureThreshold).length;
+      // Shorter retention triggers a confirmation modal showing the real number of affected records.
+      try {
+        const impact = await getAuditLogRetentionImpact(targetDays);
+        setConfirmModal({
+          type: 'reduction',
+          targetDays,
+          affectedCount: Number(impact?.affected_records_count ?? 0),
+          cutoffDate: String(impact?.cutoff_timestamp || '').split('T')[0],
+        });
+      } catch (err) {
+        console.error('Failed to preview retention impact:', err);
+        setRetentionError('Unable to calculate how many records this change would remove. The policy was not changed.');
+      }
+      return;
+    }
 
-      setConfirmModal({
-        type: 'reduction',
-        targetDays,
-        affectedCount: affected,
-        cutoffDate: futureThreshold.toISOString().split('T')[0],
-      });
-    } else {
+    try {
+      await updateAuditLogRetentionConfig(targetDays);
       setRetentionDays(targetDays);
-      localStorage.setItem(RETENTION_STORAGE_KEY, String(targetDays));
-      updateAuditLogRetentionConfig(targetDays).catch(() => {});
+      await refreshRetention();
       setRetentionSuccessMsg(`Log retention policy updated to ${targetDays} days.`);
       setTimeout(() => setRetentionSuccessMsg(''), 5000);
+    } catch (err) {
+      console.error('Failed to save retention policy:', err);
+      setRetentionError(err?.response?.data?.message || 'The retention policy could not be saved. Nothing was changed.');
     }
   };
 
-  const handleConfirmRetentionReduction = () => {
+  const handleConfirmRetentionReduction = async () => {
     if (!confirmModal) return;
     const target = confirmModal.targetDays;
-    setRetentionDays(target);
-    localStorage.setItem(RETENTION_STORAGE_KEY, String(target));
-    updateAuditLogRetentionConfig(target).catch(() => {});
-    setConfirmModal(null);
-    setRetentionSuccessMsg(`Log retention policy reduced to ${target} days. Expired records will be purged on scheduled nightly run.`);
-    setTimeout(() => setRetentionSuccessMsg(''), 6000);
+    setRetentionError('');
+    try {
+      await updateAuditLogRetentionConfig(target);
+      setRetentionDays(target);
+      await refreshRetention();
+      setConfirmModal(null);
+      setRetentionSuccessMsg(`Log retention policy reduced to ${target} days. Expired records will be purged on the next scheduled run.`);
+      setTimeout(() => setRetentionSuccessMsg(''), 6000);
+    } catch (err) {
+      console.error('Failed to save retention policy:', err);
+      setConfirmModal(null);
+      setRetentionError(err?.response?.data?.message || 'The retention policy could not be saved. Nothing was changed.');
+    }
   };
 
   const handleTriggerManualPurge = () => {
@@ -367,33 +374,22 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
 
   const handleExecuteManualPurge = async () => {
     setIsPurging(true);
+    setRetentionError('');
     try {
-      // Filter out purged records permanently
-      const surviving = logs.filter((l) => new Date(l.timestamp || 0) >= thresholdDate);
-      purgeAuditLogs(retentionDays).catch(() => {});
-
-      // Record a new audit log entry for the purge action
-      const purgeLogEntry = {
-        id: `purge-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        user: 'Super Admin',
-        role: 'Super Admin',
-        action: 'Purged',
-        module: 'System',
-        target: 'Audit Logs',
-        branch: 'National HQ',
-        details: `Purged ${affectedPurgeCount} historical audit log entries older than ${retentionDays} days (${thresholdDate.toISOString().split('T')[0]}).`,
-      };
-
-      const nextLogs = [purgeLogEntry, ...surviving];
-      setLogs(nextLogs);
-      localStorage.setItem('superadmin_simulated_audit_logs', JSON.stringify(nextLogs));
-
-      setRetentionSuccessMsg(`Successfully purged ${affectedPurgeCount} expired log records older than ${thresholdDate.toISOString().split('T')[0]}.`);
+      const result = await purgeAuditLogs(retentionDays);
+      const deleted = Number(result?.records_deleted ?? result?.purged_count ?? 0);
       setConfirmModal(null);
+      setRetentionSuccessMsg(`Purged ${deleted} expired log records older than ${thresholdDate.toISOString().split('T')[0]}.`);
       setTimeout(() => setRetentionSuccessMsg(''), 6000);
+      await Promise.all([loadLogs(), refreshRetention()]);
     } catch (err) {
       console.error('Failed to execute manual purge:', err);
+      setConfirmModal(null);
+      setRetentionError(
+        err?.response?.status === 409
+          ? 'Another purge is already running. Try again in a few minutes.'
+          : err?.response?.data?.message || 'The purge failed. No records were reported as deleted.'
+      );
     } finally {
       setIsPurging(false);
     }
@@ -491,7 +487,7 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
               >
                 <option value="">All Actions</option>
                 {actionOptions.map((a) => (
-                  <option key={a} value={a}>{a}</option>
+                  <option key={a} value={a}>{humanize(a)}</option>
                 ))}
               </select>
 
@@ -527,7 +523,7 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
               >
                 <option value="">All Branches</option>
                 {branchOptions.map((b) => (
-                  <option key={b} value={b}>{b}</option>
+                  <option key={b.id} value={b.id}>{b.name}</option>
                 ))}
               </select>
 
@@ -867,6 +863,12 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
           </div>
 
           {/* Success Notification Banner */}
+          {retentionError && (
+            <div role="alert" className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span className="font-semibold">{retentionError}</span>
+            </div>
+          )}
           {retentionSuccessMsg && (
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-xs text-emerald-800 flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />

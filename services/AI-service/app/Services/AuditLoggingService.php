@@ -45,19 +45,15 @@ class AuditLoggingService
             'ip_address' => $ipAddress,
         ]);
 
-        // 2. Cross-Module System Audit Log Table (if available in shared database)
+        // 2. Cross-Module System Audit Log Table (in shared database)
         try {
-            if (Schema::hasTable('ticket_audit_logs')) {
-                $empId = 1;
-                if (Schema::hasTable('employees')) {
-                    $empId = DB::table('employees')
-                        ->where('role', 'like', '%admin%')
-                        ->value('emp_id')
-                        ?? DB::table('employees')->value('emp_id')
-                        ?? 1;
-                }
+            $empId = DB::table('employees')
+                ->where('role', 'like', '%admin%')
+                ->value('emp_id')
+                ?? DB::table('employees')->value('emp_id')
+                ?? 1;
 
-                DB::table('ticket_audit_logs')->insert([
+            DB::table('ticket_audit_logs')->insert([
                     'ticket_ID' => null,
                     'action_type' => 'kb_article_deleted',
                     'action_by_ID' => $empId,

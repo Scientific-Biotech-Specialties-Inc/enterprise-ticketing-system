@@ -423,18 +423,17 @@ class RagService
         ?string $filePath
     ): void {
         try {
-            if (\Illuminate\Support\Facades\Schema::hasTable('ticket_audit_logs')) {
-                $empId = $actorEmpId;
-                if (!$empId && \Illuminate\Support\Facades\Schema::hasTable('employees')) {
-                    $empId = DB::table('employees')
-                        ->where('role', 'like', '%admin%')
-                        ->value('emp_id')
-                        ?? DB::table('employees')->value('emp_id')
-                        ?? 1;
-                }
-                $empId = $empId ?: 1;
+            $empId = $actorEmpId;
+            if (!$empId) {
+                $empId = DB::table('employees')
+                    ->where('role', 'like', '%admin%')
+                    ->value('emp_id')
+                    ?? DB::table('employees')->value('emp_id')
+                    ?? 1;
+            }
+            $empId = $empId ?: 1;
 
-                DB::table('ticket_audit_logs')->insert([
+            DB::table('ticket_audit_logs')->insert([
                     'ticket_ID' => null,
                     'action_type' => 'kb_article_deleted',
                     'action_by_ID' => $empId,

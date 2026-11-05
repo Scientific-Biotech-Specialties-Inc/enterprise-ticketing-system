@@ -25,30 +25,7 @@ class AdminPerformanceService
      */
     public function resolveDateRange(array $filters): array
     {
-        $preset = $filters['preset'] ?? $filters['filter'] ?? 'Last 30 Days';
-        $now = Carbon::now();
-
-        if ($preset === 'Today') {
-            $dateFrom = $now->copy()->startOfDay();
-            $dateTo = $now->copy()->endOfDay();
-        } elseif ($preset === 'Last 7 Days') {
-            $dateFrom = $now->copy()->subDays(6)->startOfDay();
-            $dateTo = $now->copy()->endOfDay();
-        } elseif ($preset === 'Last 30 Days') {
-            $dateFrom = $now->copy()->subDays(29)->startOfDay();
-            $dateTo = $now->copy()->endOfDay();
-        } elseif ($preset === 'Last 90 Days') {
-            $dateFrom = $now->copy()->subDays(89)->startOfDay();
-            $dateTo = $now->copy()->endOfDay();
-        } elseif (!empty($filters['date_from'])) {
-            $preset = 'Custom Range';
-            $dateFrom = Carbon::parse($filters['date_from'])->startOfDay();
-            $dateTo = !empty($filters['date_to']) ? Carbon::parse($filters['date_to'])->endOfDay() : $now->copy()->endOfDay();
-        } else {
-            $preset = 'Last 30 Days';
-            $dateFrom = $now->copy()->subDays(29)->startOfDay();
-            $dateTo = $now->copy()->endOfDay();
-        }
+        [$preset, $dateFrom, $dateTo] = \App\Support\ReportPeriod::resolve($filters, 'Last 30 Days');
 
         return [$preset, $dateFrom, $dateTo];
     }
@@ -78,9 +55,66 @@ class AdminPerformanceService
             Cache::forget($cacheKey);
         }
 
-        return Cache::remember($cacheKey, 120, function () use ($branch, $preset, $dateFrom, $dateTo, $departmentFilter, $employeeIdFilter) {
+        $data = Cache::remember($cacheKey, 120, function () use ($branch, $preset, $dateFrom, $dateTo, $departmentFilter, $employeeIdFilter) {
             return $this->computeEmployeePerformanceData($branch, $preset, $dateFrom, $dateTo, $departmentFilter, $employeeIdFilter);
         });
+
+        // Sorting happens after the cache so every sort order shares one cached dataset.
+        $sortBy = $filters['sort_by'] ?? null;
+        if (!empty($sortBy) && isset($data['employees']) && is_array($data['employees'])) {
+            $sortDir = strtolower((string) ($filters['sort_dir'] ?? 'desc')) === 'asc' ? 'asc' : 'desc';
+            $data['employees'] = $this->sortEmployeeRecords($data['employees'], (string) $sortBy, $sortDir);
+            $data['sort_by'] = $sortBy;
+            $data['sort_dir'] = $sortDir;
+        }
+
+        return $data;
+    }
+
+    /** Columns the comparative employee list may be sorted by. */
+    private const EMPLOYEE_SORT_COLUMNS = [
+        'name',
+        'tickets_assigned',
+        'tickets_resolved',
+        'resolution_rate',
+        'average_resolution_hours',
+        'sla_compliance_rate',
+        'reassignment_rate',
+        'csat_score',
+    ];
+
+    /**
+     * Sort employee rows by one metric. Employees with no data for the period (null) always sort last,
+     * so "lowest SLA compliance" surfaces real numbers first instead of blanks.
+     */
+    protected function sortEmployeeRecords(array $records, string $sortBy, string $sortDir): array
+    {
+        if (!in_array($sortBy, self::EMPLOYEE_SORT_COLUMNS, true)) {
+            return $records;
+        }
+
+        usort($records, function ($a, $b) use ($sortBy, $sortDir) {
+            $valA = $a[$sortBy] ?? null;
+            $valB = $b[$sortBy] ?? null;
+
+            if ($valA === null && $valB === null) {
+                return 0;
+            }
+            if ($valA === null) {
+                return 1;
+            }
+            if ($valB === null) {
+                return -1;
+            }
+
+            $cmp = is_string($valA) || is_string($valB)
+                ? strcasecmp((string) $valA, (string) $valB)
+                : $valA <=> $valB;
+
+            return $sortDir === 'asc' ? $cmp : -$cmp;
+        });
+
+        return $records;
     }
 
     /**
@@ -618,8 +652,10 @@ class AdminPerformanceService
                 'avg_resolution_hours' => $avgResolutionHours,
                 'sla_compliance_rate' => $slaComplianceRate,
                 'csat_score' => $deptCsat,
-                'open_tickets_count' => $openCount,
+                // Open means unclosed and still within SLA; overdue means unclosed and already breached.
+                'open_tickets_count' => max(0, $openCount - $overdueCount),
                 'overdue_tickets_count' => $overdueCount,
+                'unclosed_tickets_count' => $openCount,
                 'workload_distribution' => $workloadDist,
             ];
         }

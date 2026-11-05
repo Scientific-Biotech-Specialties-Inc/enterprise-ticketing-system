@@ -66,6 +66,9 @@ export const checkIsItManager = (user) => {
 
 export const checkIsServiceManager = (user) => {
   if (!user) return false;
+  // "Customer Service" contains "service", so a CS manager would also match below and the two
+  // manager routes would redirect to each other forever. CS manager takes precedence.
+  if (checkIsCSManager(user)) return false;
   const role = resolveUserRole(user).toLowerCase();
   const dept = resolveUserDepartment(user).toLowerCase();
   const posLevel = (user.position_level || user.profile?.position_level || '').toLowerCase();

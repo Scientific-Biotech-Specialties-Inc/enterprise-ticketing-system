@@ -34,8 +34,20 @@ class TicketDashboardTest extends TestCase
             'password_hash' => 'secret',
         ]);
 
-        $machineId = DB::table('machines')->value('machine_ID') ?? 1;
+        if (!DB::table('machines')->where('machine_ID', 1)->exists()) {
+            DB::table('machines')->insert([
+                'machine_ID' => 1,
+                'category_ID' => 1,
+                'client_ID' => 1,
+                'machine_name' => 'Test Machine',
+                'serial_number' => 'TEST-DASH-001',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+        $machineId = 1;
         $problemCategoryId = DB::table('problem_categories')->value('problem_category_ID') ?? 1;
+        $priorityId = DB::table('ticket_priorities')->value('priority_ID') ?? 1;
 
         // 1. Create internal ticket (created_by = 1, requested_by = 99123, is_internal = 1)
         $internalTicketId = DB::table('tickets')->insertGetId([
@@ -49,7 +61,7 @@ class TicketDashboardTest extends TestCase
             'is_internal' => 1,
             'ticket_type_ID' => 1,
             'ticket_status_ID' => 1,
-            'priority_ID' => 2,
+            'priority_ID' => $priorityId,
             'created_at' => now(),
             'updated_at' => now(),
         ]);
@@ -66,13 +78,15 @@ class TicketDashboardTest extends TestCase
             'is_internal' => 0,
             'ticket_type_ID' => 1,
             'ticket_status_ID' => 1,
-            'priority_ID' => 2,
+            'priority_ID' => $priorityId,
             'created_at' => now(),
             'updated_at' => now(),
         ]);
 
         // Test CS Dashboard
-        $csDashResponse = $this->getJson('/api/cs-dashboard')->assertOk();
+        // CS routes require authentication, so call them as the CS employee seeded above.
+        $csUser = Employee::where('emp_id', $empId)->first();
+        $csDashResponse = $this->actingAs($csUser, 'api')->getJson('/api/cs-dashboard')->assertOk();
         $recentTickets = collect($csDashResponse->json('recent_tickets'));
 
         $internalDashRow = $recentTickets->firstWhere('title', 'Internal Server Maintenance Request');
@@ -86,7 +100,7 @@ class TicketDashboardTest extends TestCase
 
         // Test CS Incoming
         Cache::flush();
-        $csIncomingResponse = $this->getJson('/api/cs-incoming?type=all&limit=50')->assertOk();
+        $csIncomingResponse = $this->actingAs($csUser, 'api')->getJson('/api/cs-incoming?type=all&limit=50')->assertOk();
         $incomingTickets = collect($csIncomingResponse->json('incoming_tickets'));
 
         $internalIncomingRow = $incomingTickets->firstWhere('ticket_ID', $internalTicketId);

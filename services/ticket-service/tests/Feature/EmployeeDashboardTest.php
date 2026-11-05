@@ -313,6 +313,49 @@ class EmployeeDashboardTest extends TestCase
     }
 
     /**
+     * Pending Assignment counts as Open and Escalated counts as In Progress, so every assigned ticket lands in a bucket.
+     */
+    public function test_pending_assignment_and_escalated_tickets_land_in_status_buckets(): void
+    {
+        DB::table('ticket_statuses')->updateOrInsert(
+            ['ticket_status_ID' => 9301],
+            ['status_name' => 'Pending Assignment', 'created_at' => now(), 'updated_at' => now()]
+        );
+        DB::table('ticket_statuses')->updateOrInsert(
+            ['ticket_status_ID' => 9302],
+            ['status_name' => 'Escalated', 'created_at' => now(), 'updated_at' => now()]
+        );
+
+        foreach ([9301 => 'TCK-BUCKET-PA', 9302 => 'TCK-BUCKET-ESC'] as $statusId => $number) {
+            DB::table('tickets')->insert([
+                'ticket_number' => $number,
+                'title' => $number,
+                'description' => 'Bucket check',
+                'created_by' => 9201,
+                'assigned_to' => $this->employeeB->emp_id,
+                'branch_id' => 921,
+                'problem_category_ID' => 1,
+                'ticket_type_ID' => 1,
+                'ticket_status_ID' => $statusId,
+                'priority_ID' => 1,
+                'created_at' => now(),
+                'resolution_due_at' => now()->addDay(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        $assigned = $this->actingAs($this->employeeB, 'api')
+            ->getJson('/api/employee/dashboard?force_refresh=true')
+            ->assertOk()
+            ->json('assigned');
+
+        $this->assertSame(2, $assigned['total_assigned']);
+        $this->assertSame(1, $assigned['status_breakdown']['open']);
+        $this->assertSame(1, $assigned['status_breakdown']['in_progress']);
+        $this->assertSame($assigned['total_assigned'], array_sum($assigned['status_breakdown']));
+    }
+
+    /**
      * Customer role receives HTTP 403 Forbidden.
      */
     public function test_customer_role_is_denied_access(): void

@@ -110,11 +110,12 @@ class AuditTimelineService
         $query = DB::table('ticket_audit_logs as tal')
             ->leftJoin('employees as e', function ($join) {
                 $join->on('e.emp_id', '=', 'tal.action_by_ID')
-                    ->whereIn('tal.actor_type', ['employee', 'superadmin', 'admin', 'cs', 'systemadministrator', 'itadmin']);
+                    // Any staff actor type (employee, superadmin, admin, "customer service", manager, engineer...) resolves to a name.
+                    ->whereNotIn('tal.actor_type', ['customer', 'client', 'system']);
             })
             ->leftJoin('clients as c', function ($join) {
                 $join->on('c.id', '=', 'tal.action_by_ID')
-                    ->where('tal.actor_type', '=', 'customer');
+                    ->whereIn('tal.actor_type', ['customer', 'client']);
             })
             ->leftJoin('tickets as t', 't.ticket_ID', '=', 'tal.ticket_ID')
             ->select(
@@ -143,7 +144,9 @@ class AuditTimelineService
                 $sub->where('tal.is_internal', false)
                     ->orWhere('tal.is_internal', 0)
                     ->orWhereNull('tal.is_internal');
-            });
+            })
+            // Internal notes written before the is_internal flag was set per row must stay hidden from customers.
+            ->whereNotIn('tal.action_type', ['internal_note', 'internal_note_added']);
         }
 
         // Optional filtering by event type or action type
@@ -176,10 +179,13 @@ class AuditTimelineService
         $records = $query->forPage($page, $effectivePerPage)->get();
 
         $formatted = $records->map(function ($row) use ($ticket) {
+            // Rows written by background jobs carry actor_type "system" even when the is_system flag was not set.
+            $isSystem = (bool) $row->is_system || strtolower((string) $row->actor_type) === 'system';
+
             $actorName = 'System';
-            if ((bool) $row->is_system) {
+            if ($isSystem) {
                 $actorName = 'System';
-            } elseif ($row->actor_type === 'customer' && !empty($row->customer_name)) {
+            } elseif (in_array($row->actor_type, ['customer', 'client'], true) && !empty($row->customer_name)) {
                 $actorName = $row->customer_name;
             } elseif (!empty($row->employee_name)) {
                 $actorName = $row->employee_name;
@@ -197,6 +203,18 @@ class AuditTimelineService
                 $afterState = is_string($row->after_state) ? json_decode($row->after_state, true) : $row->after_state;
             }
 
+            $detailsDecoded = json_decode((string) $row->details, true);
+            $detailsDecoded = is_array($detailsDecoded) ? $detailsDecoded : null;
+
+            // Older rows keep the change only inside details ({"field","old","new"}); surface it as before/after values.
+            if ($beforeState === null && $afterState === null && $detailsDecoded && isset($detailsDecoded['field'])) {
+                $field = (string) $detailsDecoded['field'];
+                $beforeState = [$field => $this->resolveFieldValue($field, $detailsDecoded['old'] ?? null)];
+                $afterState = [$field => $this->resolveFieldValue($field, $detailsDecoded['new'] ?? null)];
+            }
+
+            $description = $this->describeEvent((string) ($row->event_type ?: $row->action_type), $detailsDecoded, $beforeState, $afterState);
+
             return [
                 'log_id' => (int) $row->log_id,
                 'ticket_id' => (int) $row->ticket_id,
@@ -207,12 +225,13 @@ class AuditTimelineService
                     'id' => (int) $row->actor_id,
                     'name' => $actorName,
                     'type' => $row->actor_type,
-                    'role' => $row->actor_role ?: $row->actor_type,
+                    'role' => $isSystem ? 'system' : ($row->actor_role ?: $row->actor_type),
                 ],
+                'description' => $description,
                 'before_state' => $beforeState,
                 'after_state' => $afterState,
                 'details' => $row->details,
-                'is_system' => (bool) $row->is_system,
+                'is_system' => $isSystem,
                 'is_internal' => (bool) $row->is_internal,
                 'created_at' => Carbon::parse($row->created_at)->toIso8601String(),
             ];
@@ -233,5 +252,104 @@ class AuditTimelineService
             ],
         ];
     }
-}
 
+    /** Friendly labels for the ticket columns that appear as {"field","old","new"} in details. */
+    private const FIELD_LABELS = [
+        'ticket_status_ID' => 'Status',
+        'priority_ID' => 'Priority',
+        'problem_category_ID' => 'Category',
+        'assigned_to' => 'Assigned employee',
+        'ticket_type_ID' => 'Ticket type',
+        'machine_ID' => 'Equipment',
+    ];
+
+    /** @var array<string, array<int|string, string>> per request lookup cache */
+    private array $lookupCache = [];
+
+    /**
+     * Turn a stored id into a readable name for the fields that reference lookup tables.
+     */
+    private function resolveFieldValue(string $field, $value)
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $lookups = [
+            'ticket_status_ID' => ['ticket_statuses', 'ticket_status_ID', 'status_name'],
+            'priority_ID' => ['ticket_priorities', 'priority_ID', 'priority_name'],
+            'problem_category_ID' => ['problem_categories', 'problem_category_ID', 'category_name'],
+        ];
+
+        if (isset($lookups[$field]) && is_numeric($value)) {
+            [$table, $idCol, $nameCol] = $lookups[$field];
+            $this->lookupCache[$field] ??= DB::table($table)->pluck($nameCol, $idCol)->all();
+            return $this->lookupCache[$field][(int) $value] ?? $value;
+        }
+
+        if ($field === 'assigned_to' && is_numeric($value)) {
+            $this->lookupCache[$field] ??= DB::table('employees')
+                ->selectRaw("emp_id, TRIM(CONCAT(COALESCE(first_name, ''), ' ', COALESCE(last_name, ''))) as full_name")
+                ->pluck('full_name', 'emp_id')->all();
+            $name = $this->lookupCache[$field][(int) $value] ?? '';
+            return $name !== '' ? $name : $value;
+        }
+
+        return $value;
+    }
+
+    /**
+     * One plain language sentence for a timeline entry.
+     */
+    private function describeEvent(string $eventType, ?array $details, ?array $before, ?array $after): string
+    {
+        if ($details && isset($details['field']) && $before !== null && $after !== null) {
+            $field = (string) $details['field'];
+            $label = self::FIELD_LABELS[$field] ?? ucfirst(str_replace('_', ' ', preg_replace('/_ID$/i', '', $field)));
+            $old = $before[$field] ?? null;
+            $new = $after[$field] ?? null;
+
+            if ($old === null) {
+                return "{$label} set to " . ($new ?? 'none');
+            }
+            return "{$label} changed from {$old} to " . ($new ?? 'none');
+        }
+
+        $reason = $details['reason'] ?? null;
+
+        switch ($eventType) {
+            case 'create':
+                return 'Ticket created';
+            case 'sla_breached':
+                return 'SLA breached' . (!empty($details['overdue_duration']) ? ' (' . $details['overdue_duration'] . ')' : '');
+            case 'sla_breached_reassigned':
+                return 'SLA breached and ticket reassigned';
+            case 'accept':
+                return 'Ticket accepted';
+            case 'reassign_request':
+                return 'Reassignment requested' . ($reason ? ": {$reason}" : '');
+            case 'reassign_approve':
+                return 'Reassignment approved';
+            case 'reassign_deny':
+            case 'reassign_reject':
+                return 'Reassignment denied' . ($reason ? ": {$reason}" : '');
+            case 'internal_note':
+            case 'internal_note_added':
+                return 'Internal note added';
+            case 'reopen':
+                return 'Ticket reopened';
+            case 'reminder_sent':
+                return 'Reminder sent';
+            case 'proof_uploaded':
+                return 'Proof of resolution uploaded';
+            case 'message_edit':
+                return 'Message edited';
+            case 'cancel':
+                return 'Ticket cancelled';
+            case 'status_change':
+                return 'Status changed';
+            default:
+                return ucfirst(str_replace('_', ' ', $eventType));
+        }
+    }
+}

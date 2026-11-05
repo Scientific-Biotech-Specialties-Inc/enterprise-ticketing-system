@@ -41,11 +41,12 @@ class TransitionTicketStatusAction
             }
 
             // Verify transition through TicketStateMachine
-            $validation = $this->stateMachine->canTransition($ticket, $newStatusId, $actor, $context);
-            if (!$validation['allowed']) {
+            $fromState = $this->stateMachine->resolveState($ticket);
+            $toState = $this->stateMachine->resolveTargetState($newStatusId, $ticket, $context);
+            if (!$this->stateMachine->canTransition($fromState, $toState, $context)) {
                 return [
                     'success' => false,
-                    'message' => $validation['message'] ?? 'Status transition not allowed.',
+                    'message' => "Status transition from '{$fromState}' to '{$toState}' is not allowed.",
                     'status' => 422,
                 ];
             }
@@ -67,19 +68,20 @@ class TransitionTicketStatusAction
                     $updateData['resolved_at'] = now();
                 }
             } elseif ($normNew === 'on hold') {
-                $updateData['on_hold_since'] = now();
+                $updateData['sla_paused_at'] = now();
+                $updateData['held_from_status_ID'] = $currentStatusId;
                 if (!empty($context['reason'])) {
-                    $updateData['on_hold_reason'] = $context['reason'];
+                    $updateData['hold_reason'] = $context['reason'];
                 }
             } elseif ($normNew === 'in progress') {
-                $updateData['on_hold_since'] = null;
-                $updateData['on_hold_reason'] = null;
+                $updateData['sla_paused_at'] = null;
+                $updateData['hold_reason'] = null;
             }
 
             DB::table('tickets')->where('ticket_ID', $ticketId)->update($updateData);
 
             // Audit log
-            $actorId = $actor->emp_id ?? $actor->id ?? null;
+            $actorId = $actor->emp_id ?? $actor->id ?? 1;
             $actorName = trim(($actor->first_name ?? '') . ' ' . ($actor->last_name ?? ''));
             if (empty($actorName)) {
                 $actorName = $actor->name ?? ($actor->email ?? 'System');
@@ -91,6 +93,7 @@ class TransitionTicketStatusAction
                 'new' => $newStatusId,
                 'old_status' => $oldStatusName,
                 'new_status' => $newStatusName,
+                'actor_name' => $actorName,
             ];
             if (!empty($context['reason'])) {
                 $details['reason'] = $context['reason'];
@@ -99,9 +102,9 @@ class TransitionTicketStatusAction
             DB::table('ticket_audit_logs')->insert([
                 'ticket_ID' => $ticketId,
                 'action_type' => 'status_changed',
-                'actor_type' => ($actor instanceof \App\Models\Client) ? 'Customer' : 'Employee',
-                'actor_id' => $actorId,
-                'actor_name' => $actorName,
+                'event_type' => 'status_transition',
+                'actor_type' => ($actor instanceof \App\Models\Client) ? 'customer' : 'employee',
+                'action_by_ID' => $actorId,
                 'details' => json_encode($details),
                 'created_at' => now(),
             ]);

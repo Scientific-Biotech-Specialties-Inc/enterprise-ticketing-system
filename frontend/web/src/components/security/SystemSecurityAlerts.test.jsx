@@ -31,6 +31,11 @@ vi.mock('@/services/ticketService', () => ({
   getAssignableEmployees: vi.fn(() => Promise.resolve([])),
   respondReassignment: vi.fn(() => Promise.resolve()),
   getSuperAdminAuditLogs: vi.fn(),
+  getAuditLogFilterOptions: vi.fn(() => Promise.resolve({ action_types: [], branches: [] })),
+  getAuditLogRetentionConfig: vi.fn(() => Promise.resolve({ retention_days: 365, pending_purge_estimate: 0 })),
+  getAuditLogRetentionImpact: vi.fn(() => Promise.resolve({ affected_records_count: 0 })),
+  updateAuditLogRetentionConfig: vi.fn(() => Promise.resolve({})),
+  purgeAuditLogs: vi.fn(() => Promise.resolve({ records_deleted: 0 })),
   getSecurityIncidents: vi.fn(),
   getSecurityIncidentDetail: vi.fn(),
 }));

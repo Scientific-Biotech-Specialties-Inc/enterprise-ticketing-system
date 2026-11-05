@@ -339,4 +339,14 @@ class SuperAdminDashboardTest extends TestCase
             ->assertStatus(422)
             ->assertJsonValidationErrors(['sort_by']);
     }
+
+    public function test_period_and_date_range_query_names_select_the_window(): void
+    {
+        foreach (['period', 'date_range'] as $name) {
+            $this->actingAs($this->superAdmin, 'api')
+                ->getJson('/api/superadmin/system-dashboard?' . $name . '=This%20Month')
+                ->assertStatus(200)
+                ->assertJsonPath('meta.filters_applied.preset', 'this_month');
+        }
+    }
 }

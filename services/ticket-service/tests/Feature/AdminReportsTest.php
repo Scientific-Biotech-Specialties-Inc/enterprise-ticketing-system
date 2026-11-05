@@ -479,8 +479,14 @@ class AdminReportsTest extends TestCase
         $this->assertNotNull($serviceDept);
         $this->assertTrue($serviceDept['has_data']);
         $this->assertGreaterThanOrEqual(2, $serviceDept['total_tickets']);
-        $this->assertGreaterThanOrEqual(2, $serviceDept['open_tickets_count']);
+        // Open (still inside SLA) and overdue (breached) are separate counts that add up to all unclosed tickets.
+        $this->assertGreaterThanOrEqual(1, $serviceDept['open_tickets_count']);
         $this->assertGreaterThanOrEqual(1, $serviceDept['overdue_tickets_count']);
+        $this->assertSame(
+            $serviceDept['unclosed_tickets_count'],
+            $serviceDept['open_tickets_count'] + $serviceDept['overdue_tickets_count']
+        );
+        $this->assertGreaterThanOrEqual(2, $serviceDept['unclosed_tickets_count']);
 
         // Check workload distribution
         $techWorkload = collect($serviceDept['workload_distribution'])->firstWhere('employee_id', $this->technician->emp_id);
@@ -565,6 +571,70 @@ class AdminReportsTest extends TestCase
 
         $this->assertNotEmpty($apiResponse->json('volume_forecast'));
         $this->assertCount(7, $apiResponse->json('volume_forecast'));
+    }
+
+    /**
+     * Spec 0029 AC-10: the nightly job stores 7 days, so a 30 day request must top the horizon up
+     * instead of returning the 7 stored rows.
+     */
+    public function test_thirty_day_horizon_is_served_after_the_nightly_seven_day_run(): void
+    {
+        $now = Carbon::now();
+        for ($i = 1; $i <= 15; $i++) {
+            DB::table('tickets')->insert([
+                'ticket_number' => "TCK-H30-{$i}", 'title' => "History {$i}", 'description' => 'x',
+                'problem_category_ID' => 1, 'machine_ID' => null, 'created_by' => 1,
+                'assigned_to' => $this->technician->emp_id, 'branch_id' => 901, 'ticket_type_ID' => 1,
+                'ticket_status_ID' => 3, 'priority_ID' => 1,
+                'created_at' => $now->copy()->subDays($i)->setHour(10), 'updated_at' => $now,
+            ]);
+        }
+        $this->artisan('tickets:calculate-forecasts', ['--horizon' => 7])->assertExitCode(0);
+
+        $response = $this->actingAs($this->admin, 'api')
+            ->getJson('/api/admin-reports/predictive-insights?horizon_days=30')
+            ->assertOk()
+            ->assertJsonPath('status', 'success');
+
+        $this->assertCount(30, $response->json('volume_forecast'));
+    }
+
+    /**
+     * Spec 0029 AC-12: the All Branches view must not claim a successful 60 day basis when no branch
+     * has enough history; it reports insufficient data, and otherwise the real days used.
+     */
+    public function test_all_branches_forecast_reports_true_status_and_basis(): void
+    {
+        // Forecast rows are a derived cache, so the future window is reset to a known state.
+        DB::table('branch_ticket_forecasts')->where('forecast_date', '>=', Carbon::today()->toDateString())->delete();
+        $seed = function (int $branchId, string $status, int $days, int $volume) {
+            for ($d = 0; $d < 7; $d++) {
+                BranchTicketForecast::updateOrCreate(
+                    ['branch_id' => $branchId, 'forecast_date' => Carbon::today()->addDays($d)->toDateString()],
+                    ['predicted_volume' => $volume, 'lower_bound' => 0, 'upper_bound' => $volume,
+                     'historical_days_used' => $days, 'calculation_status' => $status, 'calculated_at' => now()]
+                );
+            }
+        };
+        $seed(901, 'insufficient_data', 4, 0);
+        $seed(902, 'insufficient_data', 3, 0);
+
+        $insufficient = $this->actingAs($this->superAdmin, 'api')
+            ->getJson('/api/admin-reports/predictive-insights?branch_id=all&horizon_days=7')
+            ->assertOk()
+            ->assertJsonPath('status', 'insufficient_data')
+            ->assertJsonPath('historical_basis.days_used', 4);
+        $this->assertSame([], $insufficient->json('volume_forecast'));
+
+        Cache::flush();
+        $seed(902, 'success', 20, 5);
+
+        $this->actingAs($this->superAdmin, 'api')
+            ->getJson('/api/admin-reports/predictive-insights?branch_id=all&horizon_days=7')
+            ->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('historical_basis.days_used', 20)
+            ->assertJsonCount(7, 'volume_forecast');
     }
 
     /**
@@ -771,5 +841,103 @@ class AdminReportsTest extends TestCase
         $this->actingAs($this->admin, 'api')
             ->getJson('/api/admin/reports?report_type=ticket_volume&branch_id=902')
             ->assertForbidden();
+    }
+
+    /**
+     * Regression: a non admin employee must not read the branch dashboard.
+     */
+    public function test_admin_dashboard_rejects_non_admin_roles(): void
+    {
+        $this->actingAs($this->regularStaff, 'api')
+            ->getJson('/api/admin/dashboard')
+            ->assertForbidden();
+
+        $this->actingAs($this->admin, 'api')
+            ->getJson('/api/admin/dashboard')
+            ->assertOk();
+    }
+
+    /**
+     * Regression: CS dashboard and incoming queue must require a token.
+     */
+    public function test_cs_dashboard_routes_require_authentication(): void
+    {
+        $this->getJson('/api/cs-dashboard')->assertUnauthorized();
+        $this->getJson('/api/cs-incoming')->assertUnauthorized();
+    }
+
+    /**
+     * Regression: date_from and date_to without a preset must be honoured as a custom range
+     * (this is exactly how the Admin dashboard sends Custom Range).
+     */
+    public function test_dates_without_preset_are_treated_as_custom_range(): void
+    {
+        Cache::flush();
+        $query = 'date_from=2026-01-01&date_to=2026-01-31';
+
+        $dashboard = $this->actingAs($this->admin, 'api')
+            ->getJson("/api/admin/dashboard?{$query}")
+            ->assertOk();
+        $this->assertSame('Custom Range', $dashboard->json('period.preset'));
+        $this->assertStringStartsWith('2026-01-01', $dashboard->json('period.date_from'));
+        $this->assertStringStartsWith('2026-01-31', $dashboard->json('period.date_to'));
+
+        foreach (['/api/admin-reports/employees', '/api/admin-reports/departments', '/api/admin/reports?report_type=ticket_volume'] as $path) {
+            $separator = str_contains($path, '?') ? '&' : '?';
+            $response = $this->actingAs($this->admin, 'api')
+                ->getJson("{$path}{$separator}{$query}")
+                ->assertOk();
+            $period = $response->json('period') ?? $response->json();
+            $this->assertSame('Custom Range', $period['preset'], "{$path} ignored the custom dates");
+            $this->assertStringStartsWith('2026-01-01', $period['date_from']);
+        }
+    }
+
+    /**
+     * Spec 0029 AC-6: the comparative list sorts by the requested metric and keeps "no data" rows last.
+     */
+    public function test_employee_list_sorts_by_metric_and_keeps_no_data_rows_last(): void
+    {
+        $now = Carbon::now();
+        DB::table('tickets')->insert([
+            'ticket_number' => 'TCK-SORT-001',
+            'title' => 'Sort fixture',
+            'description' => 'Sort fixture',
+            'problem_category_ID' => 1,
+            'created_by' => 1,
+            'assigned_to' => $this->technician->emp_id,
+            'branch_id' => 901,
+            'ticket_type_ID' => 1,
+            'ticket_status_ID' => 1,
+            'priority_ID' => 1,
+            'created_at' => $now->copy()->subDay(),
+            'updated_at' => $now,
+        ]);
+
+        foreach (['asc', 'desc'] as $dir) {
+            $rows = $this->actingAs($this->admin, 'api')
+                ->getJson("/api/admin-reports/employees?preset=Last 7 Days&sort_by=resolution_rate&sort_dir={$dir}&force_refresh=true")
+                ->assertOk()
+                ->assertJsonPath('sort_by', 'resolution_rate')
+                ->assertJsonPath('sort_dir', $dir)
+                ->json('employees');
+
+            $values = array_column($rows, 'resolution_rate');
+            $firstNull = array_search(null, $values, true);
+            $this->assertNotFalse($firstNull, 'fixture should include an employee with no data');
+            $this->assertGreaterThan(0, $firstNull, 'employees with data come first');
+            foreach (array_slice($values, $firstNull) as $v) {
+                $this->assertNull($v, 'no data rows stay at the end');
+            }
+
+            $numeric = array_slice($values, 0, $firstNull);
+            $expected = $numeric;
+            $dir === 'asc' ? sort($expected) : rsort($expected);
+            $this->assertEquals($expected, $numeric);
+        }
+
+        $this->actingAs($this->admin, 'api')
+            ->getJson('/api/admin-reports/employees?preset=Last 7 Days&sort_by=not_a_column&force_refresh=true')
+            ->assertOk();
     }
 }

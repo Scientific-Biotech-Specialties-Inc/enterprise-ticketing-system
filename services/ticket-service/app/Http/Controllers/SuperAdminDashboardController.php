@@ -37,7 +37,7 @@ class SuperAdminDashboardController extends Controller
         }
 
         $filters = [
-            'preset' => $request->query('preset'),
+            'preset' => $request->query('preset') ?? $request->query('period') ?? $request->query('date_range'),
             'date_from' => $request->query('date_from'),
             'date_to' => $request->query('date_to'),
         ];

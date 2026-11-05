@@ -155,6 +155,8 @@ describe('reportExportUtils', () => {
     expect(createdLinks[0].getAttribute('download')).toBe('workload_summary.xlsx');
     expect(generatedBlob).not.toBeNull();
     expect(generatedBlob.type).toContain('openxmlformats');
+    // A real workbook is a zip package, not XML text with an .xlsx name.
+    expect(generatedBlob.size).toBeGreaterThan(200);
   });
 
   it('covers AC-16 and AC-17: creates multi page PDF document with title, filter metadata, and page numbers', () => {
@@ -177,7 +179,7 @@ describe('reportExportUtils', () => {
     expect(mockText).toHaveBeenCalled();
   });
 
-  it('covers AC-16: exports master analytics report with all ten metrics in CSV format', () => {
+  it('covers AC-16: exports the operational analytics report as a CSV with a header row', () => {
     const sampleData = {
       trends: { open: 10, inProgress: 14, resolved: 25, closed: 8 },
       sla: { overall_compliance: 95.2, sla_met: 50, sla_breached: 2 },
@@ -195,7 +197,7 @@ describe('reportExportUtils', () => {
     exportMasterReportToCsv(sampleData);
 
     expect(createdLinks.length).toBe(1);
-    expect(createdLinks[0].getAttribute('download')).toContain('Enterprise_Master_Analytics_Report_');
+    expect(createdLinks[0].getAttribute('download')).toContain('Operational_Analytics_');
   });
 
   it('covers AC-16: exports operational analytics and predictive metrics into structured Excel workbook', () => {
@@ -208,7 +210,8 @@ describe('reportExportUtils', () => {
 
     exportAnalyticsToExcel(analyticsData, 'Current Month');
     expect(createdLinks.length).toBe(1);
-    expect(createdLinks[0].getAttribute('download')).toContain('Enterprise_Operational_Analytics_');
+    expect(createdLinks[0].getAttribute('download')).toContain('Operational_Analytics_');
+    expect(createdLinks[0].getAttribute('download')).toMatch(/\.xlsx$/);
 
     const predictiveData = {
       forecast_total: '120 tickets',
@@ -219,6 +222,7 @@ describe('reportExportUtils', () => {
 
     exportPredictiveToExcel(predictiveData, 'Next 7 Days');
     expect(createdLinks.length).toBe(2);
-    expect(createdLinks[1].getAttribute('download')).toContain('Predictive_Analytics_Forecast_');
+    expect(createdLinks[1].getAttribute('download')).toContain('Predictive_Analytics_');
+    expect(createdLinks[1].getAttribute('download')).toMatch(/\.xlsx$/);
   });
 });

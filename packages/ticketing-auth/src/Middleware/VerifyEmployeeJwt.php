@@ -207,6 +207,18 @@ class VerifyEmployeeJwt
             }
         }
 
+        $existingEmployee = class_exists('App\Models\Employee')
+            ? \App\Models\Employee::where('email', $email)->first()
+            : null;
+
+        if (!$existingEmployee && !$isAdminOrSuperAdmin && empty($payloadBranch) && empty($payloadBranchId)) {
+            Log::warning('VerifyEmployeeJwt: Branch required for new operational account', ['email' => $email, 'role' => $mappedRole]);
+            return response()->json([
+                'message' => 'Unprocessable Entity: Branch assignment is required for new operational accounts.',
+                'error_code' => 'BRANCH_REQUIRED_FOR_NEW_ACCOUNT'
+            ], 422);
+        }
+
         $resolvedFirstName = trim((string) ($payload['first_name'] ?? ''));
         $resolvedLastName = trim((string) ($payload['last_name'] ?? ''));
         if ($resolvedFirstName === '' && !empty($payload['name'] ?? $payload['full_name'] ?? null)) {
@@ -286,15 +298,35 @@ class VerifyEmployeeJwt
             try {
                 $employee = \App\Models\Employee::where('email', $email)->first();
                 if ($employee) {
-                    // Update in-memory properties if changed centrally
-                    if (!empty($claims['branch']) && empty($employee->branch)) {
+                    $updated = false;
+                    if (!empty($claims['branch']) && $employee->branch !== $claims['branch']) {
                         $employee->branch = $claims['branch'];
+                        $updated = true;
                     }
-                    if (!empty($claims['branch_id']) && empty($employee->branch_id)) {
-                        $employee->branch_id = $claims['branch_id'];
+                    if (!empty($claims['branch_id']) && (int)$employee->branch_id !== (int)$claims['branch_id']) {
+                        $employee->branch_id = (int)$claims['branch_id'];
+                        $updated = true;
+                    }
+                    if ($updated) {
+                        $employee->save();
                     }
                     return $employee;
                 }
+
+                $newEmp = new \App\Models\Employee();
+                $newEmp->email = $email;
+                $newEmp->first_name = $claims['first_name'] ?? '';
+                $newEmp->last_name = $claims['last_name'] ?? '';
+                $newEmp->role = $claims['role'] ?? 'service';
+                $newEmp->department = $claims['department'] ?? null;
+                $newEmp->branch = $claims['branch'] ?? null;
+                $newEmp->branch_id = is_numeric($claims['branch_id'] ?? null) ? (int)$claims['branch_id'] : null;
+                $newEmp->is_active = true;
+                $newEmp->password_hash = '';
+                $newEmp->password_change_at = now();
+                $newEmp->last_synced_at = now();
+                $newEmp->save();
+                return $newEmp;
             } catch (\Throwable $e) {
                 // If database query fails, fall back to DTO
             }

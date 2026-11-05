@@ -13,9 +13,11 @@ vi.mock('@/hooks/useRealtimeRefresh', () => ({
 // Mock ticketService APIs
 vi.mock('@/services/ticketService', () => ({
   getSuperAdminAuditLogs: vi.fn(),
+  getAuditLogFilterOptions: vi.fn(),
+  getAuditLogRetentionImpact: vi.fn(),
   getAuditLogRetentionConfig: vi.fn(),
-  updateAuditLogRetentionConfig: vi.fn(() => Promise.resolve()),
-  purgeAuditLogs: vi.fn(() => Promise.resolve()),
+  updateAuditLogRetentionConfig: vi.fn(),
+  purgeAuditLogs: vi.fn(),
 }));
 
 describe('SuperAdminAuditLogs Component Tests', () => {
@@ -56,8 +58,21 @@ describe('SuperAdminAuditLogs Component Tests', () => {
   ];
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     localStorage.clear();
+    ticketService.getSuperAdminAuditLogs.mockResolvedValue(sampleLogs);
+    ticketService.getAuditLogFilterOptions.mockResolvedValue({
+      action_types: ['update_priority', 'resolve_ticket'],
+      branches: [{ id: 1, name: 'National HQ', code: 'HQ' }, { id: 2, name: 'Downtown Clinic', code: 'DTC' }],
+    });
+    ticketService.getAuditLogRetentionConfig.mockResolvedValue({ retention_days: 365, pending_purge_estimate: 1 });
+    ticketService.getAuditLogRetentionImpact.mockResolvedValue({
+      retention_days: 90,
+      cutoff_timestamp: '2026-08-05T00:00:00+00:00',
+      affected_records_count: 2,
+    });
+    ticketService.updateAuditLogRetentionConfig.mockResolvedValue({});
+    ticketService.purgeAuditLogs.mockResolvedValue({ records_deleted: 1 });
   });
 
   it('covers AC-18 and AC-20: renders system wide audit logs table with actor, action, and entity details', async () => {
@@ -100,15 +115,49 @@ describe('SuperAdminAuditLogs Component Tests', () => {
       expect(screen.queryByText('Priority escalated from Medium to Critical')).not.toBeInTheDocument();
     });
 
-    // Clear search and test action dropdown
+    // Clear search and use the action dropdown, which is populated from the server
     fireEvent.change(searchInput, { target: { value: '' } });
+    await screen.findByRole('option', { name: 'Update Priority' });
     const selects = screen.getAllByRole('combobox');
     const actionSelect = selects[1]; // Action filter
-    fireEvent.change(actionSelect, { target: { value: 'Updated Priority' } });
+    ticketService.getSuperAdminAuditLogs.mockResolvedValue([sampleLogs[0]]);
+    fireEvent.change(actionSelect, { target: { value: 'update_priority' } });
 
     await waitFor(() => {
+      expect(ticketService.getSuperAdminAuditLogs).toHaveBeenLastCalledWith({ event_type: 'update_priority' });
       expect(screen.getByText('Priority escalated from Medium to Critical')).toBeInTheDocument();
       expect(screen.queryByText('Replaced power capacitor on ventilator')).not.toBeInTheDocument();
+    });
+  });
+
+  it('covers AC-18 and AC-19: branch dropdown uses server branches and filters on the server', async () => {
+    render(
+      <MemoryRouter initialEntries={['/superadmin/audit-logs']}>
+        <SuperAdminAuditLogs />
+      </MemoryRouter>
+    );
+
+    await screen.findByRole('option', { name: 'Downtown Clinic' });
+    const branchSelect = screen.getAllByRole('combobox').find((el) => el.value === '' && el.textContent.includes('All Branches'));
+    ticketService.getSuperAdminAuditLogs.mockResolvedValue([sampleLogs[1]]);
+    fireEvent.change(branchSelect, { target: { value: '2' } });
+
+    await waitFor(() => {
+      expect(ticketService.getSuperAdminAuditLogs).toHaveBeenLastCalledWith({ branch_id: '2' });
+    });
+  });
+
+  it('covers AC-18: shows an actionable error when the log request fails', async () => {
+    ticketService.getSuperAdminAuditLogs.mockRejectedValue(new Error('Network Error'));
+
+    render(
+      <MemoryRouter initialEntries={['/superadmin/audit-logs']}>
+        <SuperAdminAuditLogs />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Unable to load audit logs/i)).toBeInTheDocument();
     });
   });
 
@@ -150,8 +199,6 @@ describe('SuperAdminAuditLogs Component Tests', () => {
   });
 
   it('covers AC-21: opens Log Retention tab and displays retention settings and preview counts', async () => {
-    ticketService.getSuperAdminAuditLogs.mockResolvedValueOnce(sampleLogs);
-
     render(
       <MemoryRouter initialEntries={['/superadmin/log-retention']}>
         <SuperAdminAuditLogs defaultTab="retention" />
@@ -168,8 +215,6 @@ describe('SuperAdminAuditLogs Component Tests', () => {
   });
 
   it('covers AC-21: prompts confirmation modal when reducing retention threshold with purge preview', async () => {
-    ticketService.getSuperAdminAuditLogs.mockResolvedValueOnce(sampleLogs);
-
     render(
       <MemoryRouter initialEntries={['/superadmin/log-retention']}>
         <SuperAdminAuditLogs defaultTab="retention" />
@@ -191,7 +236,9 @@ describe('SuperAdminAuditLogs Component Tests', () => {
     await waitFor(() => {
       expect(screen.getByText('Confirm Retention Reduction')).toBeInTheDocument();
       expect(screen.getByText(/Reducing the retention policy to 90 days/i)).toBeInTheDocument();
+      expect(screen.getByText(/approximately 2 log entries/i)).toBeInTheDocument();
     });
+    expect(ticketService.getAuditLogRetentionImpact).toHaveBeenCalledWith(90);
 
     const confirmBtn = screen.getByRole('button', { name: /Confirm & Apply Retention/i });
     fireEvent.click(confirmBtn);
@@ -202,9 +249,49 @@ describe('SuperAdminAuditLogs Component Tests', () => {
     });
   });
 
-  it('covers AC-22: executes manual purge removing expired records while preserving unexpired logs', async () => {
-    ticketService.getSuperAdminAuditLogs.mockResolvedValueOnce(sampleLogs);
+  it('covers AC-21: shows an error and keeps the old policy when saving fails', async () => {
+    ticketService.updateAuditLogRetentionConfig.mockRejectedValue({ response: { data: { message: 'Save blocked' } } });
 
+    render(
+      <MemoryRouter initialEntries={['/superadmin/log-retention']}>
+        <SuperAdminAuditLogs defaultTab="retention" />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Log Retention & Storage Governance')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /90 Days/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Save Retention Policy/i }));
+    await screen.findByText('Confirm Retention Reduction');
+    fireEvent.click(screen.getByRole('button', { name: /Confirm & Apply Retention/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Save blocked');
+    });
+    expect(screen.queryByText(/Log retention policy reduced/i)).not.toBeInTheDocument();
+  });
+
+  it('covers AC-22: reports a purge failure instead of claiming success', async () => {
+    ticketService.purgeAuditLogs.mockRejectedValue({ response: { status: 409, data: {} } });
+
+    render(
+      <MemoryRouter initialEntries={['/superadmin/log-retention']}>
+        <SuperAdminAuditLogs defaultTab="retention" />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /Purge 1 Expired Records Now/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Confirm & Execute Purge/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/already running/i);
+    });
+    expect(screen.queryByText(/Purged \d+ expired log records/i)).not.toBeInTheDocument();
+  });
+
+  it('covers AC-22: executes manual purge removing expired records while preserving unexpired logs', async () => {
     render(
       <MemoryRouter initialEntries={['/superadmin/log-retention']}>
         <SuperAdminAuditLogs defaultTab="retention" />
@@ -228,7 +315,7 @@ describe('SuperAdminAuditLogs Component Tests', () => {
 
     await waitFor(() => {
       expect(ticketService.purgeAuditLogs).toHaveBeenCalledWith(365);
-      expect(screen.getByText(/Successfully purged 1 expired log records/i)).toBeInTheDocument();
+      expect(screen.getByText(/Purged 1 expired log records/i)).toBeInTheDocument();
     });
   });
 });

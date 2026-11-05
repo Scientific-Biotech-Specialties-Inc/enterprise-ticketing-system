@@ -39,6 +39,8 @@ import {
   triggerPdfPrint,
 } from '@/utils/reportExportUtils';
 import PredictiveAnalytics from './PredictiveAnalytics';
+import DepartmentPerformanceView from '@/components/admin/DepartmentPerformanceView';
+import EmployeePerformanceView from '@/components/admin/EmployeePerformanceView';
 import { useBranch } from '@/context/BranchContext';
 import {
   DropdownMenu,
@@ -411,7 +413,7 @@ export default function AdminDashboard() {
 
   const handleExportExcel = () => {
     if (activeTab === 'predictive') {
-      exportPredictiveToExcel(analyticsData?.predictive || {}, selectedPreset);
+      exportPredictiveToExcel(analyticsData?.predictive, selectedPreset);
     } else {
       exportAnalyticsToExcel(dashboardData || analyticsData, selectedPreset);
     }
@@ -419,9 +421,9 @@ export default function AdminDashboard() {
 
   const handleExportCsv = () => {
     if (activeTab === 'predictive') {
-      exportPredictiveToCsv(analyticsData?.predictive || {}, selectedPreset);
+      exportPredictiveToCsv(analyticsData?.predictive, selectedPreset);
     } else {
-      exportAnalyticsToCsv(dashboardData || analyticsData);
+      exportAnalyticsToCsv(dashboardData || analyticsData, selectedPreset);
     }
   };
 
@@ -807,6 +809,9 @@ export default function AdminDashboard() {
     }
 
     const csat = dashboardData?.csat || {};
+    if (csat.available === false || (csat.average_score ?? dashboardData?.kpis?.csat_score) == null) {
+      return <EmptyStateCard title="CSAT data unavailable" description="Customer satisfaction ratings could not be loaded right now, so no score is shown." />;
+    }
     const labels = Array.isArray(csat.labels) ? csat.labels : (Array.isArray(dashboardData?.trends?.labels) ? dashboardData.trends.labels : []);
     const data = Array.isArray(csat.trend) ? csat.trend : (Array.isArray(csat.trends) ? csat.trends : []);
     const avgScore = Number(csat.average_score ?? dashboardData?.kpis?.csat_score ?? 0).toFixed(1);
@@ -928,11 +933,11 @@ export default function AdminDashboard() {
   const kpis = useMemo(() => {
     const k = dashboardData?.kpis || {};
     return [
-      { label: 'Total Tickets', value: k.total_tickets ?? 0, icon: Inbox },
-      { label: 'SLA Compliance', value: `${k.sla_compliance_rate ?? 0}%`, icon: ShieldCheck },
-      { label: 'Active Employees', value: k.active_employees_count ?? analyticsData.performance?.active_employees_count ?? 0, icon: Users },
-      { label: 'CSAT Score', value: Number(k.csat_score ?? 0).toFixed(1), icon: Smile },
-      { label: 'Avg Resolution', value: `${k.avg_resolution_hours ?? 0}h`, icon: Clock },
+      { label: 'Total Tickets', value: k.total_tickets ?? 0, icon: Inbox, definition: 'Tickets created in the selected period for the branch in view.' },
+      { label: 'SLA Compliance', value: k.sla_compliance_rate == null ? 'Unavailable' : `${k.sla_compliance_rate}%`, icon: ShieldCheck, definition: 'Tickets that met their SLA target divided by all tickets with an SLA outcome in the selected period.' },
+      { label: 'Active Employees', value: k.active_employees_count ?? analyticsData.performance?.active_employees_count ?? 0, icon: Users, definition: 'Active staff members in the branch directory. This count does not change with the period.' },
+      { label: 'CSAT Score', value: k.csat_score != null ? Number(k.csat_score).toFixed(1) : 'Unavailable', icon: Smile, definition: 'Average customer rating from feedback on tickets in the selected period, out of 5.' },
+      { label: 'Avg Resolution', value: `${k.avg_resolution_hours ?? 0}h`, icon: Clock, definition: 'Average hours from ticket creation to resolution, not counting time on hold, for tickets resolved in the selected period.' },
     ];
   }, [dashboardData, analyticsData.performance]);
 
@@ -1093,6 +1098,30 @@ export default function AdminDashboard() {
           >
             Predictive Analytics
           </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('departments')}
+            className={cn(
+              "pb-3 pt-1 text-xs sm:text-sm transition-all relative cursor-pointer border-b-2 font-medium",
+              activeTab === 'departments'
+                ? "text-[#252578] border-[#252578] font-semibold"
+                : "text-slate-500 hover:text-slate-800 border-transparent"
+            )}
+          >
+            Departments
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('employees')}
+            className={cn(
+              "pb-3 pt-1 text-xs sm:text-sm transition-all relative cursor-pointer border-b-2 font-medium",
+              activeTab === 'employees'
+                ? "text-[#252578] border-[#252578] font-semibold"
+                : "text-slate-500 hover:text-slate-800 border-transparent"
+            )}
+          >
+            Employees
+          </button>
         </div>
 
         {/* Right: Active Branch Selector & Date Range Preset Filters side-by-side */}
@@ -1153,6 +1182,7 @@ export default function AdminDashboard() {
                   key={k.label}
                   title={k.label}
                   value={k.value}
+                  definition={k.definition}
                   icon={<Icon className="w-5 h-5" />}
                   iconBg="bg-primary/10 text-primary"
                 />
@@ -1281,7 +1311,7 @@ export default function AdminDashboard() {
                             <td className="px-3 py-2.5 text-xs font-medium text-rose-600">{b.sla_breaches ?? 0}</td>
                             <td className="px-3 py-2.5 text-xs font-semibold text-emerald-700">{b.sla_compliance_rate ?? 100}%</td>
                             <td className="px-3 py-2.5 text-xs text-[#8D8B8F]">{b.avg_resolution_hours ?? 0}h</td>
-                            <td className="px-3 py-2.5 text-xs font-medium text-[#1E293B]">{b.csat_score ?? '4.8'} / 5.0</td>
+                            <td className="px-3 py-2.5 text-xs font-medium text-[#1E293B]">{b.csat_score != null ? `${b.csat_score} / 5.0` : '—'}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1292,6 +1322,19 @@ export default function AdminDashboard() {
             )}
           </div>
         </div>
+      ) : activeTab === 'employees' ? (
+        <EmployeePerformanceView
+          selectedPeriod={selectedPreset}
+          dateFrom={globalDateFrom}
+          dateTo={globalDateTo}
+        />
+      ) : activeTab === 'departments' ? (
+        <DepartmentPerformanceView
+          branchName={selectedBranch?.name || 'your branch'}
+          selectedPeriod={selectedPreset}
+          dateFrom={globalDateFrom}
+          dateTo={globalDateTo}
+        />
       ) : (
         <AnalyticsErrorBoundary>
           <PredictiveAnalytics

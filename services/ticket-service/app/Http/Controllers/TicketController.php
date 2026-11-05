@@ -128,7 +128,7 @@ class TicketController extends Controller
         ]);
 
         try {
-            $result = $this->ticketService->createTicket($validated, $user, $deptId);
+            $result = app(\App\Actions\Tickets\CreateTicketAction::class)->execute($validated, $user, $deptId);
         } catch (TicketLimitExceededException $e) {
             return response()->json([
                 'message' => $e->getMessage(),

@@ -839,7 +839,7 @@ export default function CustomerTicketDetailModal({
             <div className="md:col-span-2 pt-2">
               <TicketActivityTimeline
                 ticket={effectiveTicket}
-                userRole="employee"
+                ticketId={effectiveTicket.ticket_ID}
                 pageSize={6}
               />
             </div>

@@ -3,7 +3,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import AdminReports from './AdminReports';
 import * as ticketService from '@/services/ticketService';
-import * as reportExportUtils from '@/utils/reportExportUtils';
 
 // Mock BranchContext
 vi.mock('@/context/BranchContext', () => ({
@@ -35,13 +34,7 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
 // Mock ticketService APIs
 vi.mock('@/services/ticketService', () => ({
   getAdminReports: vi.fn(),
-}));
-
-// Mock export utilities
-vi.mock('@/utils/reportExportUtils', () => ({
-  exportStructuredCsv: vi.fn(),
-  exportStructuredExcel: vi.fn(),
-  exportStructuredPdf: vi.fn(),
+  exportAdminReport: vi.fn(),
 }));
 
 describe('AdminReports Component Tests', () => {
@@ -189,8 +182,14 @@ describe('AdminReports Component Tests', () => {
     });
   });
 
-  it('covers AC-16 and AC-17: triggers exports with exact active preview snapshot and filter metadata', async () => {
+  it('covers AC-16 and AC-17: exports through the server with the same filters as the preview', async () => {
     ticketService.getAdminReports.mockResolvedValueOnce(sampleTicketVolumeResponse);
+    ticketService.exportAdminReport.mockResolvedValue({
+      data: new Blob(['x']),
+      headers: { 'content-disposition': 'attachment; filename="ticket_volume_test.csv"' },
+    });
+    window.URL.createObjectURL = vi.fn(() => 'blob:test');
+    window.URL.revokeObjectURL = vi.fn();
 
     render(<AdminReports />);
 
@@ -198,25 +197,35 @@ describe('AdminReports Component Tests', () => {
       expect(screen.getByText('MRI Network Drop')).toBeInTheDocument();
     });
 
-    const pdfOption = screen.getByText('Export as PDF');
-    fireEvent.click(pdfOption);
-    expect(reportExportUtils.exportStructuredPdf).toHaveBeenCalledTimes(1);
-    expect(reportExportUtils.exportStructuredPdf).toHaveBeenCalledWith(
-      expect.stringContaining('ticket_volume_Downtown_Health_Clinic'),
-      'Ticket Volume & Status Summary',
-      expect.any(Array),
-      sampleTicketVolumeResponse.rows,
+    fireEvent.click(screen.getByText('Export as PDF'));
+    await waitFor(() => expect(ticketService.exportAdminReport).toHaveBeenCalledTimes(1));
+    expect(ticketService.exportAdminReport).toHaveBeenCalledWith(
       expect.objectContaining({
-        branch: 'Downtown Health Clinic',
+        reportType: 'ticket_volume',
+        format: 'pdf',
+        filters: expect.objectContaining({ preset: expect.any(String) }),
       })
     );
 
-    const excelOption = screen.getByText('Export as Excel (.xlsx)');
-    fireEvent.click(excelOption);
-    expect(reportExportUtils.exportStructuredExcel).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByText('Export as Excel (.xlsx)'));
+    await waitFor(() => expect(ticketService.exportAdminReport).toHaveBeenCalledTimes(2));
+    expect(ticketService.exportAdminReport).toHaveBeenLastCalledWith(expect.objectContaining({ format: 'xlsx' }));
 
-    const csvOption = screen.getByText('Export as CSV');
-    fireEvent.click(csvOption);
-    expect(reportExportUtils.exportStructuredCsv).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByText('Export as CSV'));
+    await waitFor(() => expect(ticketService.exportAdminReport).toHaveBeenCalledTimes(3));
+    expect(ticketService.exportAdminReport).toHaveBeenLastCalledWith(expect.objectContaining({ format: 'csv' }));
+  });
+
+  it('shows an error message when the server export fails', async () => {
+    ticketService.getAdminReports.mockResolvedValueOnce(sampleTicketVolumeResponse);
+    ticketService.exportAdminReport.mockRejectedValueOnce({ response: { status: 500 } });
+
+    render(<AdminReports />);
+    await waitFor(() => expect(screen.getByText('MRI Network Drop')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Export as CSV'));
+    await waitFor(() => {
+      expect(screen.getByText('The export could not be generated. Please try again.')).toBeInTheDocument();
+    });
   });
 });

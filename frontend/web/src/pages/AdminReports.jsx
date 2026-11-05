@@ -11,12 +11,7 @@ import {
   FileCode,
   Search,
 } from 'lucide-react';
-import {
-  exportStructuredCsv,
-  exportStructuredExcel,
-  exportStructuredPdf,
-} from '@/utils/reportExportUtils';
-import { getAdminReports } from '@/services/ticketService';
+import { exportAdminReport, getAdminReports } from '@/services/ticketService';
 import { useBranch } from '@/context/BranchContext';
 import BranchSelector from '@/components/BranchSelector';
 import { PageHeader } from '@/components/ui/page-header';
@@ -123,6 +118,30 @@ export default function AdminReports() {
     return datePreset;
   }, [datePreset, customStartDate, customEndDate]);
 
+  // Filters shared by the preview and the server side export so both read the same snapshot.
+  const buildFilterParams = useCallback(() => {
+    const params = { preset: datePreset };
+
+    if (datePreset === 'Custom Range') {
+      params.date_from = customStartDate;
+      params.date_to = customEndDate;
+    }
+
+    if (selectedDepartment && selectedDepartment !== 'All Departments') {
+      params.department = selectedDepartment;
+    }
+
+    if (priorityFilter && priorityFilter !== 'All') {
+      params.priority = priorityFilter === 'Critical Only' ? 'Critical' : priorityFilter;
+    }
+
+    if (isSuperAdmin && selectedBranchId) {
+      params.branch_id = selectedBranchId;
+    }
+
+    return params;
+  }, [datePreset, customStartDate, customEndDate, selectedDepartment, priorityFilter, isSuperAdmin, selectedBranchId]);
+
   // ─── Generate Live Preview Action ─────────────────────────────────────────
   const handleGeneratePreview = useCallback(async () => {
     setIsGenerating(true);
@@ -130,27 +149,7 @@ export default function AdminReports() {
     setGenerationNotice(`Querying live "${currentReportDef.name}" records across ${branchName}...`);
 
     try {
-      const params = {
-        report_type: selectedReportType,
-        preset: datePreset,
-      };
-
-      if (datePreset === 'Custom Range') {
-        params.date_from = customStartDate;
-        params.date_to = customEndDate;
-      }
-
-      if (selectedDepartment && selectedDepartment !== 'All Departments') {
-        params.department = selectedDepartment;
-      }
-
-      if (priorityFilter && priorityFilter !== 'All') {
-        params.priority = priorityFilter === 'Critical Only' ? 'Critical' : priorityFilter;
-      }
-
-      if (isSuperAdmin && selectedBranchId) {
-        params.branch_id = selectedBranchId;
-      }
+      const params = { report_type: selectedReportType, ...buildFilterParams() };
 
       const res = await getAdminReports(params);
       const rows = Array.isArray(res?.rows) ? res.rows : [];
@@ -182,13 +181,12 @@ export default function AdminReports() {
     currentReportDef,
     branchName,
     selectedReportType,
+    buildFilterParams,
     datePreset,
     customStartDate,
     customEndDate,
     selectedDepartment,
     priorityFilter,
-    isSuperAdmin,
-    selectedBranchId,
     effectiveDateRange,
   ]);
 
@@ -198,24 +196,37 @@ export default function AdminReports() {
   }, [handleGeneratePreview]);
 
   // ─── Format Export Handlers (TS061 Criteria: PDF, Excel, CSV) ─────────────
-  const handleExport = (format) => {
+  const handleExport = async (format) => {
     if (!previewData || previewData.length === 0) return;
 
+    // The server renders PDF, Excel and CSV from the same query as the preview, so files match what is on screen.
+    const apiFormat = format === 'excel' ? 'xlsx' : format;
     const resolvedBranch = (appliedFilters?.branch || branchName).replace(/\s+/g, '_');
-    const baseFilename = `${currentReportDef.id}_${resolvedBranch}_${new Date().toISOString().split('T')[0]}`;
-    const filterSummary = {
-      reportType: appliedFilters?.reportType || currentReportDef.name,
-      branch: appliedFilters?.branch || branchName,
-      dateRange: appliedFilters?.dateRange || effectiveDateRange,
-      department: appliedFilters?.department || selectedDepartment,
-    };
+    const fallbackName = `${currentReportDef.id}_${resolvedBranch}_${new Date().toISOString().split('T')[0]}.${apiFormat}`;
 
-    if (format === 'csv') {
-      exportStructuredCsv(baseFilename, activeHeaders, previewData, filterSummary);
-    } else if (format === 'excel') {
-      exportStructuredExcel(baseFilename, currentReportDef.name, activeHeaders, previewData, filterSummary);
-    } else if (format === 'pdf') {
-      exportStructuredPdf(baseFilename, currentReportDef.name, activeHeaders, previewData, filterSummary);
+    try {
+      const response = await exportAdminReport({
+        reportType: selectedReportType,
+        format: apiFormat,
+        filters: buildFilterParams(),
+      });
+
+      const disposition = response?.headers?.['content-disposition'] || '';
+      const match = /filename="?([^";]+)"?/i.exec(disposition);
+      const url = window.URL.createObjectURL(response.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = match ? match[1] : fallbackName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setGenerationError(
+        err?.response?.status === 403
+          ? 'You do not have access to export this report.'
+          : 'The export could not be generated. Please try again.'
+      );
     }
   };
 

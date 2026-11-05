@@ -261,8 +261,12 @@ class TicketStateMachine
             return true;
         }
 
-        // Direct CS assignment from Open to Assigned is always permitted for incoming triage
-        if ($fromState === self::STATE_OPEN && $toState === self::STATE_ASSIGNED) {
+        // Direct CS assignment or technician investigation from Open is permitted
+        if ($fromState === self::STATE_OPEN && in_array($toState, [
+            self::STATE_ASSIGNED,
+            self::STATE_IN_PROGRESS_CS,
+            self::STATE_IN_PROGRESS_EMPLOYEE,
+        ], true)) {
             return true;
         }
 
