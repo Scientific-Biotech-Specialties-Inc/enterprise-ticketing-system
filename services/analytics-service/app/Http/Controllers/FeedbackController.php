@@ -324,7 +324,19 @@ class FeedbackController extends Controller
         $avgScore = (clone $query)->avg('overall_rating');
         $totalReviews = (clone $query)->count();
         $satisfiedCount = (clone $query)->where('overall_rating', '>=', 4)->count();
-        $satisfactionPercentage = $totalReviews > 0 ? round(($satisfiedCount / $totalReviews) * 100, 1) : 100.0;
+        // No reviews means no score: never report an invented 100% or 5.0 (spec 0031 AC-14).
+        $satisfactionPercentage = $totalReviews > 0 ? round(($satisfiedCount / $totalReviews) * 100, 1) : null;
+
+        // Average rating per ticket, used by ticket-service for per employee and per department CSAT.
+        $ticketRatings = [];
+        if ($request->filled('ticket_ids')) {
+            $ticketRatings = (clone $query)
+                ->select('ticket_id', DB::raw('AVG(overall_rating) as rating'))
+                ->groupBy('ticket_id')
+                ->pluck('rating', 'ticket_id')
+                ->map(fn ($rating) => round((float) $rating, 2))
+                ->all();
+        }
 
         // Calculate monthly trend over last 6 periods
         $trendsQuery = CustomerFeedback::query();
@@ -349,9 +361,10 @@ class FeedbackController extends Controller
         return response()->json([
             'status' => 'success',
             'data' => [
-                'average_score' => $avgScore !== null ? round((float) $avgScore, 2) : 5.0,
+                'average_score' => $avgScore !== null ? round((float) $avgScore, 2) : null,
                 'total_reviews' => $totalReviews,
                 'satisfaction_percentage' => $satisfactionPercentage,
+                'ticket_ratings' => (object) $ticketRatings,
                 'trends' => $trends,
             ],
         ]);

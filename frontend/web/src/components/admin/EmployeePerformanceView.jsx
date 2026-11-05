@@ -14,7 +14,8 @@ const COLUMNS = [
   { key: 'csat_score', label: 'CSAT', numeric: true, suffix: '' },
 ];
 
-const show = (value, suffix = '') => (value === null || value === undefined ? 'Unavailable' : `${value}${suffix}`);
+// A missing value is shown as a dash, never as 0 or 100 (spec 0031 AC-6).
+const show = (value, suffix = '') => (value === null || value === undefined ? '—' : `${value}${suffix}`);
 
 export default function EmployeePerformanceView({
   selectedPeriod = 'Last 7 Days',

@@ -566,6 +566,8 @@ export function adaptDepartmentPerformance(api) {
       resolvedCount: d.resolved_tickets ?? 0,
       avgResolutionTime: d.avg_resolution_hours ?? null,
       slaCompliance: d.sla_compliance_rate ?? null,
+      slaMet: d.sla_met_count ?? 0,
+      slaBreached: d.sla_breached_count ?? 0,
       avgCsat: d.csat_score ?? null,
       openCount: d.open_tickets_count ?? 0,
       overdueCount: d.overdue_tickets_count ?? 0,

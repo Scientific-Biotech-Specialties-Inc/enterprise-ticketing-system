@@ -348,14 +348,28 @@ services:
     build:
       context: ./services/analytics-service
     container_name: analytics-service
+    restart: always
     volumes:
       - ./services/analytics-service:/var/www
+      # Keep vendor/ off the Windows bind mount. Without this every request booted Laravel over the host
+      # filesystem (about 24 s), so /api/csat-stats never answered within any timeout (spec 0031 AC-16).
+      - analytics-service-vendor:/var/www/vendor
+    # The image ships vendor/ without dev packages, but the bind mounted bootstrap cache expects them,
+    # so install the full set into the volume on first start. OPcache is turned on for the CLI because
+    # artisan serve runs the built in server under the CLI, where it is off by default.
+    command: sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ ! -d vendor/nunomaduro/collision ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && echo opcache.enable_cli=1 > /usr/local/etc/php/conf.d/zz-opcache-cli.ini && php -d variables_order=EGPCS artisan serve --no-reload --host=0.0.0.0 --port=8000"
     ports:
       - "8004:8000"
     networks:
       - default
       - shared-capstone-network
     environment:
+      # artisan serve is single threaded by default; let a slow request not block the next one.
+      PHP_CLI_SERVER_WORKERS: 4
+      # The api throttle middleware touches the cache on every request; Redis keeps that off the bind mount.
+      CACHE_DRIVER: redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
       DB_CONNECTION: mysql
       DB_HOST: db
       DB_PORT: 3306
@@ -641,6 +655,7 @@ volumes:
   employee-service-vendor:
   ai-service-vendor:
   configuration-service-vendor:
+  analytics-service-vendor:
 
 networks:
   default:

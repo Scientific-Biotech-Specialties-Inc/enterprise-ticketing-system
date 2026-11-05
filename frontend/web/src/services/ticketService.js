@@ -1620,6 +1620,13 @@ const getSharedReport = (path, params = {}) => {
 
 export const getAdminDashboard = (params = {}) => getSharedReport('/admin/dashboard', params);
 
+/**
+ * Live manager summary and breached queue (spec 0031 AC-7). Scope (department, branch) is decided by the
+ * server from the signed in manager, so the only option is forcing a fresh read past the 30 s cache.
+ */
+export const getManagerDashboard = ({ forceRefresh = false } = {}) =>
+  getSharedReport('/manager/dashboard', forceRefresh ? { forceRefresh: true } : {});
+
 export const getAdminReports = async (params = {}) => {
   const response = await ticketClient.get('/admin/reports', { params });
   return response.data;

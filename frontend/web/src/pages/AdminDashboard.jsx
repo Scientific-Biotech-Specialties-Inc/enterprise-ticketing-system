@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -328,8 +328,12 @@ export default function AdminDashboard() {
   const [syncStatusMsg, setSyncStatusMsg] = useState('');
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
+  // Each fetch takes a sequence number; a response is applied only if no newer fetch started since (spec 0031 AC-15).
+  const analyticsRequestSeq = useRef(0);
+
   // Fetch live operational and performance records in a single unified request
   const fetchAnalytics = async (fromDate = globalDateFrom, toDate = globalDateTo) => {
+    const seq = ++analyticsRequestSeq.current;
     setIsLoading(true);
     try {
       const params = {};
@@ -344,6 +348,9 @@ export default function AdminDashboard() {
         console.warn('Admin dashboard live fetch error:', err);
         return null;
       });
+
+      // A newer range was selected while this request was in flight: drop the stale response.
+      if (seq !== analyticsRequestSeq.current) return;
 
       const unifiedEmployees = dashRes?.employee_performance?.employees
         || dashRes?.employee_performance?.list
@@ -367,7 +374,9 @@ export default function AdminDashboard() {
     } catch (err) {
       console.warn('Operational data fetch failed:', err);
     } finally {
-      setIsLoading(false);
+      if (seq === analyticsRequestSeq.current) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -561,7 +570,7 @@ export default function AdminDashboard() {
 
     if (slaView === 'Compliance') {
       const data = sla.compliance_trend || [];
-      const overallRate = dashboardData?.kpis?.sla_compliance_rate ?? 0;
+      const overallRate = dashboardData?.kpis?.sla_compliance_rate ?? null;
       return (
         <div>
           <div className="h-[220px]">
@@ -585,7 +594,11 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Average SLA compliance is {overallRate}% for selected period.</p>
+          <p className="text-[11px] text-gray-500 mt-1">
+            {overallRate === null
+              ? 'No data: no ticket reached an SLA outcome in the selected period.'
+              : `Average SLA compliance is ${overallRate}% for selected period.`}
+          </p>
         </div>
       );
     } else if (slaView === 'Breaches') {
@@ -613,7 +626,7 @@ export default function AdminDashboard() {
       );
     } else if (slaView === 'Resolution SLA') {
       const data = sla.resolution_time_trend || [];
-      const avgTime = dashboardData?.kpis?.avg_resolution_hours ?? 0;
+      const avgTime = dashboardData?.kpis?.avg_resolution_hours ?? null;
       return (
         <div>
           <div className="h-[220px]">
@@ -637,13 +650,20 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Average resolution time: {avgTime} hours.</p>
+          <p className="text-[11px] text-gray-500 mt-1">
+            {avgTime === null ? 'Average resolution time: No data.' : `Average resolution time: ${avgTime} hours.`}
+          </p>
         </div>
       );
     } else {
       const deptList = Array.isArray(sla.by_department) ? sla.by_department : [];
       const labelsDept = deptList.map(d => d.name || d.department || 'General');
-      const dataDept = deptList.map(d => d.compliance_rate ?? d.compliance_percentage ?? 0);
+      const dataDept = deptList.map(d => d.compliance_rate ?? d.compliance_percentage ?? null);
+      const noDataDepts = labelsDept.filter((_, i) => dataDept[i] === null);
+
+      if (labelsDept.length === 0) {
+        return <EmptyStateCard title="No department SLA data" description="No department reached an SLA outcome in this period." />;
+      }
 
       return (
         <div>
@@ -651,10 +671,10 @@ export default function AdminDashboard() {
             <Bar
               options={defaultHorizontalBarOptions('SLA by Department')}
               data={{
-                labels: labelsDept.length > 0 ? labelsDept : ['Service'],
+                labels: labelsDept,
                 datasets: [{
                   label: 'SLA %',
-                  data: dataDept.length > 0 ? dataDept : [0],
+                  data: dataDept,
                   backgroundColor: BAR_PALETTE.slice(0, Math.max(1, labelsDept.length)),
                   borderRadius: 6,
                   barThickness: 18,
@@ -662,7 +682,10 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Operational department SLA adherence breakdown.</p>
+          <p className="text-[11px] text-gray-500 mt-1">
+            Operational department SLA adherence breakdown.
+            {noDataDepts.length > 0 && ` No data: ${noDataDepts.join(', ')}.`}
+          </p>
         </div>
       );
     }
@@ -687,17 +710,17 @@ export default function AdminDashboard() {
       rawList = dashPerf.list.map((item, idx) => ({
         ...item,
         tickets_resolved: item.resolved_tickets ?? item.tickets_resolved ?? (Array.isArray(dashPerf.resolved) ? dashPerf.resolved[idx] : 0),
-        avg_response_time_minutes: item.avg_response_time_minutes ?? (Array.isArray(dashPerf.response_time) ? dashPerf.response_time[idx] : 0),
-        avg_resolution_hours: item.avg_resolution_hours ?? (Array.isArray(dashPerf.resolution_time) ? dashPerf.resolution_time[idx] : 0),
-        sla_compliance_rate: item.sla_compliance_rate ?? (Array.isArray(dashPerf.sla_compliance) ? dashPerf.sla_compliance[idx] : 0),
+        avg_response_time_minutes: item.avg_response_time_minutes ?? (Array.isArray(dashPerf.response_time) ? dashPerf.response_time[idx] : null),
+        avg_resolution_hours: item.avg_resolution_hours ?? (Array.isArray(dashPerf.resolution_time) ? dashPerf.resolution_time[idx] : null),
+        sla_compliance_rate: item.sla_compliance_rate ?? (Array.isArray(dashPerf.sla_compliance) ? dashPerf.sla_compliance[idx] : null),
       }));
     } else if (dashPerf && Array.isArray(dashPerf.labels) && dashPerf.labels.length > 0) {
       rawList = dashPerf.labels.map((name, idx) => ({
         name,
         tickets_resolved: Array.isArray(dashPerf.resolved) ? dashPerf.resolved[idx] : 0,
-        avg_response_time_minutes: Array.isArray(dashPerf.response_time) ? dashPerf.response_time[idx] : 0,
-        avg_resolution_hours: Array.isArray(dashPerf.resolution_time) ? dashPerf.resolution_time[idx] : 0,
-        sla_compliance_rate: Array.isArray(dashPerf.sla_compliance) ? dashPerf.sla_compliance[idx] : 0,
+        avg_response_time_minutes: Array.isArray(dashPerf.response_time) ? dashPerf.response_time[idx] : null,
+        avg_resolution_hours: Array.isArray(dashPerf.resolution_time) ? dashPerf.resolution_time[idx] : null,
+        sla_compliance_rate: Array.isArray(dashPerf.sla_compliance) ? dashPerf.sla_compliance[idx] : null,
       }));
     }
 
@@ -732,8 +755,8 @@ export default function AdminDashboard() {
     } else if (empView === 'Avg Response Time') {
       const data = rawList.map(p => {
         if (p.avg_response_hours !== undefined && p.avg_response_hours !== null) return p.avg_response_hours;
-        const mins = p.average_response_minutes ?? p.avg_response_minutes ?? p.avg_response_time_minutes ?? 0;
-        return mins ? Math.round((mins / 60) * 10) / 10 : 0;
+        const mins = p.average_response_minutes ?? p.avg_response_minutes ?? p.avg_response_time_minutes ?? null;
+        return mins === null ? null : Math.round((mins / 60) * 10) / 10;
       });
       return (
         <div>
@@ -756,7 +779,7 @@ export default function AdminDashboard() {
         </div>
       );
     } else if (empView === 'Avg Resolution Time') {
-      const data = rawList.map(p => p.avg_resolution_hours ?? p.average_resolution_hours ?? (p.avg_resolution_time_minutes ? Math.round((p.avg_resolution_time_minutes / 60) * 10) / 10 : 0));
+      const data = rawList.map(p => p.avg_resolution_hours ?? p.average_resolution_hours ?? (p.avg_resolution_time_minutes ? Math.round((p.avg_resolution_time_minutes / 60) * 10) / 10 : null));
       return (
         <div>
           <div className="h-[220px]">
@@ -778,7 +801,8 @@ export default function AdminDashboard() {
         </div>
       );
     } else {
-      const data = rawList.map(p => p.sla_compliance_rate ?? p.sla_compliance ?? 0);
+      const data = rawList.map(p => p.sla_compliance_rate ?? p.sla_compliance ?? null);
+      const noDataNames = labels.filter((_, i) => data[i] === null);
       return (
         <div>
           <div className="h-[220px]">
@@ -796,7 +820,10 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Individual SLA compliance rates against 90% target.</p>
+          <p className="text-[11px] text-gray-500 mt-1">
+            Individual SLA compliance rates against 90% target.
+            {noDataNames.length > 0 && ` No data: ${noDataNames.join(', ')}.`}
+          </p>
         </div>
       );
     }
@@ -934,10 +961,10 @@ export default function AdminDashboard() {
     const k = dashboardData?.kpis || {};
     return [
       { label: 'Total Tickets', value: k.total_tickets ?? 0, icon: Inbox, definition: 'Tickets created in the selected period for the branch in view.' },
-      { label: 'SLA Compliance', value: k.sla_compliance_rate == null ? 'Unavailable' : `${k.sla_compliance_rate}%`, icon: ShieldCheck, definition: 'Tickets that met their SLA target divided by all tickets with an SLA outcome in the selected period.' },
+      { label: 'SLA Compliance', value: k.sla_compliance_rate == null ? 'No data' : `${k.sla_compliance_rate}%`, icon: ShieldCheck, definition: 'Tickets that met their SLA target divided by all tickets with an SLA outcome in the selected period.' },
       { label: 'Active Employees', value: k.active_employees_count ?? analyticsData.performance?.active_employees_count ?? 0, icon: Users, definition: 'Active staff members in the branch directory. This count does not change with the period.' },
-      { label: 'CSAT Score', value: k.csat_score != null ? Number(k.csat_score).toFixed(1) : 'Unavailable', icon: Smile, definition: 'Average customer rating from feedback on tickets in the selected period, out of 5.' },
-      { label: 'Avg Resolution', value: `${k.avg_resolution_hours ?? 0}h`, icon: Clock, definition: 'Average hours from ticket creation to resolution, not counting time on hold, for tickets resolved in the selected period.' },
+      { label: 'CSAT Score', value: k.csat_available === false ? 'Unavailable' : (k.csat_score != null ? Number(k.csat_score).toFixed(1) : 'No data'), icon: Smile, definition: 'Average customer rating from feedback on tickets in the selected period, out of 5.' },
+      { label: 'Avg Resolution', value: k.avg_resolution_hours == null ? 'No data' : `${k.avg_resolution_hours}h`, icon: Clock, definition: 'Average hours from ticket creation to resolution, not counting time on hold, for tickets resolved in the selected period.' },
     ];
   }, [dashboardData, analyticsData.performance]);
 
@@ -1309,8 +1336,8 @@ export default function AdminDashboard() {
                             <td className="px-3 py-2.5 text-xs text-[#8D8B8F]">{b.active_tickets ?? 0}</td>
                             <td className="px-3 py-2.5 text-xs text-[#8D8B8F]">{b.escalated_tickets ?? 0}</td>
                             <td className="px-3 py-2.5 text-xs font-medium text-rose-600">{b.sla_breaches ?? 0}</td>
-                            <td className="px-3 py-2.5 text-xs font-semibold text-emerald-700">{b.sla_compliance_rate ?? 100}%</td>
-                            <td className="px-3 py-2.5 text-xs text-[#8D8B8F]">{b.avg_resolution_hours ?? 0}h</td>
+                            <td className="px-3 py-2.5 text-xs font-semibold text-emerald-700">{b.sla_compliance_rate == null ? '—' : `${b.sla_compliance_rate}%`}</td>
+                            <td className="px-3 py-2.5 text-xs text-[#8D8B8F]">{b.avg_resolution_hours == null ? '—' : `${b.avg_resolution_hours}h`}</td>
                             <td className="px-3 py-2.5 text-xs font-medium text-[#1E293B]">{b.csat_score != null ? `${b.csat_score} / 5.0` : '—'}</td>
                           </tr>
                         ))}

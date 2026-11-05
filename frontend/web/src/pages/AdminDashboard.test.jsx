@@ -340,6 +340,63 @@ describe('AdminDashboard (Live Data, Scoping, and ETL Sync)', () => {
     expect(ticketService.getAdminDepartmentPerformance).not.toHaveBeenCalled();
   });
 
+  it('keeps the most recently selected range when an earlier request finishes late (spec 0031 AC-15)', async () => {
+    vi.spyOn(authContextModule, 'useAuth').mockReturnValue({
+      user: { id: 1, role: 'admin', email: 'admin@example.com', branch_id: 1, branch: 'Cebu Branch' },
+    });
+
+    let resolveSlow;
+    const slow = new Promise((resolve) => { resolveSlow = resolve; });
+    ticketService.getAdminDashboard.mockReset();
+    ticketService.getAdminDashboard
+      .mockImplementationOnce(() => slow)
+      .mockResolvedValue({ ...mockLiveDashboard, kpis: { ...mockLiveDashboard.kpis, total_tickets: 222 } });
+
+    render(
+      <BranchProvider>
+        <AdminDashboard />
+      </BranchProvider>
+    );
+
+    await waitFor(() => expect(ticketService.getAdminDashboard).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByText('Last 30 Days'));
+    await waitFor(() => expect(screen.getByText('222')).toBeDefined());
+
+    // The first (older) range answers last; it must not overwrite the newer range.
+    resolveSlow({ ...mockLiveDashboard, kpis: { ...mockLiveDashboard.kpis, total_tickets: 111 } });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(screen.queryByText('111')).toBeNull();
+    expect(screen.getByText('222')).toBeDefined();
+  });
+
+  it('shows No data and a dash instead of invented rates (spec 0031 AC-6)', async () => {
+    vi.spyOn(authContextModule, 'useAuth').mockReturnValue({
+      user: { id: 1, role: 'superadmin', email: 'superadmin@example.com' },
+    });
+
+    ticketService.getAdminDashboard.mockResolvedValue({
+      ...mockLiveDashboard,
+      kpis: { ...mockLiveDashboard.kpis, sla_compliance_rate: null, avg_resolution_hours: null, csat_score: null, csat_available: false },
+      branch_comparisons: [
+        { branch_id: 1, branch_name: 'Cebu Branch', branch_code: 'CEB', total_tickets: 3, active_tickets: 3, escalated_tickets: 0, sla_breaches: 0, sla_compliance_rate: null, avg_resolution_hours: null, csat_score: null },
+      ],
+    });
+
+    render(
+      <BranchProvider>
+        <AdminDashboard />
+      </BranchProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText('No data').length).toBeGreaterThanOrEqual(2); // SLA Compliance and Avg Resolution KPIs
+      expect(screen.getByText('Unavailable')).toBeDefined(); // CSAT when analytics is down
+    });
+    expect(screen.queryByText('100%')).toBeNull();
+  });
+
   it('renders sortable Cross-Branch Performance Comparison table for SuperAdmin (AC-12)', async () => {
     vi.spyOn(authContextModule, 'useAuth').mockReturnValue({
       user: { id: 1, role: 'superadmin', email: 'superadmin@example.com' },

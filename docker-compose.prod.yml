@@ -270,6 +270,7 @@ services:
     container_name: analytics-service-prod
     restart: always
     environment:
+      PHP_CLI_SERVER_WORKERS: 4
       APP_ENV: production
       APP_DEBUG: "false"
       DB_CONNECTION: mysql

@@ -103,7 +103,7 @@ class DashboardTrendBucketsTest extends TestCase
             Carbon::parse('2026-11-02')->startOfDay(),
             Carbon::parse('2026-11-08')->endOfDay(),
             $tickets,
-            0.0, 0.0, 0.0,
+            collect(),
         ]);
 
         $this->assertSame(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], $out['labels']);

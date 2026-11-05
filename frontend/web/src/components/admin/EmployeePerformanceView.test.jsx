@@ -18,11 +18,11 @@ describe('EmployeePerformanceView (spec 0029 AC-5, AC-6)', () => {
     getAdminEmployeePerformance.mockResolvedValue({ employees: rows });
   });
 
-  it('shows real values, Unavailable for missing ones and a notice for no activity', async () => {
+  it('shows real values, a dash for missing ones and a notice for no activity', async () => {
     render(<EmployeePerformanceView selectedPeriod="This Month" />);
     expect(await screen.findByText('Jasmine')).toBeInTheDocument();
     expect(screen.getByText('66.7%')).toBeInTheDocument();
-    expect(screen.getByText('Unavailable')).toBeInTheDocument(); // CSAT
+    expect(screen.getByText('—')).toBeInTheDocument(); // CSAT
     expect(screen.getByText('No data recorded for this period')).toBeInTheDocument();
   });
 

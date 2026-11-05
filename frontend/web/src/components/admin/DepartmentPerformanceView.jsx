@@ -130,10 +130,10 @@ export default function DepartmentPerformanceView({
     const list = deptData?.departments?.filter((d) => d.hasData) || [];
     if (list.length === 0) return { totalHandled: 0, avgSla: null, totalOverdue: 0, highImbalanceCount: 0 };
     const totalHandled = list.reduce((acc, d) => acc + d.totalTicketsHandled, 0);
-    // Weighted by tickets handled, so a tiny department cannot swing the branch figure.
-    const avgSla = totalHandled > 0
-      ? (list.reduce((acc, d) => acc + (d.slaCompliance || 0) * d.totalTicketsHandled, 0) / totalHandled).toFixed(1)
-      : null;
+    // Same rule as the server (spec 0031 AC-4): met / (met + breached). No outcomes means no rate, never 0 or 100.
+    const met = list.reduce((acc, d) => acc + (d.slaMet || 0), 0);
+    const breached = list.reduce((acc, d) => acc + (d.slaBreached || 0), 0);
+    const avgSla = met + breached > 0 ? ((met / (met + breached)) * 100).toFixed(1) : null;
     const totalOverdue = list.reduce((acc, d) => acc + d.overdueCount, 0);
     const highImbalanceCount = list.filter((d) => d.imbalanceLevel === 'High Imbalance').length;
     return { totalHandled, avgSla, totalOverdue, highImbalanceCount };

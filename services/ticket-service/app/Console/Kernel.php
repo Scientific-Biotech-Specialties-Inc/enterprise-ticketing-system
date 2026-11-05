@@ -18,6 +18,8 @@ class Kernel extends ConsoleKernel
     {
         $schedule->command('tickets:auto-close-internal')->everyFiveMinutes();
         $schedule->command('tickets:check-sla-alerts')->everyMinute();
+        // Spec 0031 AC-13: the only employee directory sync; request paths never call the auth module for it.
+        $schedule->command('employees:sync-directory')->everyMinute()->withoutOverlapping();
         // Precompute the longest horizon the UI offers (30 days) so both the 7 and 30 day views are served from fresh rows.
         $schedule->command('tickets:calculate-forecasts', ['--horizon' => 30])->dailyAt('02:00')->onOneServer()->runInBackground();
 

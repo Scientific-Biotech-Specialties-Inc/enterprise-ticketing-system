@@ -60,6 +60,8 @@ Route::middleware('auth.subsystem')->group(function () {
     // ─── Admin Branch Dashboard & Reports ─────────────────────────────────────
     Route::get('/admin-dashboard', [TicketDashboardController::class, 'adminDashboard'])->middleware('no-cache');
     Route::get('/admin/dashboard', [TicketDashboardController::class, 'adminDashboard'])->middleware('no-cache');
+    // Spec 0031: live summary and breached queue for Service, IT and Customer Service managers.
+    Route::get('/manager/dashboard', [\App\Http\Controllers\ManagerDashboardController::class, 'dashboard'])->middleware('no-cache');
     Route::get('/admin-reports', [TicketDashboardController::class, 'adminReports'])->middleware('no-cache');
     Route::get('/admin/reports', [TicketDashboardController::class, 'adminReports'])->middleware('no-cache');
     Route::post('/admin/reports/export', [\App\Http\Controllers\ReportExportController::class, 'export'])->middleware(['no-cache', 'throttle:30,1']);
