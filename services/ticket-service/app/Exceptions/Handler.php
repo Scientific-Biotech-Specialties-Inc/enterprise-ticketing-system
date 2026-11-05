@@ -69,4 +69,22 @@ class Handler extends ExceptionHandler
             );
         });
     }
+
+    /**
+     * Client errors (403, 404 and other 4xx) are expected outcomes, so they never expose file paths or stack
+     * traces even when APP_DEBUG is on. Real server errors keep the full debug detail.
+     */
+    protected function convertExceptionToArray(Throwable $e)
+    {
+        if ($e instanceof HttpException && $e->getStatusCode() < 500) {
+            return ['message' => $e->getMessage() !== '' ? $e->getMessage() : 'Request could not be completed.'];
+        }
+
+        return parent::convertExceptionToArray($e);
+    }
+
+    protected function unauthenticated($request, AuthenticationException $exception)
+    {
+        return response()->json(['message' => $exception->getMessage() ?: 'Unauthenticated.'], 401);
+    }
 }

@@ -8,15 +8,19 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('ticket_audit_logs', function (Blueprint $table) {
-            $table->dropForeign('ticket_audit_logs_ticket_id_foreign');
-        });
+        if (\Illuminate\Support\Facades\DB::getDriverName() !== 'sqlite') {
+            Schema::table('ticket_audit_logs', function (Blueprint $table) {
+                $table->dropForeign('ticket_audit_logs_ticket_id_foreign');
+            });
+        }
     }
 
     public function down(): void
     {
-        Schema::table('ticket_audit_logs', function (Blueprint $table) {
-            $table->foreign('ticket_ID')->references('ticket_ID')->on('tickets')->cascadeOnDelete();
-        });
+        if (\Illuminate\Support\Facades\DB::getDriverName() !== 'sqlite') {
+            Schema::table('ticket_audit_logs', function (Blueprint $table) {
+                $table->foreign('ticket_ID')->references('ticket_ID')->on('tickets')->cascadeOnDelete();
+            });
+        }
     }
 };

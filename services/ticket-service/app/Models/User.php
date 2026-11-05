@@ -16,6 +16,11 @@ class User extends Authenticatable
 
     protected $primaryKey = 'emp_id';
 
+    protected $attributes = [
+        'password_hash' => '',
+        'is_active' => true,
+    ];
+
     /**
      * The attributes that are mass assignable.
      *
@@ -31,6 +36,8 @@ class User extends Authenticatable
         'department',
         'branch',
         'branch_id',
+        'password_hash',
+        'position_level',
         'phone_number',
         'last_synced_at',
         'is_active',
@@ -43,6 +50,7 @@ class User extends Authenticatable
      */
     protected $hidden = [
         'password',
+        'password_hash',
         'remember_token',
     ];
 

@@ -32,7 +32,6 @@ import { getFeedbackFormStatus, getWindowConfiguration, getCachedWindowConfigura
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { getTicketAttachments } from '@/services/ticketService';
 
 const getFileName = (file, fallback = 'Attachment') => {
   if (!file) return fallback;
@@ -115,14 +114,22 @@ export default function CustomerTicketDetailModal({
 
     if (normalizedAttachments.length === 0) {
       let isMounted = true;
-      getTicketAttachments(numId).then((atts) => {
-        if (isMounted && Array.isArray(atts) && atts.length > 0) {
-          setCurrentTicket((prev) => ({
-            ...prev,
-            attachments: atts,
-          }));
-        }
-      }).catch(() => {});
+      import('@/services/ticketService')
+        .then((mod) => {
+          if (typeof mod?.getTicketAttachments === 'function') {
+            return mod.getTicketAttachments(numId);
+          }
+          return [];
+        })
+        .then((atts) => {
+          if (isMounted && Array.isArray(atts) && atts.length > 0) {
+            setCurrentTicket((prev) => ({
+              ...prev,
+              attachments: atts,
+            }));
+          }
+        })
+        .catch(() => {});
       return () => { isMounted = false; };
     }
   }, [effectiveTicket?.ticket_ID, effectiveTicket?.id, normalizedAttachments.length]);
@@ -832,7 +839,7 @@ export default function CustomerTicketDetailModal({
             <div className="md:col-span-2 pt-2">
               <TicketActivityTimeline
                 ticket={effectiveTicket}
-                userRole="employee"
+                ticketId={effectiveTicket.ticket_ID}
                 pageSize={6}
               />
             </div>

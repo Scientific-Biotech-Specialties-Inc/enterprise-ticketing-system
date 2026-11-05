@@ -8,123 +8,12 @@ use Illuminate\Support\Facades\DB;
 class EmployeeDirectoryController extends Controller
 {
     /**
-     * Automatically synchronize employees from Auth Module if not synced recently (every 60s).
+     * Synchronize employees from the Auth Module if not synced in the last 60s.
+     * Delegates to the single shared sync (spec 0031 AC-13); the scheduler runs it every minute.
      */
     public static function autoSyncWithAuthModule(): void
     {
-        if (\Illuminate\Support\Facades\Cache::has('employees_synced_lock')) {
-            return;
-        }
-
-        \Illuminate\Support\Facades\Cache::put('employees_synced_lock', true, 60);
-
-        try {
-            $authUrl = env('AUTH_SERVICE_INTERNAL_URL', 'http://auth-service:8000');
-            $secret = env('CMS_INTERNAL_SECRET', 'cms-internal-secret-key-2026');
-
-            $resp = \Illuminate\Support\Facades\Http::timeout(3)
-                ->withHeaders(['X-Internal-Secret' => $secret])
-                ->get("{$authUrl}/api/internal/users-by-roles", [
-                    'roles' => 'Engineer,Manager,Employee,Supervisor',
-                ]);
-
-            if (!$resp->successful()) {
-                return;
-            }
-
-            $authUsers = $resp->json('data') ?? [];
-            if (empty($authUsers)) {
-                return;
-            }
-
-            $authEmails = [];
-
-            foreach ($authUsers as $u) {
-                $email = strtolower(trim((string) ($u['email'] ?? '')));
-                if (empty($email)) continue;
-                $authEmails[] = $email;
-
-                $dept = trim((string) ($u['department'] ?? 'Service'));
-                $roleName = trim((string) ($u['role'] ?? 'Employee'));
-                $isManager = (stripos($roleName, 'manager') !== false);
-                $isAdmin = (stripos($roleName, 'admin') !== false);
-                $isEngineer = (stripos($roleName, 'engineer') !== false || stripos($roleName, 'supervisor') !== false);
-
-                if ($isAdmin) {
-                    $posLevel = 'Admin';
-                    $role = 'admin';
-                    $techRole = $roleName;
-                } elseif ($isManager) {
-                    $posLevel = 'Manager';
-                    $role = ($dept === 'Customer Service') ? 'customer service' : 'service';
-                    $techRole = $dept . ' Manager';
-                } elseif ($isEngineer || strcasecmp($dept, 'Service') === 0) {
-                    $posLevel = 'Engineer';
-                    $role = 'service';
-                    $techRole = 'Engineer';
-                } elseif (strcasecmp($dept, 'IT') === 0) {
-                    $posLevel = 'Employee';
-                    $role = 'service';
-                    $techRole = 'Employee';
-                } elseif ($dept === 'Customer Service') {
-                    $posLevel = 'Employee';
-                    $role = 'customer service';
-                    $techRole = 'Employee';
-                } else {
-                    $posLevel = 'Employee';
-                    $role = 'service';
-                    $techRole = 'Employee';
-                }
-
-                $branch = 'Main Branch';
-                $branchId = 1;
-                $branchName = $u['branch'] ?? ($u['branch_details']['name'] ?? '');
-                if (!empty($branchName) && stripos($branchName, 'north') !== false) {
-                    $branch = 'North Luzon Hub';
-                    $branchId = 2;
-                }
-
-                $existing = DB::table('employees')->where('email', $email)->first();
-
-                if ($existing) {
-                    DB::table('employees')->where('emp_id', $existing->emp_id)->update([
-                        'first_name' => $u['first_name'] ?: $existing->first_name,
-                        'last_name' => $u['last_name'] ?: $existing->last_name,
-                        'department' => $dept,
-                        'position_level' => $posLevel,
-                        'role' => $role,
-                        'technical_role' => $techRole,
-                        'branch' => $branch,
-                        'branch_id' => $branchId,
-                        'is_active' => (int) ($u['is_active'] ?? 1),
-                        'last_synced_at' => now(),
-                    ]);
-                } else {
-                    $newId = max((int)DB::table('employees')->max('emp_id') + 1, 1101);
-                    DB::table('employees')->insert([
-                        'emp_id' => $newId,
-                        'email' => $email,
-                        'phone_number' => $u['phone'] ?? null,
-                        'password_hash' => '',
-                        'first_name' => $u['first_name'] ?? 'Staff',
-                        'last_name' => $u['last_name'] ?? '',
-                        'department' => $dept,
-                        'position_level' => $posLevel,
-                        'role' => $role,
-                        'technical_role' => $techRole,
-                        'branch' => $branch,
-                        'branch_id' => $branchId,
-                        'is_active' => (int) ($u['is_active'] ?? 1),
-                        'last_synced_at' => now(),
-                        'password_change_at' => now(),
-                    ]);
-                }
-            }
-
-            DB::table('employees')->whereNotIn('email', $authEmails)->update(['is_active' => 0]);
-        } catch (\Throwable $e) {
-            // Silently fallback so normal operation is never disrupted
-        }
+        app(\App\Services\EmployeeDirectorySyncService::class)->sync();
     }
 
     /**
@@ -430,10 +319,6 @@ class EmployeeDirectoryController extends Controller
                       ->orWhereRaw('LOWER(COALESCE(role, "")) LIKE ?', ['%manager%']);
                 })
                 ->where('is_active', 1)
-                ->orderByRaw("CASE
-                    WHEN email = 'shelleysesantee@gmail.com' THEN 1
-                    WHEN email = 'eggiesailor123@gmail.com' THEN 1
-                    ELSE 2 END ASC")
                 ->orderByDesc('last_synced_at')
                 ->orderByDesc('emp_id')
                 ->select(

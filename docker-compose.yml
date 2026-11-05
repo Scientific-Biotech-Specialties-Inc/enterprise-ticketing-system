@@ -39,6 +39,7 @@ services:
     container_name: capstone-reverb
     volumes:
       - ./services/customer-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - customer-service-vendor:/var/www/vendor
     restart: always
     environment:
@@ -61,6 +62,7 @@ services:
     container_name: customer-service
     volumes:
       - ./services/customer-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - customer-service-vendor:/var/www/vendor
     ports:
       - "8001:8000"
@@ -109,6 +111,7 @@ services:
     container_name: customer-service-queue
     volumes:
       - ./services/customer-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - customer-service-vendor:/var/www/vendor
     environment:
       DB_CONNECTION: mysql
@@ -156,12 +159,58 @@ services:
       - configuration-service
 
 
+  # Runs the Laravel scheduler for ticket-service (audit log purge, forecasts, SLA checks).
+  # Without this container the jobs listed by `php artisan schedule:list` never execute.
+  ticket-scheduler:
+    # Shares the image already built for ticket-service, so no second build is needed.
+    image: ${COMPOSE_PROJECT_NAME:-enterprise-ticketing-system}-ticket-service
+    build:
+      context: ./services/ticket-service
+    container_name: ticket-scheduler
+    volumes:
+      - ./services/ticket-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
+      - ticket-service-vendor:/var/www/vendor
+    networks:
+      - default
+      - shared-capstone-network
+    environment:
+      DB_CONNECTION: mysql
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_DATABASE: ${MYSQL_DATABASE}
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      CACHE_DRIVER: redis
+      BROADCAST_DRIVER: reverb
+      QUEUE_CONNECTION: redis
+      SESSION_DRIVER: redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      REVERB_APP_ID: local
+      REVERB_APP_KEY: local
+      REVERB_APP_SECRET: local
+      REVERB_HOST: reverb
+      REVERB_PORT: 6001
+    command: >
+      sh -lc "while [ ! -f vendor/autoload.php ] || [ ! -f .env ]; do sleep 5; done && php artisan schedule:work"
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      ticket-service:
+        condition: service_started
+
   ticket-service:
     build:
       context: ./services/ticket-service
     container_name: ticket-service
     volumes:
       - ./services/ticket-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - ticket-service-vendor:/var/www/vendor
     ports:
       - "8002:8000"
@@ -205,6 +254,7 @@ services:
     container_name: ticket-service-queue
     volumes:
       - ./services/ticket-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - ticket-service-vendor:/var/www/vendor
     environment:
       DB_CONNECTION: mysql
@@ -240,6 +290,7 @@ services:
     container_name: employee-service
     volumes:
       - ./services/employee-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - employee-service-vendor:/var/www/vendor
     ports:
       - "8008:8000"
@@ -297,14 +348,28 @@ services:
     build:
       context: ./services/analytics-service
     container_name: analytics-service
+    restart: always
     volumes:
       - ./services/analytics-service:/var/www
+      # Keep vendor/ off the Windows bind mount. Without this every request booted Laravel over the host
+      # filesystem (about 24 s), so /api/csat-stats never answered within any timeout (spec 0031 AC-16).
+      - analytics-service-vendor:/var/www/vendor
+    # The image ships vendor/ without dev packages, but the bind mounted bootstrap cache expects them,
+    # so install the full set into the volume on first start. OPcache is turned on for the CLI because
+    # artisan serve runs the built in server under the CLI, where it is off by default.
+    command: sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ ! -d vendor/nunomaduro/collision ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && echo opcache.enable_cli=1 > /usr/local/etc/php/conf.d/zz-opcache-cli.ini && php -d variables_order=EGPCS artisan serve --no-reload --host=0.0.0.0 --port=8000"
     ports:
       - "8004:8000"
     networks:
       - default
       - shared-capstone-network
     environment:
+      # artisan serve is single threaded by default; let a slow request not block the next one.
+      PHP_CLI_SERVER_WORKERS: 4
+      # The api throttle middleware touches the cache on every request; Redis keeps that off the bind mount.
+      CACHE_DRIVER: redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
       DB_CONNECTION: mysql
       DB_HOST: db
       DB_PORT: 3306
@@ -458,6 +523,7 @@ services:
     container_name: capstone-messaging-reverb
     volumes:
       - ./services/messaging-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - messaging-service-vendor:/var/www/vendor
     restart: always
     environment:
@@ -483,6 +549,7 @@ services:
     container_name: messaging-service
     volumes:
       - ./services/messaging-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - messaging-service-vendor:/var/www/vendor
     ports:
       - "8007:8000"
@@ -588,6 +655,7 @@ volumes:
   employee-service-vendor:
   ai-service-vendor:
   configuration-service-vendor:
+  analytics-service-vendor:
 
 networks:
   default:

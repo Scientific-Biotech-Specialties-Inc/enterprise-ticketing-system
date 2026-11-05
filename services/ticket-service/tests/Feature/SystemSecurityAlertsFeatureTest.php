@@ -48,7 +48,7 @@ class SystemSecurityAlertsFeatureTest extends TestCase
 
         DB::table('branches')->updateOrInsert(
             ['id' => 1],
-            ['name' => 'Main Office', 'code' => 'MAIN', 'is_active' => true, 'created_at' => now(), 'updated_at' => now()]
+            ['slug' => 'main-office', 'name' => 'Main Office', 'code' => 'MAIN', 'is_active' => true, 'created_at' => now(), 'updated_at' => now()]
         );
 
         if (!Schema::hasTable('system_security_alerts')) {
@@ -101,7 +101,6 @@ class SystemSecurityAlertsFeatureTest extends TestCase
             [
                 'first_name' => 'Super',
                 'last_name' => 'Admin',
-                'name' => 'Super Admin',
                 'email' => 'superadmin@example.com',
                 'role' => 'superadmin',
                 'department' => 'superadmin',
@@ -109,8 +108,6 @@ class SystemSecurityAlertsFeatureTest extends TestCase
                 'password_hash' => 'secret',
                 'branch' => null,
                 'branch_id' => null,
-                'created_at' => now(),
-                'updated_at' => now(),
             ]
         );
 
@@ -158,13 +155,10 @@ class SystemSecurityAlertsFeatureTest extends TestCase
             'title' => 'Test SQL Error',
             'message' => 'Table not found during query execution',
             'service' => 'ticket-service',
-            'endpoint' => '/api/tickets',
-            'http_method' => 'GET',
-            'client_ip' => '127.0.0.1',
+            'ip_address' => '127.0.0.1',
             'burst_count' => 1,
             'first_seen_at' => now(),
             'last_seen_at' => now(),
-            'status' => 'active',
             'context_data' => json_encode(['sanitized_sql' => 'SELECT * FROM test_table']),
             'created_at' => now(),
             'updated_at' => now(),
@@ -196,13 +190,10 @@ class SystemSecurityAlertsFeatureTest extends TestCase
             'title' => 'Unhandled Exception in Service',
             'message' => 'Call to undefined function in controller',
             'service' => 'ticket-service',
-            'endpoint' => '/api/test/error',
-            'http_method' => 'POST',
-            'client_ip' => '10.0.0.1',
+            'ip_address' => '10.0.0.1',
             'burst_count' => 2,
             'first_seen_at' => now(),
             'last_seen_at' => now(),
-            'status' => 'active',
             'context_data' => json_encode([
                 'sanitized_trace' => ['App/Controller.php:32'],
                 'sanitized_snippet' => 'execute()',
@@ -233,9 +224,12 @@ class SystemSecurityAlertsFeatureTest extends TestCase
         DB::table('employees')->updateOrInsert(
             ['emp_id' => 50],
             [
-                'name' => 'Staff User',
+                'first_name' => 'Staff',
+                'last_name' => 'User',
                 'email' => 'staff@company.com',
                 'role' => 'employee',
+                'department' => 'Staff',
+                'password_hash' => 'secret',
                 'branch_id' => 1,
                 'branch' => 'Main Office',
                 'is_active' => true,

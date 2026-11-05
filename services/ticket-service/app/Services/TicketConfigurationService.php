@@ -48,27 +48,27 @@ class TicketConfigurationService
 
     public const DEFAULT_TRANSITIONS = [
         'Open' => [
-            'allowed' => ['In Progress (CS-owned)', 'Assigned', 'Cancelled'],
+            'allowed' => ['In Progress (CS-owned)', 'Assigned', 'Cancelled', 'Escalated'],
             'type' => 'editable',
             'description' => 'Initial ticket state upon customer or internal creation.',
         ],
         'In Progress (CS-owned)' => [
-            'allowed' => ['On Hold/Pending', 'Assigned', 'Resolved'],
+            'allowed' => ['On Hold/Pending', 'Assigned', 'Resolved', 'Escalated'],
             'type' => 'editable',
             'description' => 'Ticket being triaged or actively handled directly by Customer Service.',
         ],
         'Assigned' => [
-            'allowed' => ['Reassigned', 'In Progress (Employee-owned)', 'Assigned', 'On Hold/Pending'],
+            'allowed' => ['Reassigned', 'In Progress (Employee-owned)', 'Assigned', 'On Hold/Pending', 'Escalated'],
             'type' => 'editable',
             'description' => 'Ticket dispatched to an engineer/technician and awaiting their acceptance.',
         ],
         'Reassigned' => [
-            'allowed' => ['In Progress (Employee-owned)', 'Assigned', 'On Hold/Pending'],
+            'allowed' => ['In Progress (Employee-owned)', 'Assigned', 'On Hold/Pending', 'Escalated'],
             'type' => 'editable',
             'description' => 'Ticket reassignment requested or approved for re-dispatch.',
         ],
         'In Progress (Employee-owned)' => [
-            'allowed' => ['On Hold/Pending', 'Reassigned', 'Resolved', 'Assigned'],
+            'allowed' => ['On Hold/Pending', 'Reassigned', 'Resolved', 'Assigned', 'Escalated'],
             'type' => 'editable',
             'description' => 'Service engineer has accepted the assignment and is actively working on the machine.',
         ],
@@ -100,6 +100,11 @@ class TicketConfigurationService
             'type' => 'terminal',
             'caption' => 'Terminal status: No further transitions permitted from Cancelled.',
             'description' => 'Ticket discarded or cancelled before assignment.',
+        ],
+        'Escalated' => [
+            'allowed' => ['Assigned', 'In Progress (Employee-owned)', 'In Progress (CS-owned)', 'Resolved', 'Closed'],
+            'type' => 'editable',
+            'description' => 'Ticket escalated to supervisory or department leadership.',
         ],
     ];
 

@@ -101,7 +101,7 @@ export default function GuestRoute({ children }) {
     const isCustomer   = !isCS && !isEmployee && !isSuperAdmin && !isAdmin;
 
     if (isSuperAdmin) {
-      return <Navigate to="/superadmin/config" replace />;
+      return <Navigate to="/superadmin/dashboard" replace />;
     }
     if (isAdmin) {
       return <Navigate to="/admin/dashboard" replace />;

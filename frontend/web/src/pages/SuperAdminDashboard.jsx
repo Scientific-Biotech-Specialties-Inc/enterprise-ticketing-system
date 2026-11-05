@@ -54,9 +54,10 @@ import { Badge } from '@/components/ui/badge';
 import { InfoTooltip } from '@/components/ui/tooltip';
 import { triggerPdfPrint, downloadPdfFromElement, exportAnalyticsToCsv, exportAnalyticsToExcel } from '@/utils/reportExportUtils';
 import {
-  getSystemDashboardData,
+  adaptSystemDashboard,
   METRIC_DEFINITIONS,
 } from '@/services/dashboardAnalyticsService';
+import { getSystemDashboard, triggerEtlSync } from '@/services/ticketService';
 import { formatRelativeTime, formatDisplayDate } from '@/utils/dateUtils';
 import { cn } from '@/lib/utils';
 
@@ -72,7 +73,9 @@ ChartJS.register(
   Filler
 );
 
-const FILTER_OPTIONS = ['Today', 'Last 7 Days', 'Last 30 Days', 'Last 90 Days', 'Custom Range'];
+const FILTER_OPTIONS = ['Today', 'This Week', 'This Month', 'Last 7 Days', 'Last 30 Days', 'Last 90 Days', 'Custom Range'];
+const REFRESH_INTERVAL_MS = 60000;
+const UNAVAILABLE_MESSAGE = 'Data unavailable. This section could not be loaded.';
 
 export default function SuperAdminDashboard() {
   const [selectedPeriod, setSelectedPeriod] = useState('Last 7 Days');
@@ -91,23 +94,15 @@ export default function SuperAdminDashboard() {
     setIsSyncing(true);
     setSyncStatusMsg(fullSync ? 'Executing Full ETL Sync...' : 'Running Incremental ETL...');
     try {
-      const res = await fetch('/api/ticketing/analytics/etl/trigger', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify({ full_sync: fullSync }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setSyncStatusMsg(`ETL Complete! Processed ${data.records_processed ?? 'all'} records.`);
+      const data = await triggerEtlSync({ full_sync: fullSync, branch_id: 'all' });
+      if (data?.status === 'success') {
+        setSyncStatusMsg(`ETL Complete! Processed ${data.records_processed ?? 'all'} records (${data.duration_ms ?? 0}ms).`);
         loadData();
       } else {
-        setSyncStatusMsg(`ETL: ${data.message || data.error || 'Triggered'}`);
+        setSyncStatusMsg(`ETL: ${data?.message || data?.error || 'Triggered'}`);
       }
     } catch (err) {
-      setSyncStatusMsg('ETL Trigger request sent to analytics pipeline.');
+      setSyncStatusMsg(`ETL: ${err?.response?.data?.message || err?.message || 'Trigger request sent'}`);
     } finally {
       setIsSyncing(false);
       setTimeout(() => setSyncStatusMsg(''), 5000);
@@ -128,7 +123,7 @@ export default function SuperAdminDashboard() {
   };
 
   const handleExportCsv = () => {
-    exportAnalyticsToCsv(dashboardData);
+    exportAnalyticsToCsv(dashboardData, selectedPeriod);
   };
 
   const [lastUpdated, setLastUpdated] = useState(new Date());
@@ -141,33 +136,47 @@ export default function SuperAdminDashboard() {
     charts: null,
   });
 
-  const [dashboardData, setDashboardData] = useState(() => getSystemDashboardData('Last 7 Days'));
+  const [dashboardData, setDashboardData] = useState(() => adaptSystemDashboard(null, 'Last 7 Days'));
+  const [isLoaded, setIsLoaded] = useState(false);
 
-  const loadData = useCallback(() => {
+  // Loads real figures from the ticket service. A failed request marks every section unavailable
+  // but keeps the last good data on screen.
+  const loadData = useCallback(async () => {
+    if (selectedPeriod === 'Custom Range' && (!customStart || !customEnd)) return;
     setIsRefreshing(true);
     try {
-      const data = getSystemDashboardData(selectedPeriod);
-      setDashboardData(data);
-      setSectionErrors({
-        kpis: null,
-        branchComparison: null,
-        activity: null,
-        charts: null,
-      });
+      const params = { preset: selectedPeriod };
+      if (selectedPeriod === 'Custom Range') {
+        params.preset = 'custom';
+        params.date_from = customStart;
+        params.date_to = customEnd;
+      }
+      const api = await getSystemDashboard(params);
+      setDashboardData(adaptSystemDashboard(api, selectedPeriod));
+      setSectionErrors({ kpis: null, branchComparison: null, activity: null, charts: null });
       setLastUpdated(new Date());
+      setIsLoaded(true);
     } catch (err) {
       console.error('Failed to load system dashboard data', err);
-      setSectionErrors((prev) => ({
-        ...prev,
-        kpis: 'Failed to aggregate system KPIs',
-      }));
+      setSectionErrors({
+        kpis: UNAVAILABLE_MESSAGE,
+        branchComparison: UNAVAILABLE_MESSAGE,
+        activity: UNAVAILABLE_MESSAGE,
+        charts: UNAVAILABLE_MESSAGE,
+      });
     } finally {
       setIsRefreshing(false);
     }
-  }, [selectedPeriod]);
+  }, [selectedPeriod, customStart, customEnd]);
 
   useEffect(() => {
     loadData();
+  }, [loadData]);
+
+  // Keep figures near real time without a manual refresh.
+  useEffect(() => {
+    const timer = setInterval(loadData, REFRESH_INTERVAL_MS);
+    return () => clearInterval(timer);
   }, [loadData]);
 
   // Handle column sorting for Branch Comparison Table
@@ -190,13 +199,13 @@ export default function SuperAdminDashboard() {
         (b) =>
           b.name.toLowerCase().includes(query) ||
           b.code.toLowerCase().includes(query) ||
-          b.region.toLowerCase().includes(query)
+          (b.region || '').toLowerCase().includes(query)
       );
     }
 
     list.sort((a, b) => {
-      let valA = a[sortField];
-      let valB = b[sortField];
+      let valA = a[sortField] ?? -1;
+      let valB = b[sortField] ?? -1;
       if (typeof valA === 'string') {
         return sortDirection === 'asc'
           ? valA.localeCompare(valB)
@@ -417,8 +426,14 @@ export default function SuperAdminDashboard() {
       {/* Section 1: KPI Summary Cards (TS054 Core KPIs) */}
       {sectionErrors.kpis ? (
         <div className="bg-card rounded-xl border border-destructive/30 p-4 text-center">
-          <p className="text-xs font-semibold text-destructive mb-2">Unable to load System KPIs.</p>
+          <p className="text-xs font-semibold text-destructive mb-2">Data unavailable. System KPIs could not be loaded.</p>
           <Button size="sm" variant="outline" onClick={loadData}>Retry</Button>
+        </div>
+      ) : !isLoaded ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4" aria-busy="true" aria-label="Loading system KPIs">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="h-[120px] rounded-[14px] bg-slate-100 animate-pulse" />
+          ))}
         </div>
       ) : (
         <div className="space-y-4">
@@ -461,7 +476,7 @@ export default function SuperAdminDashboard() {
             {/* Active & Escalated Tickets */}
             <MetricCard
               title="Active / Escalated"
-              value={dashboardData.activeEscalated}
+              value={`${dashboardData.activeEscalated} / ${dashboardData.escalatedTickets}`}
               subtitle="Requiring urgent action"
               icon={<AlertTriangle className="w-5 h-5 text-amber-600" />}
               iconBg="bg-amber-50 text-amber-600"
@@ -496,7 +511,7 @@ export default function SuperAdminDashboard() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <MetricCard
               title="Overall SLA Compliance"
-              value={`${dashboardData.systemKpis.overallSlaCompliance}%`}
+              value={dashboardData.systemKpis.overallSlaCompliance != null ? `${dashboardData.systemKpis.overallSlaCompliance}%` : 'Unavailable'}
               subtitle="Organization-wide target: ≥ 90%"
               icon={<ShieldCheck className="w-5 h-5 text-emerald-600" />}
               iconBg="bg-emerald-50 text-emerald-600"
@@ -507,7 +522,7 @@ export default function SuperAdminDashboard() {
 
             <MetricCard
               title="Overall Average CSAT"
-              value={`${dashboardData.systemKpis.overallAvgCsat} / 5.0`}
+              value={dashboardData.systemKpis.overallAvgCsat != null ? `${dashboardData.systemKpis.overallAvgCsat} / 5.0` : 'Unavailable'}
               subtitle="Based on post-service surveys"
               icon={<Smile className="w-5 h-5 text-amber-600" />}
               iconBg="bg-amber-50 text-amber-600"
@@ -519,7 +534,7 @@ export default function SuperAdminDashboard() {
 
             <MetricCard
               title="Overall Avg Resolution Time"
-              value={`${dashboardData.systemKpis.overallResolutionTime} hrs`}
+              value={dashboardData.systemKpis.overallResolutionTime != null ? `${dashboardData.systemKpis.overallResolutionTime} hrs` : 'Unavailable'}
               subtitle="Excluding On-Hold duration"
               icon={<Clock className="w-5 h-5 text-accent" />}
               iconBg="bg-blue-50 text-accent"
@@ -627,7 +642,14 @@ export default function SuperAdminDashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {sortedBranches.length === 0 ? (
+              {sectionErrors.branchComparison ? (
+                <tr>
+                  <td colSpan={8} className="py-8 text-center">
+                    <p className="text-xs font-semibold text-destructive mb-2">{sectionErrors.branchComparison}</p>
+                    <Button size="sm" variant="outline" onClick={loadData}>Retry</Button>
+                  </td>
+                </tr>
+              ) : sortedBranches.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="py-8 text-center text-slate-muted">
                     No branches matching search criteria.
@@ -649,13 +671,13 @@ export default function SuperAdminDashboard() {
                     <td className="py-3 px-3 text-emerald-600 font-medium">{b.resolvedTickets}</td>
                     <td className="py-3 px-3 font-semibold">
                       <span className={cn(
-                        b.slaCompliance >= 92 ? 'text-emerald-600' : b.slaCompliance >= 88 ? 'text-amber-600' : 'text-rose-600'
+                        b.totalTickets === 0 ? 'text-slate-muted' : b.slaCompliance >= 92 ? 'text-emerald-600' : b.slaCompliance >= 88 ? 'text-amber-600' : 'text-rose-600'
                       )}>
-                        {b.slaCompliance}%
+                        {b.totalTickets === 0 ? '—' : `${b.slaCompliance}%`}
                       </span>
                     </td>
                     <td className="py-3 px-3 text-slate-dark">{b.avgResolutionTime} hrs</td>
-                    <td className="py-3 px-3 text-amber-700 font-medium">★ {b.avgCsat}</td>
+                    <td className="py-3 px-3 text-amber-700 font-medium">{b.avgCsat != null ? `★ ${b.avgCsat}` : '—'}</td>
                     <td className="py-3 px-3">
                       <Badge
                         variant={
@@ -663,6 +685,8 @@ export default function SuperAdminDashboard() {
                             ? 'medium-success'
                             : b.healthStatus === 'Attention'
                             ? 'medium-warning'
+                            : b.healthStatus === 'No Data'
+                            ? 'outline'
                             : 'medium-destructive'
                         }
                         size="sm"
@@ -749,7 +773,14 @@ export default function SuperAdminDashboard() {
             </div>
 
             <div className="divide-y divide-border/60">
-              {dashboardData.recentActivity.map((evt) => (
+              {sectionErrors.activity ? (
+                <div className="py-6 text-center">
+                  <p className="text-xs font-semibold text-destructive mb-2">{sectionErrors.activity}</p>
+                  <Button size="sm" variant="outline" onClick={loadData}>Retry</Button>
+                </div>
+              ) : dashboardData.recentActivity.length === 0 ? (
+                <p className="py-6 text-center text-xs text-slate-muted">No recent activity recorded.</p>
+              ) : dashboardData.recentActivity.map((evt) => (
                 <div
                   key={evt.id}
                   className="py-2.5 flex items-start justify-between gap-3 hover:bg-slate-50/50 p-1.5 rounded-lg transition-colors group"
@@ -758,23 +789,25 @@ export default function SuperAdminDashboard() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs font-semibold text-slate-dark">{evt.eventType}</span>
                       <span className="text-[10px] text-slate-muted">• {evt.branch}</span>
-                      <Badge
-                        variant={
-                          evt.priority === 'Critical'
-                            ? 'medium-destructive'
-                            : evt.priority === 'High'
-                            ? 'medium-warning'
-                            : 'medium-info'
-                        }
-                        size="sm"
-                        className="text-[9px] py-0 px-1.5"
-                      >
-                        {evt.priority}
-                      </Badge>
+                      {evt.priority && (
+                        <Badge
+                          variant={
+                            evt.priority === 'Critical'
+                              ? 'medium-destructive'
+                              : evt.priority === 'High'
+                              ? 'medium-warning'
+                              : 'medium-info'
+                          }
+                          size="sm"
+                          className="text-[9px] py-0 px-1.5"
+                        >
+                          {evt.priority}
+                        </Badge>
+                      )}
                     </div>
                     <p className="text-xs text-slate-muted line-clamp-1">
                       <strong className="text-slate-dark font-mono text-[11px] mr-1">{evt.ticketId}:</strong>
-                      {evt.ticketSubject}
+                      {evt.ticketSubject || evt.details}
                     </p>
                     <p className="text-[10px] text-slate-muted">
                       By <strong className="text-slate-dark">{evt.actor}</strong> • {formatRelativeTime(evt.timestamp)}

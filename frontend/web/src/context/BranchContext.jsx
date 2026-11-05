@@ -35,6 +35,17 @@ export function BranchProvider({ children }) {
   const [branches, setBranches] = useState(DEFAULT_BRANCHES);
   const [selectedBranchId, setSelectedBranchIdState] = useState(getStoredBranchId);
 
+  const isSuperAdmin = useMemo(() => {
+    if (!authUser) return false;
+    const role = (authUser.role || '').toLowerCase();
+    const email = (authUser.email || '').toLowerCase();
+    return (
+      role === 'superadmin' ||
+      role === 'super admin' ||
+      email === 'superadmin@example.com'
+    );
+  }, [authUser]);
+
   const isSuperOrAdmin = useMemo(() => {
     if (!authUser) return false;
     const role = (authUser.role || '').toLowerCase();
@@ -114,6 +125,7 @@ export function BranchProvider({ children }) {
   }, []);
 
   const setSelectedBranchId = useCallback((branchId) => {
+    if (!isSuperAdmin) return;
     if (branchId === null || branchId === 'all' || branchId === 'none') {
       setSelectedBranchIdState(null);
       setStoredBranchId(null);
@@ -121,9 +133,10 @@ export function BranchProvider({ children }) {
       setSelectedBranchIdState(branchId);
       setStoredBranchId(branchId);
     }
-  }, []);
+  }, [isSuperAdmin]);
 
   const setSelectedBranch = useCallback((branchOrId) => {
+    if (!isSuperAdmin) return;
     if (branchOrId === null || branchOrId === 'all') {
       setSelectedBranchId(null);
       return;
@@ -132,10 +145,10 @@ export function BranchProvider({ children }) {
       ? branchOrId
       : branchOrId?.id || branchOrId?.slug;
     setSelectedBranchId(id);
-  }, [setSelectedBranchId]);
+  }, [isSuperAdmin, setSelectedBranchId]);
 
   const selectedBranch = useMemo(() => {
-    if (!isSuperOrAdmin && (authUser?.branch_id || authUser?.branch)) {
+    if (!isSuperAdmin && (authUser?.branch_id || authUser?.branch)) {
       const assigned = branches.find(
         (b) => String(b.id) === String(authUser.branch_id) ||
                String(b.name).toLowerCase() === String(authUser.branch).toLowerCase() ||
@@ -159,22 +172,34 @@ export function BranchProvider({ children }) {
       (b) => String(b.id) === String(selectedBranchId) || String(b.slug) === String(selectedBranchId)
     );
     return match || GLOBAL_BRANCH;
-  }, [selectedBranchId, branches, isSuperOrAdmin, authUser]);
+  }, [selectedBranchId, branches, isSuperAdmin, authUser]);
 
-  const isAllBranches = selectedBranchId === null || selectedBranchId === 'all';
+  const effectiveBranchId = useMemo(() => {
+    if (!isSuperAdmin) {
+      if (selectedBranch && selectedBranch !== GLOBAL_BRANCH) {
+        return selectedBranch.slug || selectedBranch.id || authUser?.branch_id || null;
+      }
+      return authUser?.branch_id || authUser?.branch || null;
+    }
+    return selectedBranchId;
+  }, [isSuperAdmin, selectedBranch, selectedBranchId, authUser]);
+
+  const isAllBranches = isSuperAdmin && (selectedBranchId === null || selectedBranchId === 'all');
 
   const value = useMemo(() => ({
     branches,
-    selectedBranchId,
+    selectedBranchId: effectiveBranchId,
     selectedBranch,
     currentBranch: selectedBranch,
     setSelectedBranchId,
     setSelectedBranch,
     selectBranch: setSelectedBranch,
     isAllBranches,
+    isSuperAdmin,
+    isSuperOrAdmin,
     GLOBAL_BRANCH,
     loading: false,
-  }), [branches, selectedBranchId, selectedBranch, setSelectedBranchId, setSelectedBranch, isAllBranches]);
+  }), [branches, effectiveBranchId, selectedBranch, setSelectedBranchId, setSelectedBranch, isAllBranches, isSuperAdmin, isSuperOrAdmin]);
 
   return (
     <BranchContext.Provider value={value}>

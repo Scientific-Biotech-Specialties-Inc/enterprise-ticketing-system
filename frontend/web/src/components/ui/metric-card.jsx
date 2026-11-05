@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Info } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
@@ -7,6 +8,7 @@ export function MetricCard({
   label,
   value,
   subtitle,
+  definition,
   trend,
   trendPositive = true,
   icon,
@@ -63,8 +65,19 @@ export function MetricCard({
       )}
     >
       <div>
-        <p className="text-xs font-semibold text-eyebrow uppercase tracking-wider mb-2">
+        <p className="text-xs font-semibold text-eyebrow uppercase tracking-wider mb-2 flex items-center gap-1">
           {displayTitle}
+          {definition && (
+            <span
+              role="img"
+              tabIndex={0}
+              title={definition}
+              aria-label={`${displayTitle}: ${definition}`}
+              className="inline-flex cursor-help text-muted-slate normal-case focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-full"
+            >
+              <Info className="w-3.5 h-3.5" aria-hidden="true" />
+            </span>
+          )}
         </p>
         <div className="flex items-center justify-between">
           <p className="text-3xl font-bold text-dark-slate font-sans tracking-tight">

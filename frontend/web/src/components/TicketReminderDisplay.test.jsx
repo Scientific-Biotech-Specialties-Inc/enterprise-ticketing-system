@@ -34,6 +34,26 @@ vi.mock('@/data/mockFeedbackData', () => ({
 }));
 
 vi.mock('@/services/ticketService', () => ({
+  // The timeline reads the server's audit trail; a reminder shows up as a reminder_sent entry.
+  getTicketTimeline: vi.fn(() => Promise.resolve({
+    data: [
+      {
+        log_id: 1,
+        ticket_id: 2002,
+        action_type: 'reminder_sent',
+        event_type: 'reminder_sent',
+        actor: { id: 5, name: 'Customer Support', role: 'customer service' },
+        description: 'Reminder sent',
+        before_state: null,
+        after_state: null,
+        details: '{}',
+        is_system: false,
+        is_internal: false,
+        created_at: '2026-10-23T06:15:00Z',
+      },
+    ],
+    pagination: { current_page: 1, last_page: 1, total: 1 },
+  })),
   getTicketDetails: vi.fn(() => Promise.resolve({})),
   getInternalNotes: vi.fn(() => Promise.resolve([])),
   addInternalNote: vi.fn(() => Promise.resolve({})),
@@ -120,7 +140,7 @@ describe('Ticket Reminder Visual Displays across CS and Employee Modals', () => 
     expect(screen.getByText(/A reminder prompt was dispatched on/i)).toBeInTheDocument();
   });
 
-  it('renders Last Reminder Sent details card and timeline entry in CustomerTicketDetailModal', () => {
+  it('renders Last Reminder Sent details card and timeline entry in CustomerTicketDetailModal', async () => {
     render(
       <CustomerTicketDetailModal
         ticket={sampleTicketWithReminder}
@@ -129,6 +149,6 @@ describe('Ticket Reminder Visual Displays across CS and Employee Modals', () => 
     );
 
     expect(screen.getByText('Last Reminder Sent')).toBeInTheDocument();
-    expect(screen.getByText('CS Reminder')).toBeInTheDocument();
+    expect(await screen.findByText('CS Reminder')).toBeInTheDocument();
   });
 });

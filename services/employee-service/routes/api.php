@@ -39,7 +39,7 @@ Route::middleware(['auth.subsystem'])->group(function () {
     // Reassignment Requests & Approvals
     Route::post('/tickets/{ticketId}/reassign-request', [EmployeeReassignmentController::class, 'reassignRequest']);
     Route::post('/tickets/{ticketId}/reassign-respond', [EmployeeReassignmentController::class, 'reassignRespond']);
-    Route::get('/reassignment-requests', [EmployeeReassignmentController::class, 'getReassignmentRequests']);
+    Route::get('/reassignment-requests', [EmployeeReassignmentController::class, 'reassignmentRequests']);
 
     // Work Logs
     Route::get('/employee/worklogs', [WorkLogController::class, 'index']);

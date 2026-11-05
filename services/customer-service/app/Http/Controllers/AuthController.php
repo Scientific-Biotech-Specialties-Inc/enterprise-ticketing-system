@@ -10,6 +10,8 @@ use App\Services\AuthService;
 use Illuminate\Support\Str;
 use App\Models\RefreshToken;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 
 class AuthController extends Controller
 {
@@ -150,8 +152,122 @@ class AuthController extends Controller
         return $resp;
     }
 
+    public static function autoSyncWithAuthModule(): void
+    {
+        if (Cache::has('employees_synced_lock')) {
+            return;
+        }
+
+        Cache::put('employees_synced_lock', true, 60);
+
+        try {
+            $authUrl = env('AUTH_SERVICE_INTERNAL_URL', 'http://auth-service:8000');
+            $secret = env('CMS_INTERNAL_SECRET', 'cms-internal-secret-key-2026');
+
+            $resp = Http::timeout(3)
+                ->withHeaders(['X-Internal-Secret' => $secret])
+                ->get("{$authUrl}/api/internal/users-by-roles", [
+                    'roles' => 'Engineer,Manager,Employee,Supervisor',
+                ]);
+
+            if (!$resp->successful()) {
+                return;
+            }
+
+            $authUsers = $resp->json('data') ?? [];
+            if (empty($authUsers)) {
+                return;
+            }
+
+            foreach ($authUsers as $u) {
+                $email = strtolower(trim((string) ($u['email'] ?? '')));
+                if (empty($email)) continue;
+
+                $dept = trim((string) ($u['department'] ?? 'Service'));
+                $roleName = trim((string) ($u['role'] ?? 'Employee'));
+                $isManager = (stripos($roleName, 'manager') !== false);
+                $isAdmin = (stripos($roleName, 'admin') !== false);
+                $isEngineer = (stripos($roleName, 'engineer') !== false || stripos($roleName, 'supervisor') !== false);
+
+                if ($isAdmin) {
+                    $posLevel = 'Admin';
+                    $role = 'admin';
+                    $techRole = $roleName;
+                } elseif ($isManager) {
+                    $posLevel = 'Manager';
+                    $role = ($dept === 'Customer Service') ? 'customer service' : 'service';
+                    $techRole = $dept . ' Manager';
+                } elseif ($isEngineer || strcasecmp($dept, 'Service') === 0) {
+                    $posLevel = 'Engineer';
+                    $role = 'service';
+                    $techRole = 'Engineer';
+                } elseif (strcasecmp($dept, 'IT') === 0) {
+                    $posLevel = 'Employee';
+                    $role = 'service';
+                    $techRole = 'Employee';
+                } elseif ($dept === 'Customer Service') {
+                    $posLevel = 'Employee';
+                    $role = 'customer service';
+                    $techRole = 'Employee';
+                } else {
+                    $posLevel = 'Employee';
+                    $role = 'service';
+                    $techRole = 'Employee';
+                }
+
+                $branch = 'Main Branch';
+                $branchId = 1;
+                $branchName = $u['branch'] ?? ($u['branch_details']['name'] ?? '');
+                if (!empty($branchName) && stripos($branchName, 'north') !== false) {
+                    $branch = 'North Luzon Hub';
+                    $branchId = 2;
+                }
+
+                $existing = DB::table('employees')->where('email', $email)->first();
+
+                if ($existing) {
+                    DB::table('employees')->where('emp_id', $existing->emp_id)->update([
+                        'first_name' => $u['first_name'] ?: $existing->first_name,
+                        'last_name' => $u['last_name'] ?: $existing->last_name,
+                        'department' => $dept,
+                        'position_level' => $posLevel,
+                        'role' => $role,
+                        'technical_role' => $techRole,
+                        'branch' => $branch,
+                        'branch_id' => $branchId,
+                        'is_active' => (int) ($u['is_active'] ?? 1),
+                        'last_synced_at' => now(),
+                    ]);
+                } else {
+                    $newId = (isset($u['id']) && (int)$u['id'] > 0) ? (int)$u['id'] : ((int)DB::table('employees')->max('emp_id') + 1);
+                    DB::table('employees')->insert([
+                        'emp_id' => $newId,
+                        'email' => $email,
+                        'phone_number' => $u['phone'] ?? null,
+                        'password_hash' => '',
+                        'first_name' => $u['first_name'] ?? 'Staff',
+                        'last_name' => $u['last_name'] ?? '',
+                        'department' => $dept,
+                        'position_level' => $posLevel,
+                        'role' => $role,
+                        'technical_role' => $techRole,
+                        'branch' => $branch,
+                        'branch_id' => $branchId,
+                        'is_active' => (int) ($u['is_active'] ?? 1),
+                        'failed_login_count' => 0,
+                        'last_synced_at' => now(),
+                        'password_change_at' => now(),
+                    ]);
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Customer service auto-sync with auth module failed: ' . $e->getMessage());
+        }
+    }
+
     public function employeeStatuses(Request $request)
     {
+        self::autoSyncWithAuthModule();
         $user = $request->user();
 
         if (!$user instanceof Employee || !in_array($user->role, ['customer service', 'head of cs', 'head of customer service', 'cs'])) {
@@ -274,7 +390,9 @@ class AuthController extends Controller
         if ($user) {
             if ($user instanceof Employee) {
                 $isFirstLogin = $user->password_change_at === null;
-            } else {
+            } elseif ($user instanceof \Ticketing\Auth\Dto\AuthenticatedUserDto) {
+                $isFirstLogin = false;
+            } elseif (isset($user->id)) {
                 $isFirstLogin = \Illuminate\Support\Facades\DB::table('clients_credentials')
                     ->where('client_id', $user->id)
                     ->whereNull('password_change_at')

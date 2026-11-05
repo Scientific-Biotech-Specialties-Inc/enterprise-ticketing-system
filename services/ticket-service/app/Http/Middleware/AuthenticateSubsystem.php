@@ -5,7 +5,6 @@ namespace App\Http\Middleware;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use App\Models\Employee;
 
 class AuthenticateSubsystem
 {
@@ -18,7 +17,12 @@ class AuthenticateSubsystem
      */
     public function handle(Request $request, Closure $next)
     {
-        // 1. Try to authenticate as Employee using central JWT
+        // 0. If request is already authenticated (e.g. test actingAs), proceed
+        if (Auth::check() || $request->user()) {
+            return $next($request);
+        }
+
+        // 1. Try to authenticate using central JWT
         $token = null;
         $authHeader = $request->header('Authorization');
         if ($authHeader && str_starts_with($authHeader, 'Bearer ')) {
@@ -33,15 +37,15 @@ class AuthenticateSubsystem
                 try {
                     $verify = new VerifyEmployeeJwt();
                     $result = null;
-                    
+
                     // Call VerifyEmployeeJwt handle method.
                     // If signature and blacklist checks pass, it will set Auth::user() and call the closure.
                     $response = $verify->handle($request, function ($req) use (&$result) {
                         $result = true;
                         return null;
                     });
-                    
-                    if ($result === true && ($request->user() instanceof Employee || Auth::user() instanceof Employee)) {
+
+                    if ($result === true && (Auth::check() || $request->user())) {
                         return $next($request);
                     }
                 } catch (\Throwable $e) {
@@ -51,7 +55,23 @@ class AuthenticateSubsystem
         }
 
         // 2. Fallback to local customer authentication via Passport (auth:api)
-        return app(\Illuminate\Auth\Middleware\Authenticate::class)->handle($request, $next, 'api');
+        try {
+            $apiGuard = Auth::guard('api');
+            if (method_exists($apiGuard, 'setRequest')) {
+                $apiGuard->setRequest($request);
+            }
+            if ($apiGuard->check()) {
+                $user = $apiGuard->user();
+                if ($user) {
+                    Auth::setUser($user);
+                    $request->setUserResolver(fn () => $user);
+                    return $next($request);
+                }
+            }
+        } catch (\Throwable $e) {
+            // Passport check failed
+        }
 
+        return response()->json(['message' => 'Unauthenticated.'], 401);
     }
 }

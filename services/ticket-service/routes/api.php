@@ -12,6 +12,10 @@ use App\Http\Controllers\SLARuleController;
 use App\Http\Controllers\WorkflowEscalationController;
 use App\Http\Controllers\TicketDraftController;
 use App\Http\Controllers\TicketReminderController;
+use App\Http\Controllers\AdminReportController;
+use App\Http\Controllers\TicketTimelineController;
+use App\Http\Controllers\EmployeeDashboardController;
+use App\Http\Controllers\SuperAdminDashboardController;
 
 /*
 |--------------------------------------------------------------------------
@@ -25,7 +29,6 @@ Route::middleware('auth.subsystem')->get('/user', function (Request $request) {
 
 // ─── Core Ticket Public / Common Endpoints ────────────────────────────────────
 Route::get('/ticket-form-options', [TicketController::class, 'formOptions']);
-Route::get('/customer/filter-options', [TicketDashboardController::class, 'customerFilterOptions']);
 Route::get('/cs/filter-options', [TicketDashboardController::class, 'csFilterOptions']);
 Route::post('/tickets/draft', [TicketDraftController::class, 'saveDraft']);
 Route::get('/tickets/drafts', [TicketDraftController::class, 'listDrafts']);
@@ -34,9 +37,7 @@ Route::delete('/tickets/drafts/{id}', [TicketDraftController::class, 'deleteDraf
 Route::get('/branches', [BranchPriorityController::class, 'publicBranches']);
 
 // ─── Dashboards & Feed Endpoints ─────────────────────────────────────────────
-Route::get('/customer-dashboard', [TicketDashboardController::class, 'customerDashboard']);
-Route::get('/cs-dashboard', [TicketDashboardController::class, 'csDashboard'])->middleware('no-cache');
-Route::get('/cs-incoming', [TicketDashboardController::class, 'csIncoming'])->middleware('no-cache');
+// CS dashboard and incoming queue now live inside the auth.subsystem group below (they expose ticket data).
 Route::match(['get', 'post'], '/tickets/check-sla-alerts', function (\App\Services\SLAService $slaService) {
     $result = $slaService->checkAndNotifySlaAlerts();
     return response()->json([
@@ -45,270 +46,42 @@ Route::match(['get', 'post'], '/tickets/check-sla-alerts', function (\App\Servic
         'data' => $result,
     ]);
 });
-Route::get('/departments', function () {
-    try {
-        $resp = Illuminate\Support\Facades\Http::get('http://employee-service:8000/api/departments');
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    } catch (\Exception $e) {
-        return response()->json(['departments' => []]);
-    }
-});
-
-Route::get('/employees/search', function (Request $request) {
-    $token = $request->bearerToken();
-    try {
-        $client = Illuminate\Support\Facades\Http::timeout(5);
-        if ($token) {
-            $client = $client->withHeaders(['Authorization' => "Bearer {$token}"]);
-        }
-        $resp = $client->get('http://employee-service:8000/api/employees/search', $request->all());
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    } catch (\Exception $e) {
-        return response()->json([
-            'success' => false,
-            'data' => [],
-            'total' => 0,
-            'message' => 'Employee service unavailable. Please try again later.'
-        ], 503);
-    }
-});
-
-Route::get('/employees/filter-options', function (Request $request) {
-    $token = $request->bearerToken();
-    try {
-        $client = Illuminate\Support\Facades\Http::timeout(5);
-        if ($token) {
-            $client = $client->withHeaders(['Authorization' => "Bearer {$token}"]);
-        }
-        $resp = $client->get('http://employee-service:8000/api/employees/filter-options', $request->all());
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    } catch (\Exception $e) {
-        return response()->json([
-            'departments' => [],
-            'roles' => [],
-            'branches' => []
-        ], 503);
-    }
-});
 
 Route::middleware('auth.subsystem')->group(function () {
-    // ─── Employee Assignment Forwarding ────────────────────────────────────────
-    Route::match(['post', 'patch'], '/tickets/{ticketId}/accept', function (Request $request, $ticketId) {
-        $token = $request->bearerToken();
-        $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-            ->patch("http://employee-service:8000/api/tickets/{$ticketId}/accept", $request->all());
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    });
+    // ─── Customer Dashboard (Strictly Token Authenticated) ────────────────────
+    Route::get('/customer-dashboard', [TicketDashboardController::class, 'customerDashboard']);
+    Route::get('/customer/filter-options', [TicketDashboardController::class, 'customerFilterOptions']);
 
-    Route::post('/tickets/{ticketId}/assign', function (Request $request, $ticketId) {
-        $token = $request->bearerToken();
-        $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-            ->post("http://employee-service:8000/api/tickets/{$ticketId}/assign", $request->all());
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    });
+    // ─── CS Dashboard & Incoming Queue (Token Authenticated) ──────────────────
+    Route::get('/cs-dashboard', [TicketDashboardController::class, 'csDashboard'])->middleware('no-cache');
+    Route::get('/cs-dashboard-summary', [TicketDashboardController::class, 'csDashboardSummary'])->middleware('no-cache');
+    Route::get('/cs-incoming', [TicketDashboardController::class, 'csIncoming'])->middleware('no-cache');
 
+    // ─── Admin Branch Dashboard & Reports ─────────────────────────────────────
+    Route::get('/admin-dashboard', [TicketDashboardController::class, 'adminDashboard'])->middleware('no-cache');
+    Route::get('/admin/dashboard', [TicketDashboardController::class, 'adminDashboard'])->middleware('no-cache');
+    // Spec 0031: live summary and breached queue for Service, IT and Customer Service managers.
+    Route::get('/manager/dashboard', [\App\Http\Controllers\ManagerDashboardController::class, 'dashboard'])->middleware('no-cache');
+    Route::get('/admin-reports', [TicketDashboardController::class, 'adminReports'])->middleware('no-cache');
+    Route::get('/admin/reports', [TicketDashboardController::class, 'adminReports'])->middleware('no-cache');
+    Route::post('/admin/reports/export', [\App\Http\Controllers\ReportExportController::class, 'export'])->middleware(['no-cache', 'throttle:30,1']);
+    Route::post('/admin-reports/export', [\App\Http\Controllers\ReportExportController::class, 'export'])->middleware(['no-cache', 'throttle:30,1']);
+    Route::get('/admin-reports/employees', [AdminReportController::class, 'employeePerformance'])->middleware('no-cache');
+    Route::get('/admin/reports/employees', [AdminReportController::class, 'employeePerformance'])->middleware('no-cache');
+    Route::get('/admin-reports/departments', [AdminReportController::class, 'departmentPerformance'])->middleware('no-cache');
+    Route::get('/admin/reports/departments', [AdminReportController::class, 'departmentPerformance'])->middleware('no-cache');
+    Route::get('/admin-reports/predictive-insights', [AdminReportController::class, 'predictiveInsights'])->middleware('no-cache');
+    Route::get('/admin/reports/predictive-insights', [AdminReportController::class, 'predictiveInsights'])->middleware('no-cache');
+    Route::post('/etl/trigger', [TicketDashboardController::class, 'triggerEtl'])->middleware('no-cache');
+    Route::post('/admin/etl/trigger', [TicketDashboardController::class, 'triggerEtl'])->middleware('no-cache');
+    Route::get('/superadmin/system-dashboard', [SuperAdminDashboardController::class, 'systemDashboard'])->middleware('no-cache');
+    Route::get('/super-admin/system-dashboard', [SuperAdminDashboardController::class, 'systemDashboard'])->middleware('no-cache');
+    Route::get('/employee/dashboard', [EmployeeDashboardController::class, 'dashboard'])->middleware('no-cache');
+    Route::get('/employee-dashboard', [EmployeeDashboardController::class, 'dashboard'])->middleware('no-cache');
+
+    // ─── Ticket Reminders (TS084) ─────────────────────────────────────────────
     Route::post('/tickets/{ticketId}/reminders', [TicketReminderController::class, 'sendReminder']);
     Route::post('/tickets/{ticketId}/reminder', [TicketReminderController::class, 'sendReminder']);
-
-    Route::get('/tickets/{ticketId}/eligible-employees', function (Request $request, $ticketId) {
-        $token = $request->bearerToken();
-        try {
-            $client = Illuminate\Support\Facades\Http::timeout(5);
-            if ($token) {
-                $client = $client->withHeaders(['Authorization' => "Bearer {$token}"]);
-            }
-            $resp = $client->get("http://employee-service:8000/api/tickets/{$ticketId}/eligible-employees", $request->all());
-            return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-        } catch (\Exception $e) {
-            return response()->json([
-                'message' => 'Employee service unavailable. Please try again later.',
-                'eligible_employees' => [],
-                'ineligible_employees' => [],
-            ], 503);
-        }
-    });
-
-    Route::post('/tickets/{ticketId}/employee-update', function (Request $request, $ticketId) {
-        $token = $request->bearerToken();
-        $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-            ->post("http://employee-service:8000/api/tickets/{$ticketId}/employee-update", $request->all());
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    });
-
-    Route::patch('/tickets/{ticketId}/accept', function (Request $request, $ticketId) {
-        $token = $request->bearerToken();
-        $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-            ->patch("http://employee-service:8000/api/tickets/{$ticketId}/accept", $request->all());
-        if ($resp->successful()) {
-            app(\App\Services\TicketCacheService::class)->clearTicketCaches();
-        }
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    });
-
-    Route::post('/tickets/{ticketId}/reassign-request', function (Request $request, $ticketId) {
-        $token = $request->bearerToken();
-        $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-            ->post("http://employee-service:8000/api/tickets/{$ticketId}/reassign-request", $request->all());
-        if ($resp->successful()) {
-            app(\App\Services\TicketCacheService::class)->clearTicketCaches();
-        }
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    });
-
-    Route::post('/tickets/{ticketId}/reassign-respond', function (Request $request, $ticketId) {
-        $token = $request->bearerToken();
-        $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-            ->post("http://employee-service:8000/api/tickets/{$ticketId}/reassign-respond", $request->all());
-        if ($resp->successful()) {
-            app(\App\Services\TicketCacheService::class)->clearTicketCaches();
-        }
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    });
-
-    Route::get('/reassignment-requests', function (Request $request) {
-        $token = $request->bearerToken();
-        $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-            ->get('http://employee-service:8000/api/reassignment-requests', $request->all());
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    });
-
-    Route::get('/employee-tickets', function (Request $request) {
-        $token = $request->bearerToken();
-        $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-            ->get('http://employee-service:8000/api/employee-tickets', $request->all());
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    });
-
-    Route::get('/employee/profile', function (Request $request) {
-        $token = $request->bearerToken();
-        $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-            ->get('http://employee-service:8000/api/employee/profile', $request->all());
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    });
-
-    Route::match(['put', 'patch'], '/employee/profile', function (Request $request) {
-        $token = $request->bearerToken();
-        $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-            ->send($request->method(), 'http://employee-service:8000/api/employee/profile', [
-                'json' => $request->all(),
-            ]);
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    });
-
-    Route::get('/employees/search', function (Request $request) {
-        $token = $request->bearerToken();
-        $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-            ->get('http://employee-service:8000/api/employees/search', $request->all());
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    });
-
-    Route::get('/employees/filter-options', function (Request $request) {
-        $token = $request->bearerToken();
-        $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-            ->get('http://employee-service:8000/api/employees/filter-options', $request->all());
-        return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-    });
-
-    Route::get('/employee/tickets/internal', function (Request $request) {
-        $token = $request->bearerToken();
-        try {
-            $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-                ->timeout(3)
-                ->get('http://employee-service:8000/api/employee/tickets/internal', $request->all());
-            if ($resp->successful()) {
-                return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-            }
-        } catch (\Exception $e) {}
-
-        $user = $request->user();
-        $empId = $user ? ($user->emp_id ?? $user->id) : null;
-        $tickets = Illuminate\Support\Facades\DB::table('tickets as t')
-            ->leftJoin('ticket_assignments as ta', 'ta.ticket_ID', '=', 't.ticket_ID')
-            ->leftJoin('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
-            ->leftJoin('priorities as p', 'p.priority_ID', '=', 't.priority_ID')
-            ->where('t.is_internal', true)
-            ->where(function ($q) use ($empId) {
-                if ($empId) {
-                    $q->where('ta.employee_ID', $empId)
-                      ->orWhere('t.requested_by', $empId);
-                }
-            })
-            ->select('t.*', 'ts.status_name as status', 'p.priority_name as priority')
-            ->orderBy('t.created_at', 'desc')
-            ->get();
-
-        return response()->json(['tickets' => $tickets]);
-    });
-
-    Route::get('/employee/worklogs', function (Request $request) {
-        $token = $request->bearerToken();
-        try {
-            $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-                ->timeout(3)
-                ->get('http://employee-service:8000/api/employee/worklogs', $request->all());
-            if ($resp->successful()) {
-                return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-            }
-        } catch (\Exception $e) {}
-
-        $user = $request->user();
-        $empId = $user ? ($user->emp_id ?? $user->id) : null;
-        $ticketId = $request->query('ticket_id');
-        $query = Illuminate\Support\Facades\DB::table('work_logs');
-        if ($ticketId) {
-            $query->where('ticket_id', $ticketId);
-        } elseif ($empId) {
-            $query->where('employee_id', $empId);
-        }
-        $logs = $query->orderBy('log_date', 'desc')->orderBy('created_at', 'desc')->get();
-        return response()->json(['data' => $logs, 'total' => count($logs)]);
-    });
-
-    Route::post('/employee/worklogs', function (Request $request) {
-        $token = $request->bearerToken();
-        try {
-            $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-                ->timeout(3)
-                ->post('http://employee-service:8000/api/employee/worklogs', $request->all());
-            if ($resp->successful()) {
-                return response($resp->body(), $resp->status())->header('Content-Type', 'application/json');
-            }
-        } catch (\Exception $e) {}
-
-        $user = $request->user();
-        $empId = $user ? ($user->emp_id ?? $user->id ?? 1) : 1;
-        $validated = $request->validate([
-            'ticket_id' => 'nullable|integer',
-            'task_description' => 'required|string|max:1000',
-            'hours_spent' => 'required|numeric|min:0.1|max:24',
-            'log_date' => 'required|date',
-        ]);
-
-        $log = \App\Models\WorkLog::create([
-            'employee_id' => $empId,
-            'ticket_id' => $validated['ticket_id'] ?? null,
-            'task_description' => $validated['task_description'],
-            'hours_spent' => $validated['hours_spent'],
-            'log_date' => $validated['log_date'],
-            'status' => 'pending',
-        ]);
-
-        return response()->json(['message' => 'Work log saved successfully.', 'work_log' => $log], 201);
-    });
-
-    Route::get('/employee/worklogs/export', function (Request $request) {
-        $token = $request->bearerToken();
-        try {
-            $resp = Illuminate\Support\Facades\Http::withHeaders(['Authorization' => "Bearer {$token}"])
-                ->timeout(3)
-                ->get('http://employee-service:8000/api/employee/worklogs/export', $request->all());
-            if ($resp->successful()) {
-                return response($resp->body(), $resp->status());
-            }
-        } catch (\Exception $e) {}
-
-        return response()->json(['message' => 'Export not available'], 400);
-    });
 
     // ─── Core Ticket Lifecycle & Status Transitions ───────────────────────────
     Route::post('/tickets', [TicketController::class, 'store']);
@@ -326,6 +99,7 @@ Route::middleware('auth.subsystem')->group(function () {
     Route::get('/tickets/{ticketId}/customer-context', [TicketController::class, 'customerContext']);
     Route::get('/tickets/{ticketId}/customer-info', [TicketController::class, 'customerContext']);
     Route::get('/tickets/escalate-handoff/{conversationId}', [TicketController::class, 'escalateHandoff']);
+    Route::get('/tickets/{id}/timeline', [TicketTimelineController::class, 'timeline'])->middleware('no-cache');
 
     // ─── Staff-Only Internal Notes (TS028) ────────────────────────────────────
     Route::get('/tickets/{ticketId}/internal-notes', [TicketController::class, 'getInternalNotes']);
@@ -426,9 +200,23 @@ Route::middleware('auth.subsystem')->group(function () {
         });
     Route::post('/superadmin/branches/{branchId}/reset', [BranchCategoryController::class, 'resetBranch']);
     Route::get('/superadmin/audit-logs', [SuperAdminConfigController::class, 'getSuperAdminAuditLogs']);
+    Route::get('/superadmin/audit-logs/filters', [SuperAdminConfigController::class, 'getAuditLogFilterOptions']);
     Route::get('/superadmin/audit-logs/retention', [SuperAdminConfigController::class, 'getLogRetentionConfig']);
-    Route::post('/superadmin/audit-logs/retention', [SuperAdminConfigController::class, 'updateLogRetentionConfig']);
+    Route::match(['put', 'post', 'patch'], '/superadmin/audit-logs/retention', [SuperAdminConfigController::class, 'updateLogRetentionConfig']);
+    Route::get('/superadmin/audit-logs/retention/impact', [SuperAdminConfigController::class, 'getLogRetentionImpact']);
+    Route::post('/superadmin/audit-logs/retention/purge', [SuperAdminConfigController::class, 'purgeAuditLogs']);
+    Route::get('/superadmin/audit-logs/retention/history', [SuperAdminConfigController::class, 'getLogRetentionHistory']);
     Route::post('/superadmin/audit-logs/purge', [SuperAdminConfigController::class, 'purgeAuditLogs']);
+
+    Route::prefix('/ticketing/ticket')->group(function () {
+        Route::get('/superadmin/audit-logs', [SuperAdminConfigController::class, 'getSuperAdminAuditLogs']);
+        Route::get('/superadmin/audit-logs/filters', [SuperAdminConfigController::class, 'getAuditLogFilterOptions']);
+        Route::get('/superadmin/audit-logs/retention', [SuperAdminConfigController::class, 'getLogRetentionConfig']);
+        Route::match(['put', 'post', 'patch'], '/superadmin/audit-logs/retention', [SuperAdminConfigController::class, 'updateLogRetentionConfig']);
+        Route::get('/superadmin/audit-logs/retention/impact', [SuperAdminConfigController::class, 'getLogRetentionImpact']);
+        Route::post('/superadmin/audit-logs/retention/purge', [SuperAdminConfigController::class, 'purgeAuditLogs']);
+        Route::get('/superadmin/audit-logs/retention/history', [SuperAdminConfigController::class, 'getLogRetentionHistory']);
+    });
     Route::get('/superadmin/security-incidents', [SuperAdminConfigController::class, 'getSecurityIncidents']);
     Route::get('/superadmin/security-incidents/{incidentId}', [SuperAdminConfigController::class, 'getSecurityIncidentDetail']);
     Route::get('/superadmin/history', [SuperAdminConfigController::class, 'getSuperAdminHistory']);
