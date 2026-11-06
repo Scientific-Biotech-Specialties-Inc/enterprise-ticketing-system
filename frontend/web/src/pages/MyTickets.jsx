@@ -162,7 +162,7 @@ export default function MyTickets({ mode = 'all' }) {
   const loadDrafts = useCallback(async () => {
     setLoadingDrafts(true);
     try {
-      const list = await getTicketDrafts({ client_id: customerId });
+      const list = await getTicketDrafts();
       setDrafts(list || []);
     } catch (err) {
       console.warn('Failed to load ticket drafts:', err);

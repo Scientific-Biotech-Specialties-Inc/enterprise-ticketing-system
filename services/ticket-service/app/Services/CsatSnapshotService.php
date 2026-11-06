@@ -49,9 +49,15 @@ class CsatSnapshotService
         $analyticsUrl = rtrim((string) env('ANALYTICS_SERVICE_URL', 'http://analytics-service:8000'), '/');
 
         try {
-            $response = Http::withOptions(['timeout' => 0.5, 'connect_timeout' => 0.3])
-                ->acceptJson()
-                ->get("{$analyticsUrl}/api/csat-stats", [
+            // Spec 0034: analytics-service only answers verified staff, so pass on the staff member's own
+            // token. With no token (a scheduled job) analytics answers 401 and CSAT shows as unavailable.
+            $http = Http::withOptions(['timeout' => 0.5, 'connect_timeout' => 0.3])->acceptJson();
+            $callerToken = request()->bearerToken() ?: request()->cookie('access_token');
+            if ($callerToken) {
+                $http = $http->withToken((string) $callerToken);
+            }
+
+            $response = $http->get("{$analyticsUrl}/api/csat-stats", [
                     'ticket_ids' => implode(',', $ids),
                     'date_from' => $from->toDateString(),
                     'date_to' => $to->toDateString(),

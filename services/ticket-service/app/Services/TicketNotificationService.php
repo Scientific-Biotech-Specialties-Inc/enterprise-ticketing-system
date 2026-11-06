@@ -460,7 +460,7 @@ class TicketNotificationService
 
         try {
             $configUrl = env('CONFIGURATION_SERVICE_URL', 'http://configuration-service:8000');
-            $response = Http::timeout(6)->post("{$configUrl}/api/email/dispatch-event", [
+            $response = Http::timeout(6)->withHeaders(['X-Internal-Token' => (string) env('INTERNAL_TOKEN', '')])->post("{$configUrl}/api/email/dispatch-event", [
                 'eventKey' => $eventKey,
                 'to'       => $recipientEmail,
                 'data'     => $data,
@@ -651,7 +651,7 @@ class TicketNotificationService
 
         try {
             $configUrl = env('CONFIGURATION_SERVICE_URL', 'http://configuration-service:8000');
-            $response = Http::timeout(6)->retry(3, 100)->post("{$configUrl}/api/email/dispatch", [
+            $response = Http::timeout(6)->withHeaders(['X-Internal-Token' => (string) env('INTERNAL_TOKEN', '')])->retry(3, 100)->post("{$configUrl}/api/email/dispatch", [
                 'to' => $recipientEmail,
                 'subject' => $mailable->subject ?? 'Ticket Notification',
                 'html' => $mailable->render(),

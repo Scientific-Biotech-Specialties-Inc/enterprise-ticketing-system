@@ -25,15 +25,7 @@ configClient.interceptors.request.use((config) => {
     config.headers.Authorization = `Bearer ${token}`;
   }
 
-  try {
-    const rawUser = sessionStorage.getItem('user') || localStorage.getItem('user');
-    if (rawUser) {
-      const u = JSON.parse(rawUser);
-      if (u.role) config.headers['X-User-Role'] = u.role;
-      if (u.name || u.first_name) config.headers['X-Actor-Name'] = u.name || `${u.first_name || ''} ${u.last_name || ''}`.trim();
-    }
-  } catch {}
-
+  // Spec 0034: identity comes only from the verified token. No X-User-Role or X-Actor-Name headers.
   return config;
 });
 

@@ -197,12 +197,8 @@ class TicketReminderTest extends TestCase
         $csUser = Employee::where('emp_id', $csEmpId)->first();
 
         // 3. Dispatch reminder request with custom_message
-        $response = $this->withoutMiddleware(\App\Http\Middleware\AuthenticateSubsystem::class)
-            ->actingAs($csUser)
-            ->withHeaders([
-                'X-User-Role' => 'cs',
-                'X-User-ID' => (string) $csEmpId,
-            ])
+        // Spec 0034: sender id and role come from the verified user, so no identity headers are sent.
+        $response = $this->actingAs($csUser)
             ->postJson("/api/tickets/{$ticketId}/reminders", [
                 'custom_message' => 'Please update client on calibration status.',
             ]);
@@ -237,18 +233,40 @@ class TicketReminderTest extends TestCase
         $this->assertNotNull($audit, 'Audit log entry must be created');
 
         // 7. Verify cooldown: second immediate reminder triggers 429
-        $secondResponse = $this->withoutMiddleware(\App\Http\Middleware\AuthenticateSubsystem::class)
-            ->actingAs($csUser)
-            ->withHeaders([
-                'X-User-Role' => 'cs',
-                'X-User-ID' => (string) $csEmpId,
-            ])
+        $secondResponse = $this->actingAs($csUser)
             ->postJson("/api/tickets/{$ticketId}/reminders", [
                 'custom_message' => 'Another reminder',
             ]);
 
         $secondResponse->assertStatus(429)
             ->assertJsonStructure(['status', 'message', 'cooldown_remaining_minutes']);
+    }
+
+    public function test_customer_claiming_admin_role_by_header_or_body_gets_403(): void
+    {
+        $customer = new \Ticketing\Auth\Dto\AuthenticatedUserDto(['client_ID' => 9001, 'client_id' => 9001, 'id' => 9001, 'role' => 'customer']);
+
+        $this->actingAs($customer)
+            ->withHeaders(['X-User-Role' => 'admin', 'X-User-ID' => '1'])
+            ->postJson('/api/tickets/1/reminders', ['user_role' => 'admin', 'emp_id' => 1, 'sender_id' => 1, 'user' => ['role' => 'admin']])
+            ->assertStatus(403);
+    }
+
+    public function test_staff_header_role_does_not_override_verified_role(): void
+    {
+        $tech = new \Ticketing\Auth\Dto\AuthenticatedUserDto(['emp_id' => 55, 'role' => 'service engineer']);
+
+        $this->actingAs($tech)
+            ->withHeaders(['X-User-Role' => 'admin', 'X-User-ID' => '1'])
+            ->postJson('/api/tickets/1/reminders', ['user_role' => 'admin'])
+            ->assertStatus(403);
+    }
+
+    public function test_reminder_without_a_token_gets_401_and_has_no_default_sender(): void
+    {
+        $this->withHeaders(['X-User-Role' => 'admin', 'X-User-ID' => '1'])
+            ->postJson('/api/tickets/1/reminders', ['emp_id' => 1])
+            ->assertStatus(401);
     }
 
     public function test_cs_dashboard_summary_includes_real_sla_breached_count(): void

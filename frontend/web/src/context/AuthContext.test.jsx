@@ -191,14 +191,14 @@ describe('AuthContext and session management (AC-1, AC-15, AC-20)', () => {
     // Verify localStorage has no customer record
     expect(localStorage.getItem('user')).toBeNull();
 
-    // Verify sessionStorage has sanitized customer record with encrypted email (no plaintext email or PII)
+    // Verify sessionStorage has the sanitized customer record. The email stays (spec 0034 decision);
+    // address, phone and timestamps are still stripped.
     const rawSession = sessionStorage.getItem('user');
-    expect(rawSession).not.toContain('customer@gmail.com');
     const sessionStored = JSON.parse(rawSession);
     expect(sessionStored).toBeDefined();
     expect(sessionStored.id).toBe(3);
-    expect(sessionStored.email).toBeUndefined();
-    expect(sessionStored.email_enc).toMatch(/^enc:[0-9a-f]+$/);
+    expect(sessionStored.email).toBe('customer@gmail.com');
+    expect(sessionStored.email_enc).toBeUndefined();
     expect(sessionStored.role).toBe('customer');
     expect(sessionStored.address).toBeUndefined();
     expect(sessionStored.phone).toBeUndefined();
@@ -240,13 +240,12 @@ describe('AuthContext and session management (AC-1, AC-15, AC-20)', () => {
     // localStorage should now be purged of customer data
     expect(localStorage.getItem('user')).toBeNull();
 
-    // sessionStorage should hold the sanitized record with encrypted email
+    // sessionStorage should hold the sanitized record. The email stays (spec 0034 decision).
     const rawSession = sessionStorage.getItem('user');
-    expect(rawSession).not.toContain('customer@gmail.com');
     const sessionStored = JSON.parse(rawSession);
     expect(sessionStored.id).toBe(3);
-    expect(sessionStored.email).toBeUndefined();
-    expect(sessionStored.email_enc).toMatch(/^enc:[0-9a-f]+$/);
+    expect(sessionStored.email).toBe('customer@gmail.com');
+    expect(sessionStored.email_enc).toBeUndefined();
     expect(sessionStored.address).toBeUndefined();
     expect(sessionStored.contact_number).toBeUndefined();
   });

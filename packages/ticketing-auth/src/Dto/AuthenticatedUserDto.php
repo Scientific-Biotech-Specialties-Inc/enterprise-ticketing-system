@@ -107,6 +107,12 @@ class AuthenticatedUserDto implements Authenticatable, \ArrayAccess, \JsonSerial
         return '';
     }
 
+    /** Required by Laravel 11's Authenticatable contract. Harmless on Laravel 10. */
+    public function getAuthPasswordName(): string
+    {
+        return 'password';
+    }
+
     public function getRememberToken(): ?string
     {
         return null;

@@ -237,11 +237,14 @@ class TicketConfigurationController extends Controller
 
     /**
      * Verify that the request is authorized to modify system configuration.
-     * Enforces superadmin authentication or trusted internal microservice origin.
+     *
+     * Spec 0034: identity comes only from the verified token (set by the config.access middleware)
+     * or a trusted internal service call. No X-User-* header, hand decoded token, cached token
+     * lookup or development token can grant access.
      */
     protected function checkAuthorized(Request $request): ?JsonResponse
     {
-        // 1. Allow trusted internal microservice calls that present matching INTERNAL_TOKEN
+        // 1. Trusted internal microservice call that presents the matching INTERNAL_TOKEN
         $expectedToken = (string) env('INTERNAL_TOKEN', '');
         $providedToken = (string) $request->header('X-Internal-Token', '');
         if (
@@ -252,77 +255,18 @@ class TicketConfigurationController extends Controller
             return null;
         }
 
-        // 2. Check Bearer token (supports dev token, SSO Redis cache, and decoded JWT payload)
-        $authHeader = $request->header('Authorization');
-        if ($authHeader && str_starts_with($authHeader, 'Bearer ')) {
-            $token = substr($authHeader, 7);
-
-            // Allow local development token
-            if ($token === 'frontend-dev-token' || (app()->environment('local') && $token === 'frontend-dev-token')) {
-                return null;
-            }
-
-            $tokenHash = hash('sha256', $token);
-            $cachedEmpId = Cache::get('sso_auth_cache:' . $tokenHash);
-            if ($cachedEmpId) {
-                try {
-                    $employee = DB::table('employees')->where('emp_id', $cachedEmpId)->first();
-                    if ($employee && in_array(strtolower(str_replace([' ', '_', '-'], '', (string) ($employee->role ?? ''))), ['superadmin', 'admin'])) {
-                        return null;
-                    }
-                } catch (\Throwable $e) {}
-                if (app()->environment('local')) {
-                    return null;
-                }
-            }
-
-            // Decode and verify 3-part JWT token
-            $parts = explode('.', $token);
-            if (count($parts) === 3) {
-                $payloadB64 = $parts[1];
-                $remainder = strlen($payloadB64) % 4;
-                if ($remainder) {
-                    $payloadB64 .= str_repeat('=', 4 - $remainder);
-                }
-                $payloadJson = base64_decode(strtr($payloadB64, '-_', '+/'));
-                $payload = json_decode($payloadJson, true);
-
-                if (is_array($payload)) {
-                    $tokenRole = strtolower(str_replace([' ', '_', '-'], '', (string) ($payload['role'] ?? $payload['user']['role'] ?? $payload['role_name'] ?? '')));
-                    $tokenDept = strtolower(str_replace([' ', '_', '-'], '', (string) ($payload['department'] ?? $payload['user']['department'] ?? '')));
-
-                    if (in_array($tokenRole, ['superadmin', 'systemadministrator', 'admin']) || in_array($tokenDept, ['superadmin', 'admin'])) {
-                        return null;
-                    }
-
-                    $email = $payload['email'] ?? $payload['user']['email'] ?? '';
-                    if (!empty($email)) {
-                        if (str_contains($email, 'superadmin') || str_contains($email, 'admin')) {
-                            return null;
-                        }
-                        try {
-                            $employee = DB::table('employees')->where('email', $email)->first();
-                            if ($employee && in_array(strtolower(str_replace([' ', '_', '-'], '', (string) ($employee->role ?? ''))), ['superadmin', 'admin'])) {
-                                return null;
-                            }
-                        } catch (\Throwable $e) {}
-                    }
-                }
-            }
+        // 2. Verified admin or superadmin
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized: Authentication required.'], 401);
         }
 
-        // Allow gateway forwarded superadmin role header if present
-        $forwardedRole = strtolower(str_replace([' ', '_', '-'], '', (string) ($request->header('X-User-Role') ?? '')));
-        if ($forwardedRole === 'superadmin' || $forwardedRole === 'admin') {
+        $role = strtolower(str_replace([' ', '_', '-'], '', (string) ($user->role ?? '')));
+        if ((int) ($user->emp_id ?? 0) > 0 && in_array($role, ['superadmin', 'admin'], true)) {
             return null;
         }
 
-        $actor = $request->header('X-Actor-Name') ?? $request->input('actor');
-        if (app()->environment('local') && ($actor === 'Super Admin' || $actor === 'superadmin')) {
-            return null;
-        }
-
-        return response()->json(['message' => 'Unauthorized: Authentication required.'], 401);
+        return response()->json(['message' => 'Forbidden: administrator access required.'], 403);
     }
 
     /**
@@ -351,8 +295,8 @@ class TicketConfigurationController extends Controller
     protected function logAudit(?Request $request, string $actionType, string $module, string $target, string $text, mixed $before = null, mixed $after = null): void
     {
         try {
-            $userId = $request?->header('X-User-Id')
-                ?? $request?->user()?->emp_id
+            // Spec 0034: the actor is the verified user, never a header the caller can set.
+            $userId = $request?->user()?->emp_id
                 ?? $request?->user()?->id
                 ?? DB::table('employees')->where('role', 'superadmin')->value('emp_id')
                 ?? DB::table('employees')->value('emp_id')

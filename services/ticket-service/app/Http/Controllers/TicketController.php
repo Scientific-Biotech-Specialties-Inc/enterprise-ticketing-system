@@ -155,7 +155,12 @@ class TicketController extends Controller
         // TS027: Link ticket to chatbot conversation if originating from AI escalation
         if (!empty($validated['conversation_id'])) {
             try {
-                \Illuminate\Support\Facades\Http::timeout(3)->post('http://AI-service:8000/api/tickets', [
+                // Spec 0034: the AI service verifies the caller, so pass on the customer's own token.
+                $linkClient = \Illuminate\Support\Facades\Http::timeout(3);
+                if ($callerToken = ($request->bearerToken() ?: $request->cookie('access_token'))) {
+                    $linkClient = $linkClient->withToken((string) $callerToken);
+                }
+                $linkClient->post('http://AI-service:8000/api/tickets', [
                     'conversation_id' => $validated['conversation_id'],
                 ]);
             } catch (\Throwable $e) {

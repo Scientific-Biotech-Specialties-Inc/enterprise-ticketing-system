@@ -351,6 +351,8 @@ services:
     restart: always
     volumes:
       - ./services/analytics-service:/var/www
+      # Shared token verification package used by AuthenticateSubsystem (spec 0034).
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       # Keep vendor/ off the Windows bind mount. Without this every request booted Laravel over the host
       # filesystem (about 24 s), so /api/csat-stats never answered within any timeout (spec 0031 AC-16).
       - analytics-service-vendor:/var/www/vendor
@@ -388,6 +390,8 @@ services:
     volumes:
       - ./services/configuration-service:/var/www
       - configuration-service-vendor:/var/www/vendor
+      # Shared token verification package used by AuthenticateSubsystem (spec 0034).
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
     ports:
       - "8009:8000"
     networks:
@@ -420,6 +424,8 @@ services:
     volumes:
       - ./services/AI-service:/var/www
       - ai-service-vendor:/var/www/vendor
+      # Shared token verification package used by AuthenticateSubsystem (spec 0034).
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
     ports:
       - "8005:8000"
     environment:

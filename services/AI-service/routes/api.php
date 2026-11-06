@@ -16,15 +16,18 @@ Route::middleware('auth:api')->get('/user', function (Request $request) {
 });
 
 // AI Chat & Support Triage Routes
-Route::post('/chat', [AiChatController::class, 'chat']);
-Route::post('/classify-department', [AiChatController::class, 'classifyDepartment']);
-Route::get('/conversations', [AiChatController::class, 'conversations']);
-Route::get('/conversations/{id}', [AiChatController::class, 'showConversation']);
-Route::get('/conversations/{id}/escalate-handoff', [AiChatController::class, 'escalateHandoff']);
-Route::get('/escalate-handoff/{id}', [AiChatController::class, 'escalateHandoff']);
-Route::delete('/conversations/{id}', [AiChatController::class, 'deleteConversation']);
-Route::delete('/conversations/{id}/messages/{messageId}', [AiChatController::class, 'deleteMessage']);
-Route::post('/tickets', [AiChatController::class, 'markTicketCreated']);
+// Spec 0034: a verified token or a valid X-Internal-Token is required; nothing else reaches the controller.
+Route::middleware('auth.token_or_internal')->group(function () {
+    Route::post('/chat', [AiChatController::class, 'chat']);
+    Route::post('/classify-department', [AiChatController::class, 'classifyDepartment']);
+    Route::get('/conversations', [AiChatController::class, 'conversations']);
+    Route::get('/conversations/{id}', [AiChatController::class, 'showConversation']);
+    Route::get('/conversations/{id}/escalate-handoff', [AiChatController::class, 'escalateHandoff']);
+    Route::get('/escalate-handoff/{id}', [AiChatController::class, 'escalateHandoff']);
+    Route::delete('/conversations/{id}', [AiChatController::class, 'deleteConversation']);
+    Route::delete('/conversations/{id}/messages/{messageId}', [AiChatController::class, 'deleteMessage']);
+    Route::post('/tickets', [AiChatController::class, 'markTicketCreated']);
+});
 
 // Knowledge Base Article & RAG Lifecycle Routes
 $registerKbRoutes = function () {

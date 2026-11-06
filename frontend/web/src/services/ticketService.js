@@ -14,28 +14,12 @@ const ticketClient = axios.create({
   },
 });
 
-const getStoredClientId = () => {
-  try {
-    const raw = sessionStorage.getItem('user') || localStorage.getItem('user');
-    if (!raw) return null;
-    const u = JSON.parse(raw);
-    return u?.client_ID || u?.client_id || u?.id || null;
-  } catch {
-    return null;
-  }
-};
-
 ticketClient.interceptors.request.use((config) => {
   const token = tokenStore.getToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
-  const clientId = getStoredClientId();
-  if (clientId) {
-    config.headers['X-Client-Id'] = String(clientId);
-    config.headers['X-User-Id'] = String(clientId);
-  }
-
+  // Spec 0034: identity comes only from the verified token. No X-Client-Id or X-User-Id headers.
   return config;
 });
 
@@ -460,10 +444,7 @@ export const saveTicketDraft = async (data) => {
     }
   }
 
-  let clientId = data.client_id || data.client_ID || data.created_by || getStoredClientId();
-
   const payload = {
-    client_id: clientId || undefined,
     draft_id: data.id || data.draft_id || undefined,
     title: data.title ?? '',
     description: data.description ?? '',
@@ -477,15 +458,9 @@ export const saveTicketDraft = async (data) => {
   return response.data;
 };
 
-export const getTicketDrafts = async (params = {}) => {
-  let query = { ...params };
-  if (!query.client_id) {
-    const cid = getStoredClientId();
-    if (cid) query.client_id = cid;
-  }
-
+export const getTicketDrafts = async () => {
   try {
-    const response = await ticketClient.get('/tickets/drafts', { params: query });
+    const response = await ticketClient.get('/tickets/drafts');
     return response.data?.drafts ?? [];
   } catch (error) {
     if (error.response?.status === 401) {
@@ -495,23 +470,13 @@ export const getTicketDrafts = async (params = {}) => {
   }
 };
 
-export const getTicketDraft = async (id, params = {}) => {
-  let query = { ...params };
-  if (!query.client_id) {
-    const cid = getStoredClientId();
-    if (cid) query.client_id = cid;
-  }
-  const response = await ticketClient.get(`/tickets/drafts/${id}`, { params: query });
+export const getTicketDraft = async (id) => {
+  const response = await ticketClient.get(`/tickets/drafts/${id}`);
   return response.data?.draft ?? response.data;
 };
 
-export const deleteTicketDraft = async (id, params = {}) => {
-  let query = { ...params };
-  if (!query.client_id) {
-    const cid = getStoredClientId();
-    if (cid) query.client_id = cid;
-  }
-  const response = await ticketClient.delete(`/tickets/drafts/${id}`, { params: query });
+export const deleteTicketDraft = async (id) => {
+  const response = await ticketClient.delete(`/tickets/drafts/${id}`);
   return response.data;
 };
 
