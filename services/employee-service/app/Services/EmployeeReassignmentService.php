@@ -535,9 +535,10 @@ class EmployeeReassignmentService
         if (!$isCS) {
             $query->where('rr.employee_id', $user->emp_id);
         } elseif (in_array($role, ['customer service', 'customer support', 'cs'], true)) {
-            // A CSR only works the pending requests for tickets they delegated themselves.
+            // A CSR works pending requests for tickets they delegated, plus fallback requests when delegator is absent or not a CSR.
             $csId = (int) $user->emp_id;
-            $query->where(function ($q) use ($csId) {
+            $csBranch = !empty($user->branch) ? trim((string) $user->branch) : null;
+            $query->where(function ($q) use ($csId, $csBranch) {
                 $q->where('rr.status', '!=', 'pending')
                     ->orWhereExists(function ($sub) use ($csId) {
                         $sub->select(DB::raw(1))
@@ -545,6 +546,24 @@ class EmployeeReassignmentService
                             ->whereColumn('ta.ticket_ID', 'rr.ticket_id')
                             ->whereColumn('ta.employee_ID', 'rr.employee_id')
                             ->where('ta.assigned_by', $csId);
+                    })
+                    ->orWhere(function ($fallbackQ) use ($csBranch) {
+                        $fallbackQ->whereNotExists(function ($delegatorSub) {
+                            $delegatorSub->select(DB::raw(1))
+                                ->from('ticket_assignments as ta2')
+                                ->join('employees as del', 'del.emp_id', '=', 'ta2.assigned_by')
+                                ->whereColumn('ta2.ticket_ID', 'rr.ticket_id')
+                                ->whereColumn('ta2.employee_ID', 'rr.employee_id')
+                                ->whereIn('del.role', ['customer service', 'customer support', 'cs']);
+                        });
+
+                        if ($csBranch) {
+                            $fallbackQ->where(function ($bQ) use ($csBranch) {
+                                $bQ->where('e.branch', $csBranch)
+                                    ->orWhereNull('e.branch')
+                                    ->orWhere('e.branch', '');
+                            });
+                        }
                     });
             });
         }

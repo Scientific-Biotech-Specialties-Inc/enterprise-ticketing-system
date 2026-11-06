@@ -9,6 +9,8 @@ use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 class CustomerProfileAndAuthE2ETest extends TestCase
@@ -22,6 +24,136 @@ class CustomerProfileAndAuthE2ETest extends TestCase
         Http::fake([
             '*' => Http::response(['status' => 'success'], 200),
         ]);
+        Mail::fake();
+
+        $this->ensureTablesExist();
+    }
+
+    private function ensureTablesExist(): void
+    {
+        if (!Schema::hasTable('employees')) {
+            Schema::create('employees', function ($table) {
+                $table->increments('emp_id');
+                $table->string('email')->unique();
+                $table->string('phone_number')->nullable();
+                $table->string('password_hash')->default('');
+                $table->string('first_name')->nullable();
+                $table->string('last_name')->nullable();
+                $table->string('role')->nullable();
+                $table->string('position_level')->nullable();
+                $table->string('technical_role')->nullable();
+                $table->string('department')->nullable();
+                $table->string('branch')->default('Main Branch');
+                $table->integer('branch_id')->default(1);
+                $table->boolean('is_active')->default(true);
+                $table->integer('failed_login_count')->default(0);
+                $table->timestamp('locked_until')->nullable();
+                $table->timestamp('last_login_at')->nullable();
+                $table->timestamp('last_seen_at')->nullable();
+                $table->timestamp('last_synced_at')->nullable();
+                $table->timestamp('password_change_at')->nullable();
+            });
+        }
+
+        if (!Schema::hasTable('clients')) {
+            Schema::create('clients', function ($table) {
+                $table->id();
+                $table->string('client_name');
+                $table->string('address')->nullable();
+                $table->string('contact_number')->nullable();
+                $table->string('email')->unique();
+                $table->boolean('status')->default(true);
+                $table->timestamps();
+            });
+        }
+
+        if (!Schema::hasTable('clients_credentials')) {
+            Schema::create('clients_credentials', function ($table) {
+                $table->unsignedBigInteger('client_id')->primary();
+                $table->string('password_hash');
+                $table->integer('failed_login_count')->default(0);
+                $table->timestamp('locked_until')->nullable();
+                $table->timestamp('last_login_at')->nullable();
+                $table->timestamp('password_change_at')->nullable();
+                $table->timestamps();
+            });
+        }
+
+        if (!Schema::hasTable('password_reset_otps')) {
+            Schema::create('password_reset_otps', function ($table) {
+                $table->id();
+                $table->string('email')->unique();
+                $table->string('otp_hash');
+                $table->unsignedTinyInteger('attempts')->default(0);
+                $table->timestamp('expires_at');
+                $table->timestamp('used_at')->nullable();
+                $table->timestamps();
+            });
+        }
+
+        if (!Schema::hasTable('refresh_tokens')) {
+            Schema::create('refresh_tokens', function ($table) {
+                $table->id();
+                $table->unsignedBigInteger('client_id')->nullable();
+                $table->unsignedBigInteger('employee_id')->nullable();
+                $table->string('token_hash', 64)->unique();
+                $table->boolean('is_revoked')->default(false)->index();
+                $table->timestamp('expires_at')->nullable();
+                $table->timestamps();
+            });
+        }
+
+        if (!Schema::hasTable('oauth_access_tokens')) {
+            Schema::create('oauth_access_tokens', function ($table) {
+                $table->string('id', 100)->primary();
+                $table->unsignedBigInteger('user_id')->nullable()->index();
+                $table->unsignedBigInteger('client_id');
+                $table->string('name')->nullable();
+                $table->text('scopes')->nullable();
+                $table->boolean('revoked');
+                $table->timestamps();
+                $table->dateTime('expires_at')->nullable();
+            });
+        }
+
+        if (!Schema::hasTable('oauth_clients')) {
+            Schema::create('oauth_clients', function ($table) {
+                $table->id();
+                $table->unsignedBigInteger('user_id')->nullable()->index();
+                $table->string('name');
+                $table->string('secret', 100)->nullable();
+                $table->string('provider')->nullable();
+                $table->text('redirect');
+                $table->boolean('personal_access_client');
+                $table->boolean('password_client');
+                $table->boolean('revoked');
+                $table->timestamps();
+            });
+        }
+
+        if (!Schema::hasTable('oauth_personal_access_clients')) {
+            Schema::create('oauth_personal_access_clients', function ($table) {
+                $table->id();
+                $table->unsignedBigInteger('client_id');
+                $table->timestamps();
+            });
+        }
+
+        if (DB::table('oauth_personal_access_clients')->count() === 0) {
+            $passportClient = \Laravel\Passport\Client::create([
+                'name' => 'Test Personal Access Client',
+                'secret' => \Illuminate\Support\Str::random(40),
+                'redirect' => 'http://localhost',
+                'personal_access_client' => true,
+                'password_client' => false,
+                'revoked' => false,
+            ]);
+            DB::table('oauth_personal_access_clients')->insert([
+                'client_id' => $passportClient->id,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
     }
 
     public function test_ts002_fetch_and_update_customer_profile()
@@ -102,6 +234,7 @@ class CustomerProfileAndAuthE2ETest extends TestCase
             ->putJson('/api/profile', [
                 'email' => $existing->email,
                 'phone' => '0987654321',
+                'address' => '789 Old Way',
             ]);
         $dupFail->assertStatus(409)
             ->assertJsonPath('error', 'EMAIL_ALREADY_EXISTS');

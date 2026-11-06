@@ -201,6 +201,32 @@ const normalizeUser = (userData) => {
   };
 };
 
+export const isStaffUser = (userData) => {
+  if (!userData) return false;
+  return (
+    checkIsSuperAdmin(userData) ||
+    checkIsAdmin(userData) ||
+    checkIsCS(userData) ||
+    checkIsCSManager(userData) ||
+    checkIsItManager(userData) ||
+    checkIsServiceManager(userData) ||
+    checkIsEmployee(userData)
+  );
+};
+
+export const sanitizeCustomerForStorage = (userData) => {
+  if (!userData) return null;
+  return {
+    id: userData.id,
+    first_name: userData.first_name || userData.name || '',
+    last_name: userData.last_name || '',
+    name: userData.client_name || userData.name || `${userData.first_name || ''} ${userData.last_name || ''}`.trim(),
+    email: userData.email || '',
+    role: resolveUserRole(userData) || 'customer',
+    status: userData.status ?? true,
+  };
+};
+
 const persistStoredUser = (userData) => {
   try {
     if (!userData) {
@@ -208,6 +234,16 @@ const persistStoredUser = (userData) => {
       localStorage.removeItem('user');
       return;
     }
+
+    if (!isStaffUser(userData)) {
+      // Customer: Sanitize PII (strip address, phone, contact_number, timestamps)
+      // and restrict persistence strictly to sessionStorage (purged on tab/browser close).
+      const sanitized = sanitizeCustomerForStorage(userData);
+      sessionStorage.setItem('user', JSON.stringify(sanitized));
+      localStorage.removeItem('user');
+      return;
+    }
+
     sessionStorage.setItem('user', JSON.stringify(userData));
 
     // Overwriting the key replaces any stale record from a different account or role.
@@ -230,20 +266,31 @@ const readStoredUser = () => {
       raw = localStorage.getItem('user');
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (checkIsSuperAdmin(parsed) || checkIsEmployee(parsed) || checkIsAdmin(parsed)) {
+        if (isStaffUser(parsed)) {
           sessionStorage.setItem('user', raw);
           // Keep localStorage['user'] intact so Central Auth Module does not think the session was destroyed
+        } else {
+          // If a customer record is found in localStorage, sanitize it, migrate to sessionStorage,
+          // and immediately wipe it from localStorage.
+          const sanitized = sanitizeCustomerForStorage(normalizeUser(parsed));
+          sessionStorage.setItem('user', JSON.stringify(sanitized));
+          localStorage.removeItem('user');
+          raw = JSON.stringify(sanitized);
         }
       }
+    } else {
+      // If customer record is already in sessionStorage, ensure any stale customer entry in localStorage is purged
+      try {
+        const parsedSession = JSON.parse(raw);
+        if (!isStaffUser(parsedSession)) {
+          localStorage.removeItem('user');
+        }
+      } catch {}
     }
     if (!raw) return null;
     const stored = JSON.parse(raw);
 
-    const isCS = checkIsCS(stored);
-    const isEmployee = checkIsEmployee(stored);
-    const isSuperAdmin = checkIsSuperAdmin(stored);
-    const isAdmin = checkIsAdmin(stored);
-    const isCustomer = !isCS && !isEmployee && !isSuperAdmin && !isAdmin;
+    const isCustomer = !isStaffUser(stored);
 
     const isCustomerSite = import.meta.env.VITE_APP_MODE === 'customer';
     if (isCustomerSite && !isCustomer) {
@@ -313,7 +360,15 @@ export function AuthProvider({ children }) {
       return false;
     }
 
-    // Skip session revalidation on guest/login pages
+    // Skip session revalidation on guest/login pages or if user explicitly logged out
+    if (
+      typeof window !== 'undefined' &&
+      (sessionStorage.getItem('is_logged_out') === 'true' || sessionStorage.getItem('logged_out') === 'true')
+    ) {
+      applyUnauthenticated(setUser, setIsAuthenticated);
+      return false;
+    }
+
     const pathname = window.location.pathname;
     const isLoginPage =
       pathname.endsWith('/customer') ||
@@ -335,6 +390,37 @@ export function AuthProvider({ children }) {
         applyUnauthenticated(setUser, setIsAuthenticated);
         return false;
       }
+    }
+
+    const existingToken = tokenStore.getToken();
+
+    if (!existingToken) {
+      // In-memory access token is empty on page reload / new tab.
+      // Silently restore session via the httpOnly refresh cookie.
+      try {
+        const resp = await axiosInstance.post(AUTH_ENDPOINTS.REFRESH_TOKEN, {}, { withCredentials: true });
+        const newToken = resp.data?.token;
+        const userData = resp.data?.user;
+        if (newToken) {
+          tokenStore.setToken(newToken);
+          const normalized = normalizeUser(userData);
+          setUser(normalized);
+          setIsAuthenticated(true);
+          const firstLoginRefreshed = Boolean(resp.data?.is_first_login);
+          setIsFirstLogin(firstLoginRefreshed);
+          if (firstLoginRefreshed) {
+            sessionStorage.setItem('first_login_pending', 'true');
+          } else {
+            sessionStorage.removeItem('first_login_pending');
+          }
+          if (normalized) persistStoredUser(normalized);
+          return true;
+        }
+      } catch {
+        // Refresh token expired or unauthenticated guest
+      }
+      applyUnauthenticated(setUser, setIsAuthenticated);
+      return false;
     }
 
     try {
@@ -448,6 +534,11 @@ export function AuthProvider({ children }) {
       if (MOCK_AUTH_ENABLED) {
         const userData = getMockUser(email, mode);
 
+        try {
+          sessionStorage.removeItem('logged_out');
+          sessionStorage.removeItem('is_logged_out');
+        } catch {}
+
         tokenStore.setToken(MOCK_TOKEN);
         persistStoredUser(userData);
         setUser(userData);
@@ -474,6 +565,11 @@ export function AuthProvider({ children }) {
       });
 
       const { user: userData, token, is_first_login: firstLogin } = response.data;
+
+      try {
+        sessionStorage.removeItem('logged_out');
+        sessionStorage.removeItem('is_logged_out');
+      } catch {}
 
       // Store auth data in memory and set user
       const normalized = normalizeUser(userData);
@@ -528,7 +624,7 @@ export function AuthProvider({ children }) {
         };
 
         tokenStore.setToken(MOCK_TOKEN);
-        localStorage.setItem('user', JSON.stringify(newUser));
+        persistStoredUser(newUser);
         setUser(newUser);
         setIsAuthenticated(true);
         setIsFirstLogin(false);
@@ -565,9 +661,12 @@ export function AuthProvider({ children }) {
     const currentToken = tokenStore.getToken();
 
     if (MOCK_AUTH_ENABLED) {
-      localStorage.removeItem('user');
-      localStorage.removeItem(LOCKOUT_STORAGE_KEY);
-      sessionStorage.removeItem('first_login_pending');
+      clearStoredUser();
+      try {
+        localStorage.removeItem(LOCKOUT_STORAGE_KEY);
+        sessionStorage.removeItem('first_login_pending');
+        sessionStorage.setItem('logged_out', 'true');
+      } catch {}
       tokenStore.clearToken();
 
       setUser(null);
@@ -575,6 +674,15 @@ export function AuthProvider({ children }) {
       setError(null);
       setIsFirstLogin(false);
       setIsLoading(false);
+
+      if (typeof window !== 'undefined') {
+        const isCustomerSite =
+          user?.role === 'customer' ||
+          import.meta.env.VITE_APP_MODE === 'customer' ||
+          window.location.pathname.includes('/customer');
+        const targetUrl = isCustomerSite ? (import.meta.env.BASE_URL || '/') : '/';
+        window.location.replace(targetUrl);
+      }
 
       return { success: true };
     }
@@ -590,8 +698,12 @@ export function AuthProvider({ children }) {
       // Background logout cleanup failed silently
     } finally {
       clearStoredUser();
-      localStorage.removeItem(LOCKOUT_STORAGE_KEY);
-      sessionStorage.removeItem('first_login_pending');
+      try {
+        localStorage.removeItem(LOCKOUT_STORAGE_KEY);
+        sessionStorage.removeItem('first_login_pending');
+        sessionStorage.setItem('logged_out', 'true');
+        sessionStorage.setItem('is_logged_out', 'true');
+      } catch {}
       tokenStore.clearToken();
 
       setUser(null);
@@ -601,9 +713,12 @@ export function AuthProvider({ children }) {
       setIsLoading(false);
 
       if (typeof window !== 'undefined') {
-        const isCustomerSite = user?.role === 'customer' || import.meta.env.VITE_APP_MODE === 'customer';
+        const isCustomerSite =
+          user?.role === 'customer' ||
+          import.meta.env.VITE_APP_MODE === 'customer' ||
+          window.location.pathname.includes('/customer');
         const targetUrl = isCustomerSite ? (import.meta.env.BASE_URL || '/') : '/';
-        window.history.replaceState(null, '', targetUrl);
+        window.location.replace(targetUrl);
       }
     }
 

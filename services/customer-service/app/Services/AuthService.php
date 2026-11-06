@@ -162,6 +162,7 @@
             RefreshToken::create([
                 'client_id' => $client->id,
                 'token_hash' => $hash,
+                'is_revoked' => false,
                 'expires_at' => $expiresAt,
             ]);
 
@@ -295,6 +296,7 @@
             RefreshToken::create([
                 'employee_id' => $employee->emp_id,
                 'token_hash' => $hash,
+                'is_revoked' => false,
                 'expires_at' => $expiresAt,
             ]);
 

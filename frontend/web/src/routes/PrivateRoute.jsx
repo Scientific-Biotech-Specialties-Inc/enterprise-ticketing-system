@@ -1,5 +1,5 @@
 import SkeletonLoader from '@/components/SkeletonLoader.jsx';
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth, resolveUserRole, resolveUserDepartment } from '@/context/AuthContext';
 import tokenStore from '@/auth/tokenStore';
@@ -134,14 +134,25 @@ function WrongPortal() {
 const isCustomerSite = import.meta.env.VITE_APP_MODE === 'customer';
 
 export default function PrivateRoute({ children, role }) {
-  const { isAuthenticated, isLoading, user } = useAuth();
+  const { isAuthenticated, isLoading, user, logout } = useAuth();
   const location = useLocation();
+  // Ref keeps the popstate effect from re-registering (and re-pushing history) when logout's identity changes.
+  const logoutRef = useRef(logout);
+  logoutRef.current = logout;
 
   useEffect(() => {
     const handlePageShow = (e) => {
+      // Customer and employee portals: a page restored from the back/forward cache keeps its old DOM.
+      // Hide it and reload so the session is re-checked before anything is shown.
+      if (e.persisted) {
+        document.documentElement.style.visibility = 'hidden';
+        window.location.reload();
+        return;
+      }
+      const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('is_logged_out') === 'true';
       const token = tokenStore.getToken();
-      if ((e.persisted || !isAuthenticated) && !isLoading) {
-        if (!isAuthenticated && !token) {
+      if (e.persisted || !token || !isAuthenticated || isLoggedOut) {
+        if (!token || !isAuthenticated || isLoggedOut) {
           if (isCustomerSite) {
             window.location.replace(import.meta.env.BASE_URL || '/');
           } else {
@@ -154,21 +165,32 @@ export default function PrivateRoute({ children, role }) {
     return () => window.removeEventListener('pageshow', handlePageShow);
   }, [isLoading, isAuthenticated]);
 
-  // Trap back navigation so the user cannot bounce back to the login page
   useEffect(() => {
-    if (isAuthenticated) {
-      const handlePopState = () => {
-        window.history.pushState(null, '', window.location.href);
-      };
+    if (isLoading || !isAuthenticated) return undefined;
+    // Applies to every customer-portal page (dashboard, tickets, AI support, ...), not just the dashboard.
+    const isCustomerPage = isCustomerSite && role === 'customer';
+    if (!isCustomerPage) return undefined;
 
-      window.history.pushState(null, '', window.location.href);
-      window.addEventListener('popstate', handlePopState);
-
-      return () => {
-        window.removeEventListener('popstate', handlePopState);
-      };
-    }
-  }, [isAuthenticated, location.pathname]);
+    // Capture the dashboard URL now: inside popstate, window.location already points at the
+    // entry the user navigated to (e.g. the login page), so re-pushing it would leak that page
+    // into the forward history.
+    const guardUrl = window.location.href;
+    const guardState = window.history.state;
+    window.history.pushState(guardState, '', guardUrl);
+    const handlePopState = (e) => {
+      if (sessionStorage.getItem('is_logged_out') === 'true' || !tokenStore.getToken()) {
+        window.location.replace(isCustomerSite ? (import.meta.env.BASE_URL || '/') : '/');
+        return;
+      }
+      e.stopImmediatePropagation();
+      // Back on the dashboard ends the session: logout() revokes the token, sets the
+      // is_logged_out flag and hard-redirects (replace) to the landing page, so neither
+      // Back nor Forward can bring the dashboard up again.
+      logoutRef.current();
+    };
+    window.addEventListener('popstate', handlePopState, true);
+    return () => window.removeEventListener('popstate', handlePopState, true);
+  }, [isLoading, isAuthenticated, location.pathname, role]);
 
   if (isLoading || (isAuthenticated && !user)) {
     return (
@@ -201,8 +223,8 @@ export default function PrivateRoute({ children, role }) {
   // Not authenticated
   if (!isAuthenticated) {
     if (isCustomerSite) {
-      // Customer portal: always go to /customer login
-      return <Navigate to="/customer" replace state={{ from: location }} />;
+      // Customer portal: redirect to landing page
+      return <Navigate to="/" replace />;
     } else {
       // Employee/CS portal: redirect to auth-module root
       if (typeof window !== 'undefined') window.location.replace('/');

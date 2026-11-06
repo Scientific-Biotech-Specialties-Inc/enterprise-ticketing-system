@@ -92,6 +92,7 @@ describe('AuthContext and session management (AC-1, AC-15, AC-20)', () => {
     expect(sessionStorage.getItem('user')).toBeNull();
     expect(sessionStorage.getItem('first_login_pending')).toBeNull();
     expect(localStorage.getItem('user')).toBeNull();
+    expect(sessionStorage.getItem('is_logged_out')).toBe('true');
   });
 
   it('initializes from session revalidation and populates user state (covers: AC-20)', async () => {
@@ -150,5 +151,123 @@ describe('AuthContext and session management (AC-1, AC-15, AC-20)', () => {
     expect(stored.email).toBe('admin@example.com');
     expect(stored.id).toBe(1);
     expect(resolveUserRole(stored)).toBe('admin');
+  });
+
+  it('sanitizes customer session data and restricts it to sessionStorage (removes from localStorage)', async () => {
+    tokenStore.getToken.mockReturnValue('customer-token');
+    const customerPayload = {
+      id: 3,
+      client_name: 'Customer One',
+      first_name: 'Customer',
+      last_name: 'One',
+      email: 'customer@gmail.com',
+      phone: '+63 912 345 6789',
+      contact_number: '+63 912 345 6789',
+      address: '123 Tech Park Ave, Metro Manila',
+      role: 'customer',
+      status: true,
+      created_at: '2026-06-10T12:24:44.000000Z',
+      updated_at: '2026-10-15T01:14:01.000000Z',
+    };
+
+    axiosInstance.get.mockResolvedValueOnce({
+      data: {
+        user: customerPayload,
+        token: 'customer-token',
+        is_first_login: false,
+      },
+    });
+
+    render(
+      <AuthProvider>
+        <TestAuthConsumer />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('user-email').textContent).toBe('customer@gmail.com');
+    });
+
+    // Verify localStorage has no customer record
+    expect(localStorage.getItem('user')).toBeNull();
+
+    // Verify sessionStorage has sanitized customer record with encrypted email (no plaintext email or PII)
+    const rawSession = sessionStorage.getItem('user');
+    expect(rawSession).not.toContain('customer@gmail.com');
+    const sessionStored = JSON.parse(rawSession);
+    expect(sessionStored).toBeDefined();
+    expect(sessionStored.id).toBe(3);
+    expect(sessionStored.email).toBeUndefined();
+    expect(sessionStored.email_enc).toMatch(/^enc:[0-9a-f]+$/);
+    expect(sessionStored.role).toBe('customer');
+    expect(sessionStored.address).toBeUndefined();
+    expect(sessionStored.phone).toBeUndefined();
+    expect(sessionStored.contact_number).toBeUndefined();
+    expect(sessionStored.created_at).toBeUndefined();
+    expect(sessionStored.updated_at).toBeUndefined();
+  });
+
+  it('migrates and purges legacy customer data found in localStorage on boot', async () => {
+    tokenStore.getToken.mockReturnValue('customer-token');
+    const legacyCustomer = {
+      id: 3,
+      client_name: 'Customer One',
+      address: '123 Tech Park Ave, Metro Manila',
+      contact_number: '+63 912 345 6789',
+      email: 'customer@gmail.com',
+      role: 'customer',
+    };
+
+    localStorage.setItem('user', JSON.stringify(legacyCustomer));
+    axiosInstance.get.mockResolvedValueOnce({
+      data: {
+        user: legacyCustomer,
+        token: 'customer-token',
+        is_first_login: false,
+      },
+    });
+
+    render(
+      <AuthProvider>
+        <TestAuthConsumer />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('is-loading').textContent).toBe('false');
+    });
+
+    // localStorage should now be purged of customer data
+    expect(localStorage.getItem('user')).toBeNull();
+
+    // sessionStorage should hold the sanitized record with encrypted email
+    const rawSession = sessionStorage.getItem('user');
+    expect(rawSession).not.toContain('customer@gmail.com');
+    const sessionStored = JSON.parse(rawSession);
+    expect(sessionStored.id).toBe(3);
+    expect(sessionStored.email).toBeUndefined();
+    expect(sessionStored.email_enc).toMatch(/^enc:[0-9a-f]+$/);
+    expect(sessionStored.address).toBeUndefined();
+    expect(sessionStored.contact_number).toBeUndefined();
+  });
+
+  it('blocks silent re-authentication on history forward navigation if logged out', async () => {
+    sessionStorage.setItem('is_logged_out', 'true');
+    tokenStore.getToken.mockReturnValue(null);
+
+    render(
+      <AuthProvider>
+        <TestAuthConsumer />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('is-loading').textContent).toBe('false');
+    });
+
+    expect(screen.getByTestId('is-auth').textContent).toBe('false');
+    expect(screen.getByTestId('user-email').textContent).toBe('none');
+    // Ensure axios was NOT called to silently refresh token
+    expect(axiosInstance.post).not.toHaveBeenCalledWith('/auth/refresh', expect.anything(), expect.anything());
   });
 });
