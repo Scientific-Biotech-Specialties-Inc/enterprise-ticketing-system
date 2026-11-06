@@ -901,7 +901,10 @@ class EmployeeAssignmentService
         $attachmentIds = $validated['attachments'] ?? [];
         $attachmentNames = [];
 
-        DB::transaction(function () use ($ticketId, $ticket, $empId, $newStatusName, $remarksText, $internalNoteText, $isProof, $assignment, $attachmentIds, &$attachmentNames) {
+        // Internal tickets store a placeholder in created_by, so there is no customer to notify.
+        $notifyCustomer = !(bool) $ticket->is_internal;
+
+        $transactionResult = DB::transaction(function () use ($ticketId, $ticket, $empId, $newStatusName, $remarksText, $internalNoteText, $isProof, $assignment, $attachmentIds, &$attachmentNames, $notifyCustomer) {
             if ($isProof) {
                 try {
                     $resp = Http::get("http://attachment-service:8000/api/attachments?assignment_id={$assignment->assignment_ID}");
@@ -1028,13 +1031,15 @@ class EmployeeAssignmentService
                         ];
                     }
 
-                    $this->notificationService->notifyCustomer(
-                        $customerId,
-                        $customerTitle,
-                        "Your ticket {$ticketRef} status has been updated to \"" . $statusNameToNotify . "\". Remark: \"" . $remarksText . "\".",
-                        $ticketId,
-                        $customerNotificationData
-                    );
+                    if ($notifyCustomer) {
+                        $this->notificationService->notifyCustomer(
+                            $customerId,
+                            $customerTitle,
+                            "Your ticket {$ticketRef} status has been updated to \"" . $statusNameToNotify . "\". Remark: \"" . $remarksText . "\".",
+                            $ticketId,
+                            $customerNotificationData
+                        );
+                    }
 
                     $this->notificationService->notifyCS(
                         'Ticket Status Updated',
@@ -1054,7 +1059,8 @@ class EmployeeAssignmentService
 
                     $catName = DB::table('problem_categories')->where('problem_category_ID', $ticket->problem_category_ID)->value('category_name') ?? '';
                     $prioName = DB::table('ticket_priorities')->where('priority_ID', $ticket->priority_ID ?? 1)->value('priority_name') ?? '';
-                    $this->notificationService->sendCustomerEmail(
+                    $this->sendCustomerEmailAfterResponse(
+                        $notifyCustomer,
                         $customerId,
                         $customerTitle,
                         "Your ticket {$ticketRef}: \"" . $ticket->title . "\" status has been updated to \"" . $statusNameToNotify . "\".",
@@ -1076,16 +1082,19 @@ class EmployeeAssignmentService
                 ]);
 
                 if (!$statusChanged && !$isProof) {
-                    $this->notificationService->notifyCustomer(
-                        $customerId,
-                        'New Remark Added',
-                        "Engineer " . $empName . " added a remark: \"" . $remarksText . "\" on ticket TKT-" . str_pad((string) $ticketId, 4, '0', STR_PAD_LEFT) . ".",
-                        $ticketId
-                    );
+                    if ($notifyCustomer) {
+                        $this->notificationService->notifyCustomer(
+                            $customerId,
+                            'New Remark Added',
+                            "Engineer " . $empName . " added a remark: \"" . $remarksText . "\" on ticket TKT-" . str_pad((string) $ticketId, 4, '0', STR_PAD_LEFT) . ".",
+                            $ticketId
+                        );
+                    }
 
                     $catNameRem = DB::table('problem_categories')->where('problem_category_ID', $ticket->problem_category_ID)->value('category_name') ?? '';
                     $prioNameRem = DB::table('ticket_priorities')->where('priority_ID', $ticket->priority_ID ?? 1)->value('priority_name') ?? '';
-                    $this->notificationService->sendCustomerEmail(
+                    $this->sendCustomerEmailAfterResponse(
+                        $notifyCustomer,
                         $customerId,
                         'New Remark Added',
                         "Engineer " . $empName . " added a remark: \"" . $remarksText . "\" on your ticket TKT-" . str_pad((string) $ticketId, 4, '0', STR_PAD_LEFT) . ".",
@@ -1172,7 +1181,8 @@ class EmployeeAssignmentService
 
                     $catNameProof = DB::table('problem_categories')->where('problem_category_ID', $ticket->problem_category_ID)->value('category_name') ?? '';
                     $prioNameProof = DB::table('ticket_priorities')->where('priority_ID', $ticket->priority_ID ?? 1)->value('priority_name') ?? '';
-                    $this->notificationService->sendCustomerEmail(
+                    $this->sendCustomerEmailAfterResponse(
+                        $notifyCustomer,
                         $customerId,
                         'Proof of Completion Uploaded',
                         "Proof of completion has been uploaded for your ticket {$ticketRefProof} by " . $empName . ". Status is now Pending Evaluation.",
@@ -1192,10 +1202,50 @@ class EmployeeAssignmentService
             }
         });
 
+        // The closure returns an error payload when the state machine rejects the transition.
+        if (is_array($transactionResult) && isset($transactionResult['status'])) {
+            return $transactionResult;
+        }
+
         $this->notificationService->broadcastTicketChange('updated', $ticketId);
         $this->cacheService->clearTicketCaches();
 
         return ['status' => 200, 'data' => ['message' => 'Ticket updated successfully.']];
+    }
+
+    /**
+     * Send a customer email once the response has been returned, so a slow mail
+     * provider can never hold the request (and its database transaction) open.
+     */
+    private function sendCustomerEmailAfterResponse(
+        bool $enabled,
+        int $customerId,
+        string $subject,
+        string $message,
+        int $ticketId,
+        ?string $ticketTitle,
+        string $category,
+        string $priority
+    ): void {
+        if (!$enabled) {
+            return;
+        }
+
+        app()->terminating(function () use ($customerId, $subject, $message, $ticketId, $ticketTitle, $category, $priority) {
+            try {
+                $this->notificationService->sendCustomerEmail(
+                    $customerId,
+                    $subject,
+                    $message,
+                    $ticketId,
+                    (string) $ticketTitle,
+                    $category,
+                    $priority
+                );
+            } catch (\Throwable $e) {
+                Log::warning("Deferred customer email failed for ticket {$ticketId}: {$e->getMessage()}");
+            }
+        });
     }
 
     /**

@@ -34,5 +34,11 @@ class AuthServiceProvider extends ServiceProvider
 
         Passport::ignoreRoutes();
         Passport::personalAccessClient((string) env('PASSPORT_PERSONAL_ACCESS_CLIENT_ID', 1));
+
+        // Without an explicit lifetime Passport issues personal access tokens valid for a year.
+        // Keep access tokens short lived; the httpOnly refresh cookie (14 days) renews them.
+        Passport::personalAccessTokensExpireIn(
+            now()->addMinutes((int) env('PASSPORT_ACCESS_TOKEN_TTL_MINUTES', 30))
+        );
     }
 }

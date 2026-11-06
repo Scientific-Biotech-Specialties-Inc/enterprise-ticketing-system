@@ -324,6 +324,19 @@ export function AuthProvider({ children }) {
       return false;
     }
 
+    // Customer portal guests (e.g. the landing page) have no token and no stored user,
+    // so probing /me and /auth/refresh would only log two expected 401s in the console.
+    if (import.meta.env.VITE_APP_MODE === 'customer') {
+      let hasStoredUser = false;
+      try {
+        hasStoredUser = Boolean(sessionStorage.getItem('user') || localStorage.getItem('user'));
+      } catch {}
+      if (!tokenStore.getToken() && !hasStoredUser) {
+        applyUnauthenticated(setUser, setIsAuthenticated);
+        return false;
+      }
+    }
+
     try {
       const resp = await axiosInstance.get(AUTH_ENDPOINTS.ME);
       const userData = resp.data?.user;

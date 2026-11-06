@@ -345,11 +345,18 @@ export default function CSIncoming() {
   }, [loadStaticData, loadLiveData]);
 
   useEffect(() => {
+    // assignTicketId (from a notification's Assign button) opens the assignment modal directly.
+    const assignId = location.state?.assignTicketId;
     const focusId = location.state?.focusTicketId;
-    if (focusId && tickets.length > 0) {
-      const match = tickets.find(t => t.id === focusId || t.ticket_ID === focusId);
+    const targetId = assignId ?? focusId;
+    if (targetId && tickets.length > 0) {
+      const numericTarget = Number(String(targetId).replace(/\D/g, ''));
+      const match = tickets.find(t =>
+        t.id === targetId || t.ticket_ID === targetId ||
+        (numericTarget && Number(t.ticket_ID) === numericTarget)
+      );
       if (match) {
-        setModal({ mode: 'summary', ticket: match });
+        setModal({ mode: assignId ? 'assign' : 'summary', ticket: match });
         window.history.replaceState({}, document.title);
       }
     }

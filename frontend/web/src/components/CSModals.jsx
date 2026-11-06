@@ -2041,6 +2041,11 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                       }
                       setIsProcessing(true);
                       try {
+                        // The backend rejects On Hold -> Resolved, so a held ticket is resumed first.
+                        const isOnHold = String(currentStatus || ticket.status).toLowerCase().startsWith('on hold');
+                        if (isOnHold) {
+                          await resumeTicket(ticket.ticket_ID || ticket.id);
+                        }
                         const timestamp = new Date().toISOString();
                         await onStatusUpdate({
                           id: ticket.id,
@@ -2049,7 +2054,9 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                             {
                               id: `status-closed-${Date.now()}`,
                               type: 'status',
-                              text: 'Ticket resolved and closed by CS Representative.',
+                              text: isOnHold
+                                ? 'Ticket resumed from On Hold, then resolved and closed by CS Representative.'
+                                : 'Ticket resolved and closed by CS Representative.',
                               timestamp,
                             }
                           ]
@@ -2057,6 +2064,7 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                         onClose();
                       } catch (err) {
                         console.error(err);
+                        window.alert(err.response?.data?.message || 'Failed to resolve the ticket. Please try again.');
                       } finally {
                         setIsProcessing(false);
                       }

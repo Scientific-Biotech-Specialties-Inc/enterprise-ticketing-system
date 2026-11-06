@@ -1537,7 +1537,7 @@ class TicketService
         }
 
         if (array_key_exists('description', $validated) && $validated['description'] !== null) {
-            $newDesc = trim($validated['description']);
+            $newDesc = strip_tags(trim($validated['description']));
             if ($ticket->description !== $newDesc) {
                 $changes[] = ['field' => 'description', 'old' => $ticket->description, 'new' => $newDesc];
             }
@@ -1650,7 +1650,7 @@ class TicketService
                 $update['title'] = strip_tags(trim($validated['title']));
             }
             if (array_key_exists('description', $validated) && $validated['description'] !== null) {
-                $update['description'] = trim($validated['description']);
+                $update['description'] = strip_tags(trim($validated['description']));
             }
             if (array_key_exists('problem_category_ID', $validated) && $validated['problem_category_ID'] !== null) {
                 $update['problem_category_ID'] = $validated['problem_category_ID'];

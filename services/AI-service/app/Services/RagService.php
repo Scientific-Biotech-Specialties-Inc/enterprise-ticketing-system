@@ -434,22 +434,21 @@ class RagService
             $empId = $empId ?: 1;
 
             DB::table('ticket_audit_logs')->insert([
-                    'ticket_ID' => null,
-                    'action_type' => 'kb_article_deleted',
-                    'action_by_ID' => $empId,
-                    'actor_type' => 'superadmin',
-                    'details' => json_encode([
-                        'module' => 'Knowledge Base',
-                        'target' => $title,
-                        'text' => "Permanently deleted knowledge article \"{$title}\" and purged all associated files and vector embeddings.",
-                        'article_id' => $articleId,
-                        'category' => $category,
-                        'actor' => $actor,
-                        'file_path' => $filePath,
-                    ]),
-                    'created_at' => now(),
-                ]);
-            }
+                'ticket_ID' => null,
+                'action_type' => 'kb_article_deleted',
+                'action_by_ID' => $empId,
+                'actor_type' => 'superadmin',
+                'details' => json_encode([
+                    'module' => 'Knowledge Base',
+                    'target' => $title,
+                    'text' => "Permanently deleted knowledge article \"{$title}\" and purged all associated files and vector embeddings.",
+                    'article_id' => $articleId,
+                    'category' => $category,
+                    'actor' => $actor,
+                    'file_path' => $filePath,
+                ]),
+                'created_at' => now(),
+            ]);
         } catch (\Throwable $e) {
             Log::error('Failed to record deletion audit log: ' . $e->getMessage(), [
                 'article_id' => $articleId,

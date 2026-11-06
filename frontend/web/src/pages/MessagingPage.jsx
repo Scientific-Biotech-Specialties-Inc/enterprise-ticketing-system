@@ -355,6 +355,8 @@ export default function MessagingPage() {
       return {
         id: ticketId,
         ticket_ID: t.ticket_ID || Number(String(ticketId).replace(/\D/g, '')),
+        // Same ticket number the rest of the app shows; fall back to the padded id only if the API omits it.
+        ticketNumber: t.ticket_number || t.ticketNumber || (typeof ticketId === 'string' && !/^\d+$/.test(ticketId) ? ticketId : null),
         created_by: t.created_by || t.client_id || t.user_id || (isCS ? null : user?.id),
         name: `${contactName} (${ticketTitle})`,
         displayTitle: ticketTitle,
@@ -1095,7 +1097,7 @@ export default function MessagingPage() {
                   <div>
                     <p className="font-semibold text-sm text-slate-dark">{selectedContact.displayTitle}</p>
                     <p className="text-xs text-slate-muted">
-                      {isCustomer ? `Ticket #${selectedContact.ticket_ID || selectedContact.id}` : `Client: ${selectedContact.subtitle}`} • Status: {selectedContact.status}
+                      {isCustomer ? `Ticket ${selectedContact.ticketNumber || `TKT-${String(selectedContact.ticket_ID || selectedContact.id).padStart(4, '0')}`}` : `Client: ${selectedContact.subtitle}`} • Status: {selectedContact.status}
                     </p>
                   </div>
                 </div>
@@ -1336,9 +1338,13 @@ export default function MessagingPage() {
                                     }`}>
                                       <span className="flex items-center gap-1 font-medium">
                                         <Loader2 size={11} className="animate-spin" />
-                                        Scanning file for malware (ClamAV)...
+                                        {Array.isArray(msg.attachments) && msg.attachments.length > 0
+                                          ? 'Scanning file for malware (ClamAV)...'
+                                          : 'Sending...'}
                                       </span>
-                                      <span className="italic opacity-80">Sending</span>
+                                      {Array.isArray(msg.attachments) && msg.attachments.length > 0 && (
+                                        <span className="italic opacity-80">Sending</span>
+                                      )}
                                     </div>
                                   )}
                                 </>
@@ -1571,9 +1577,10 @@ export default function MessagingPage() {
                       <div>
                         <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Ticket ID</p>
                         <p className="text-sm font-bold text-gray-800 mt-0.5">
-                          {typeof selectedContact.id === 'number'
-                            ? `TKT-${String(selectedContact.id).padStart(4, '0')}`
-                            : selectedContact.id}
+                          {selectedContact.ticketNumber
+                            || (typeof selectedContact.id === 'number'
+                              ? `TKT-${String(selectedContact.id).padStart(4, '0')}`
+                              : selectedContact.id)}
                         </p>
                       </div>
 
