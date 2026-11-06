@@ -394,7 +394,9 @@ export function AuthProvider({ children }) {
 
     const existingToken = tokenStore.getToken();
 
-    if (!existingToken) {
+    // Employee/CS sessions come from the central SSO and have no customer-service refresh token,
+    // so they must fall through to the /me probe (which accepts the SSO access_token cookie).
+    if (!existingToken && import.meta.env.VITE_APP_MODE === 'customer') {
       // In-memory access token is empty on page reload / new tab.
       // Silently restore session via the httpOnly refresh cookie.
       try {
