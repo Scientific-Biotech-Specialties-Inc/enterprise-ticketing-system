@@ -204,7 +204,7 @@ class MessageController extends Controller
         }
 
         $request->validate([
-            'message' => 'required|string|max:5000',
+            'message' => ['required', 'string', 'max:5000', new \App\Rules\NoMarkup()],
             'sender_name' => 'required|string|max:255',
             'sender_type' => 'required|string|max:50',
             'sender_id' => 'nullable|integer',
@@ -248,6 +248,14 @@ class MessageController extends Controller
                 'errors' => [
                     'message' => ['At least message text or an attached file is required.']
                 ]
+            ], 422);
+        }
+
+        if ($hasText && \App\Rules\NoMarkup::contains($rawMessage)) {
+            return response()->json([
+                'message' => 'Message must not contain HTML or script markup.',
+                'code' => 'MARKUP_NOT_ALLOWED',
+                'errors' => ['message' => ['The message must not contain HTML or script markup.']]
             ], 422);
         }
 

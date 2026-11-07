@@ -44,7 +44,14 @@ class AiChatController extends Controller
     /** Staff (a verified user with an emp_id) may read customer AI chats, never change them. */
     protected function isStaff(?object $auth): bool
     {
-        return $auth !== null && !$this->isInternal($auth) && (int) ($auth->emp_id ?? 0) > 0;
+        if ($auth === null || $this->isInternal($auth)) {
+            return false;
+        }
+
+        // A staff JWT verified by VerifyEmployeeJwt becomes an AuthenticatedUserDto. Its claims carry no emp_id,
+        // so the DTO type itself is the proof of staff identity (customers authenticate through Passport).
+        return $auth instanceof \Ticketing\Auth\Dto\AuthenticatedUserDto
+            || (int) ($auth->emp_id ?? 0) > 0;
     }
 
     /** 403 for a staff caller on a route that changes a conversation. */
@@ -212,7 +219,7 @@ class AiChatController extends Controller
         }
 
         $conversations = $query->orderBy('updated_at', 'desc')
-            ->select(['id', 'user_id', 'title', 'status', 'messages', 'created_at', 'updated_at'])
+            ->select(['id', 'user_id', 'title', 'status', 'messages', 'escalation_data', 'created_at', 'updated_at'])
             ->get()
             ->map(function ($c) {
                 $cleaned = preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $c->title ?? '');
@@ -364,6 +371,12 @@ class AiChatController extends Controller
                     return $this->conversationNotFound();
                 }
                 $conversation->status = 'ticket_created';
+                if ($ticketId = $request->input('ticket_id')) {
+                    // Persist the ticket link so staff can open the exact AI chat behind a ticket.
+                    $escalation = $conversation->escalation_data ?? [];
+                    $escalation['ticket_id'] = (int) $ticketId;
+                    $conversation->escalation_data = $escalation;
+                }
                 $conversation->save();
             }
         }

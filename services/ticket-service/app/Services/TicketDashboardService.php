@@ -396,6 +396,7 @@ class TicketDashboardService
                     't.title',
                     't.description',
                     't.is_internal',
+                    't.created_by',
                     't.requested_by',
                     't.ticket_status_ID',
                     't.resolution_due_at',
@@ -646,6 +647,8 @@ class TicketDashboardService
                 return [
                     'id' => TicketNumberGeneratorService::refFor($row->ticket_ID, $row->ticket_number ?? null),
                     'ticket_ID' => (int) $row->ticket_ID,
+                    // Customer id, so CS views (e.g. the AI Chat tab) can look up this customer's records.
+                    'created_by' => (bool) $row->is_internal ? null : ($row->created_by !== null ? (int) $row->created_by : null),
                     'customer' => (bool) $row->is_internal
                         ? (($row->requester_employee_name !== '' && $row->requester_employee_name !== null) ? $row->requester_employee_name : ($row->requested_by ? 'Employee #' . $row->requested_by : 'Internal Requester'))
                         : ($row->client_name ?: 'Unknown Customer'),

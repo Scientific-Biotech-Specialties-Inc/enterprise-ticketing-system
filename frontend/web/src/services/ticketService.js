@@ -596,9 +596,17 @@ const fetchAssignableEmployees = async ({ department } = {}) => {
     }
     return true;
   });
-  employeesCache[key] = filtered;
+  // The backend now returns is_active as the account flag and a derived `presence`
+  // (online | offline | inactive, spec 0035). Existing consumers read is_active as "available now",
+  // so keep that contract by deriving it from presence and preserve the account flag separately.
+  const normalized = filtered.map((emp) => (
+    emp.presence
+      ? { ...emp, account_active: emp.is_active, is_active: emp.presence === 'online' }
+      : emp
+  ));
+  employeesCache[key] = normalized;
   employeesCacheAt[key] = Date.now();
-  return filtered;
+  return normalized;
 };
 
 export const getAssignableEmployees = async ({ department, forceRefresh = false } = {}) => {

@@ -13,6 +13,7 @@ import {
   clearThreadPresence,
 } from '@/services/messagingService';
 import { getMessagingEcho } from '@/services/messagingEcho';
+import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import {
   getCustomerTickets,
   getCSIncomingTickets,
@@ -215,12 +216,20 @@ export default function MessagingPage() {
     return -1;
   }, [currentTicketMessages, lastLoadIndex, userType, userId]);
 
+  // Bumped by the ticket Reverb server so newly created/assigned tickets appear without a manual refresh.
+  const [ticketRefreshTick, setTicketRefreshTick] = useState(0);
+  const hasLoadedTicketsRef = useRef(false);
+  const handleTicketRealtime = useCallback(() => setTicketRefreshTick((n) => n + 1), []);
+  const realtimeChannels = useMemo(() => [{ name: 'ticket-updates', event: 'ticket.changed' }], []);
+  useRealtimeRefresh({ refresh: handleTicketRealtime, channels: realtimeChannels, intervalMs: 30000 });
+
   // 1. Fetch tickets for chat list
   useEffect(() => {
     let active = true;
     async function loadTickets() {
+      const isBackgroundRefresh = hasLoadedTicketsRef.current;
       try {
-        setLoading(true);
+        if (!isBackgroundRefresh) setLoading(true);
         let list = [];
         if (isCS) {
           const res = await getCSIncomingTickets({ limit: 100, forceRefresh: true });
@@ -277,7 +286,7 @@ export default function MessagingPage() {
           setTickets(list);
 
           // Auto-select if initialTicketId is in the list
-          if (initialTicketId) {
+          if (initialTicketId && !isBackgroundRefresh) {
             const numericId = Number(initialTicketId);
             const found = list.find(t => {
               const ticketId = t.ticket_ID || t.id;
@@ -307,12 +316,15 @@ export default function MessagingPage() {
       } catch (err) {
         console.error("Failed to load tickets for messaging page", err);
       } finally {
-        if (active) setLoading(false);
+        if (active) {
+          hasLoadedTicketsRef.current = true;
+          setLoading(false);
+        }
       }
     }
     loadTickets();
     return () => { active = false; };
-  }, [isCS, isEmployee, user, initialTicketId]);
+  }, [isCS, isEmployee, user, initialTicketId, ticketRefreshTick]);
 
   // 2. Map tickets to formatted contacts & calculate archive state
   const contacts = useMemo(() => {
@@ -550,11 +562,17 @@ export default function MessagingPage() {
           const convList = res.data.conversations;
           setAiConversations(convList);
           if (convList.length > 0) {
-            const matched = convList.find(c =>
-              c.title && selectedContact?.displayTitle &&
-              (c.title.toLowerCase().includes(selectedContact.displayTitle.toLowerCase()) ||
-               selectedContact.displayTitle.toLowerCase().includes(c.title.toLowerCase()))
-            ) || convList[0];
+            const numericTicketId = Number(String(selectedContactId).replace(/\D/g, ''));
+            // Prefer the exact conversation linked to this ticket; fall back to a title match only.
+            const matched = convList.find(c => Number(c.escalation_data?.ticket_id) === numericTicketId)
+              || convList.find(c =>
+                c.title && selectedContact?.displayTitle &&
+                (c.title.toLowerCase().includes(selectedContact.displayTitle.toLowerCase()) ||
+                 selectedContact.displayTitle.toLowerCase().includes(c.title.toLowerCase()))
+              )
+              // The list is already scoped to this ticket's customer, so their latest chat is the best remaining guess
+              // (tickets created before the ticket link existed have no stored id and an unrelated title).
+              || convList[0];
             setSelectedAiConvId(matched.id);
           } else {
             setSelectedAiConvId(null);

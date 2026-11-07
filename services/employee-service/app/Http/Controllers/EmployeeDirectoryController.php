@@ -519,7 +519,7 @@ class EmployeeDirectoryController extends Controller
         $departmentManagers = self::fetchDepartmentManagers();
 
         $query = DB::table('employees')
-            ->select('emp_id as id', DB::raw("CONCAT(first_name, ' ', last_name) as name"), 'email', 'role', 'department', 'position_level', 'technical_role', 'is_active')
+            ->select('emp_id as id', DB::raw("CONCAT(first_name, ' ', last_name) as name"), 'email', 'role', 'department', 'position_level', 'technical_role', 'is_active', 'last_seen_at')
             ->where('is_active', 1)
             ->whereIn('department', ['Service', 'IT'])
             ->whereNotIn(DB::raw('LOWER(COALESCE(role, ""))'), [
@@ -555,6 +555,8 @@ class EmployeeDirectoryController extends Controller
                 $empTechRole = $empPosLevel;
             }
 
+            $presenceState = \App\Support\Presence::state((bool) $emp->is_active, $emp->last_seen_at);
+
             $item = [
                 'id' => (int) $emp->id,
                 'name' => $emp->name,
@@ -564,7 +566,10 @@ class EmployeeDirectoryController extends Controller
                 'branch' => $emp->branch ?? 'Main',
                 'position_level' => $empPosLevel,
                 'technical_role' => $empTechRole,
-                'availability_status' => (bool) $emp->is_active ? 'available' : 'unavailable',
+                // Presence is derived from heartbeat freshness (spec 0035). availability_status is kept for older consumers.
+                'presence' => $presenceState,
+                'last_seen_at' => $emp->last_seen_at ? \Carbon\Carbon::parse($emp->last_seen_at)->toISOString() : null,
+                'availability_status' => $presenceState === \App\Support\Presence::ONLINE ? 'available' : 'unavailable',
                 'is_active' => (bool) $emp->is_active,
                 'eligible' => $eligibility['eligible'],
                 'ineligibility_reason' => $eligibility['reason'],
@@ -576,6 +581,21 @@ class EmployeeDirectoryController extends Controller
                 $ineligible[] = $item;
             }
         }
+
+        // Online employees first; offline remain selectable (spec 0035 AC-4). Original order is the tiebreak.
+        $sortOnlineFirst = function (array $list): array {
+            $indexed = [];
+            foreach (array_values($list) as $position => $row) {
+                $indexed[] = [$position, $row];
+            }
+            usort($indexed, function ($a, $b) {
+                $byPresence = (($b[1]['presence'] ?? '') === 'online') <=> (($a[1]['presence'] ?? '') === 'online');
+                return $byPresence !== 0 ? $byPresence : $a[0] <=> $b[0];
+            });
+            return array_map(fn ($pair) => $pair[1], $indexed);
+        };
+        $eligible = $sortOnlineFirst($eligible);
+        $ineligible = $sortOnlineFirst($ineligible);
 
         $emptyGuidance = count($eligible) === 0
             ? 'No eligible employees currently match the required department, position level, and technical role criteria for this category. Please escalate to the designated department manager or contact Customer Service leadership.'

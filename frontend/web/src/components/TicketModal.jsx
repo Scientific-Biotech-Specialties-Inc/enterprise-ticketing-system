@@ -7,6 +7,7 @@ import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 
 const initialFormData = {
   title: '',
+  department_id: 1,
   machine_ID: '',
   problem_category_ID: '',
   description: '',
@@ -26,7 +27,7 @@ const MAX_DESCRIPTION_CHARS = 500;
 const MIN_TITLE_CHARS = 5;
 const MIN_DESCRIPTION_CHARS = 20;
 
-export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCount = null }) {
+export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCount = null, showDepartmentSelector = false }) {
   useLockBodyScroll(isOpen);
   const [loadingOptions, setLoadingOptions] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -59,7 +60,9 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
     ? `Title exceeds ${MAX_TITLE_CHARS} characters (${titleChars}).`
     : '';
   const categoryError = !formData.problem_category_ID ? 'Category is required.' : '';
-  const equipmentError = !formData.machine_ID ? 'Equipment is required.' : '';
+  // Equipment is required for Service (1) and optional for IT (2).
+  const isItDepartment = showDepartmentSelector && Number(formData.department_id) === 2;
+  const equipmentError = !isItDepartment && !formData.machine_ID ? 'Equipment is required.' : '';
   const descriptionError = !descTrimmed
     ? 'Description is required.'
     : descTrimmed.length < MIN_DESCRIPTION_CHARS
@@ -157,6 +160,11 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
     }
   };
 
+  const buildSubmitData = () => {
+    const { department_id, ...rest } = formData;
+    return showDepartmentSelector ? { ...rest, department_id } : rest;
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
 
@@ -183,7 +191,7 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
       setTouched((p) => ({ ...p, description: true }));
       return;
     }
-    if (!formData.problem_category_ID || !formData.machine_ID) {
+    if (!formData.problem_category_ID || (!isItDepartment && !formData.machine_ID)) {
       setSubmitError('Please complete all required fields.');
       return;
     }
@@ -203,7 +211,7 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
 
     try {
       await onSubmit?.({
-        ...formData,
+        ...buildSubmitData(),
         title: titleTrim,
         attachments,
       });
@@ -234,7 +242,7 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
 
     try {
       await onSubmit?.({
-        ...formData,
+        ...buildSubmitData(),
         title: formatted,
         attachments,
       });
@@ -273,7 +281,7 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
     titleTrimmed.length >= MIN_TITLE_CHARS &&
     titleChars <= MAX_TITLE_CHARS &&
     formData.problem_category_ID &&
-    formData.machine_ID &&
+    (isItDepartment || formData.machine_ID) &&
     descTrimmed.length >= MIN_DESCRIPTION_CHARS &&
     descriptionChars <= MAX_DESCRIPTION_CHARS
   );
@@ -314,18 +322,7 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
                 placeholder="Brief description of the issue"
                 value={formData.title}
                 onChange={handleChange}
-                onBlur={() => {
-                  touch('title');
-                  const trimmed = (formData.title || '').trim();
-                  if (needsProperCasing(trimmed)) {
-                    const proper = formatProperTitleCase(trimmed);
-                    setTitleCasingData({
-                      original: trimmed,
-                      formatted: proper,
-                    });
-                    setShowTitleCasingModal(true);
-                  }
-                }}
+                onBlur={() => touch('title')}
                 disabled={isSubmitting}
                 className={`w-full rounded-xl border bg-white px-4 py-3 outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-[#252578] ${touched.title && titleError ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}
               />
@@ -335,6 +332,22 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
             </div>
             {touched.title && titleError && <p className="mt-1.5 text-xs text-red-500">{titleError}</p>}
           </div>
+
+          {showDepartmentSelector && (
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-700">Department</label>
+            <select
+              name="department_id"
+              value={formData.department_id}
+              onChange={(event) => setFormData((prev) => ({ ...prev, department_id: Number(event.target.value) }))}
+              disabled={isSubmitting}
+              className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-[#252578]"
+            >
+              <option value={1}>Service</option>
+              <option value={2}>IT</option>
+            </select>
+          </div>
+          )}
 
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
             <div>
@@ -359,17 +372,17 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-medium text-gray-700">Equipment Name / ID</label>
+              <label className="mb-2 block text-sm font-medium text-gray-700">Equipment Name / ID{isItDepartment && <span className="ml-1 text-xs font-normal text-muted-slate">(Optional for IT)</span>}</label>
               <select
                 name="machine_ID"
-                required
+                required={!isItDepartment}
                 value={formData.machine_ID}
                 onChange={handleChange}
                 onBlur={() => touch('equipment')}
                 disabled={loadingOptions || isSubmitting}
                 className={`w-full rounded-xl border bg-white px-4 py-3 outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-[#252578] ${touched.equipment && equipmentError ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}
               >
-                <option value="">Select Equipment</option>
+                <option value="">{isItDepartment ? 'No equipment' : 'Select Equipment'}</option>
                 {equipmentOptions.map((machine) => (
                   <option key={machine.value} value={machine.value}>
                     {machine.label}

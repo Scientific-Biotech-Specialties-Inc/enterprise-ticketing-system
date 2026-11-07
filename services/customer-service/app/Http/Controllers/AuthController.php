@@ -312,8 +312,11 @@ class AuthController extends Controller
                 $techRole = $posLevel;
             }
 
-            $isActive = (bool) data_get($presence, 'is_active', false);
-            $availability = $isActive ? 'Available' : 'Unavailable';
+            // Presence is derived from heartbeat freshness (spec 0035); is_active stays the account flag.
+            $lastSeen = $employee->last_seen_at ?: data_get($presence, 'last_seen_at');
+            $presenceState = \App\Support\Presence::state((bool) $employee->is_active, $lastSeen);
+            $isActive = (bool) $employee->is_active;
+            $availability = $presenceState === \App\Support\Presence::ONLINE ? 'Available' : 'Unavailable';
 
             return [
                 'id' => $employee->emp_id,
@@ -328,9 +331,10 @@ class AuthController extends Controller
                 'branch' => $employee->branch ?? 'Main Branch',
                 'department' => $employee->department,
                 'is_active' => $isActive,
+                'presence' => $presenceState,
                 'availability' => $availability,
                 'availability_status' => $availability,
-                'last_seen_at' => data_get($presence, 'last_seen_at', optional($employee->last_seen_at)->toISOString()),
+                'last_seen_at' => $lastSeen ? \Carbon\Carbon::parse($lastSeen)->toISOString() : null,
             ];
         });
 
@@ -648,18 +652,20 @@ class AuthController extends Controller
 
         Cache::store('redis')->put($redisKey, $presence, 60);
 
-        $wasInactive = !$user->is_active;
+        // Only dispatch when the employee was not already Online, so a steady heartbeat does not spam the channel.
+        $wasOffline = !\App\Support\Presence::isOnline($user->last_seen_at);
 
+        // Heartbeat records presence only; it never changes the is_active account flag.
         $user->last_seen_at = now();
-        $user->is_active = true;
         $user->save();
 
-        if ($wasInactive) {
+        if ($wasOffline) {
             \App\Events\EmployeeStatusChanged::dispatch($user->refresh());
         }
 
         return response()->json([
-            'is_active' => true,
+            'is_active' => (bool) $user->is_active,
+            'presence' => \App\Support\Presence::ONLINE,
             'last_seen_at' => $user->last_seen_at->toISOString(),
         ]);
     }
@@ -745,6 +751,27 @@ class AuthController extends Controller
             ]);
         }
 
+        // Staff signed in through the central auth module arrive as a verified JWT DTO, not an Employee model.
+        if ($user instanceof \Ticketing\Auth\Dto\AuthenticatedUserDto) {
+            return response()->json([
+                'user' => [
+                    'id' => $user->emp_id ?? $user->id,
+                    'emp_id' => $user->emp_id ?? $user->id,
+                    'email' => $user->email,
+                    'first_name' => $user->first_name,
+                    'last_name' => $user->last_name,
+                    'name' => $user->name ?: trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? '')),
+                    'role' => $user->role,
+                    'department' => $user->department,
+                    'branch' => $user->branch,
+                    'branch_id' => $user->branch_id,
+                    'phone' => $user->phone_number,
+                    'is_readonly_cms' => true,
+                ],
+                'is_first_login' => false,
+            ]);
+        }
+
         $parts = explode(' ', $user->client_name ?? '');
         $firstName = $parts[0] ?? '';
         $lastName = implode(' ', array_slice($parts, 1));
@@ -777,7 +804,7 @@ class AuthController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        if ($user instanceof Employee) {
+        if ($user instanceof Employee || $user instanceof \Ticketing\Auth\Dto\AuthenticatedUserDto) {
             return response()->json(['message' => 'SSO users cannot edit profile details locally.'], 403);
         }
 

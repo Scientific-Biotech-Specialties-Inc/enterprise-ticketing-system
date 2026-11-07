@@ -1,3 +1,4 @@
+import { safeUrl } from '@/utils/safeUrl';
 import React, { useState, useEffect } from 'react';
 import { ShieldAlert, AlertTriangle, Clock, Bell } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -144,7 +145,7 @@ export default function TicketInfoModal({ ticket, onClose, onReassignSuccess }) 
             </div>
             <div className="bg-gray-50 rounded-xl p-3">
               <p className="text-xs font-bold uppercase tracking-wider text-slate-dark mb-0.5">Last Updated</p>
-              <p className="text-sm font-normal text-slate-600">{ticket.lastUpdate ?? '—'}</p>
+              <p className="text-sm font-normal text-slate-600">{ticket.lastUpdate ? formatDisplayDate(ticket.lastUpdate) : '—'}</p>
             </div>
           </div>
 
@@ -182,7 +183,7 @@ export default function TicketInfoModal({ ticket, onClose, onReassignSuccess }) 
               <div className="flex flex-wrap gap-2">
                 {ticket.attachments.map((file, idx) => {
                   const fName = typeof file === 'string' ? file.split('/').pop() : (file.name || file.file_name || `Attachment-${idx + 1}`);
-                  const fUrl = typeof file === 'string' ? file : (file.url || file.file_path || file.path || '');
+                  const fUrl = safeUrl(typeof file === 'string' ? file : (file.url || file.file_path || file.path || ''));
                   const isQuarantined = Boolean(
                     typeof file === 'object' && (file?.is_quarantined || file?.quarantined || file?.status === 'quarantined' || file?.virus_detected)
                   );
@@ -228,7 +229,7 @@ export default function TicketInfoModal({ ticket, onClose, onReassignSuccess }) 
               <div className="flex flex-wrap gap-2">
                 {(ticket.proofAttachments || ticket.proofFiles).map((file, idx) => {
                   const fName = typeof file === 'string' ? file.split('/').pop() : (file.name || file.file_name || `Proof-${idx + 1}`);
-                  const fUrl = typeof file === 'string' ? file : (file.url || file.file_path || file.path || '');
+                  const fUrl = safeUrl(typeof file === 'string' ? file : (file.url || file.file_path || file.path || ''));
                   const isQuarantined = Boolean(
                     typeof file === 'object' && (file?.is_quarantined || file?.quarantined || file?.status === 'quarantined' || file?.virus_detected)
                   );

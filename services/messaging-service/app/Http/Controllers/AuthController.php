@@ -160,8 +160,9 @@ class AuthController extends Controller
                 'last_name' => $employee->last_name,
                 'role' => $employee->role,
                 'department' => $employee->department,
-                'is_active' => (bool) data_get($presence, 'is_active', false),
-                'last_seen_at' => data_get($presence, 'last_seen_at', optional($employee->last_seen_at)->toISOString()),
+                'is_active' => (bool) $employee->is_active,
+                'presence' => \App\Support\Presence::state((bool) $employee->is_active, $employee->last_seen_at ?: data_get($presence, 'last_seen_at')),
+                'last_seen_at' => ($employee->last_seen_at ?: data_get($presence, 'last_seen_at')) ? \Carbon\Carbon::parse($employee->last_seen_at ?: data_get($presence, 'last_seen_at'))->toISOString() : null,
             ];
         });
 
@@ -383,18 +384,20 @@ class AuthController extends Controller
 
         Cache::store('redis')->put($redisKey, $presence, 60);
 
-        $wasInactive = !$user->is_active;
+        // Only dispatch when the employee was not already Online, so a steady heartbeat does not spam the channel.
+        $wasOffline = !\App\Support\Presence::isOnline($user->last_seen_at);
 
+        // Heartbeat records presence only; it never changes the is_active account flag.
         $user->last_seen_at = now();
-        $user->is_active = true;
         $user->save();
 
-        if ($wasInactive) {
+        if ($wasOffline) {
             \App\Events\EmployeeStatusChanged::dispatch($user->refresh());
         }
 
         return response()->json([
-            'is_active' => true,
+            'is_active' => (bool) $user->is_active,
+            'presence' => \App\Support\Presence::ONLINE,
             'last_seen_at' => $user->last_seen_at->toISOString(),
         ]);
     }

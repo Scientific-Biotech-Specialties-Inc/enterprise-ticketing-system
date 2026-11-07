@@ -133,9 +133,10 @@ export default function EmployeeAssigned() {
   const [reassignTicket, setReassignTicket] = useState(null); // reassign flow
   const [deniedReassignTicket, setDeniedReassignTicket] = useState(null); // denied reassign → skip accept, show update
 
-  const loadTickets = useCallback(async ({ forceRefresh = false } = {}) => {
+  const loadTickets = useCallback(async ({ forceRefresh = false, source = 'manual' } = {}) => {
     const email = user?.email || 'frontend@example.com';
-    setLoading(true);
+    // Realtime ticks (websocket/poll) refresh silently instead of flashing the skeleton.
+    if (source !== 'websocket' && source !== 'poll') setLoading(true);
     setLoadError('');
     try {
       const list = await getEmployeeAssignedTickets({ employeeEmail: email, forceRefresh });
@@ -172,9 +173,9 @@ export default function EmployeeAssigned() {
 
 
 
-  const handleRealtimeRefresh = useCallback(() => {
+  const handleRealtimeRefresh = useCallback((context) => {
     clearEmployeeTicketsCache();
-    loadTickets({ forceRefresh: true });
+    loadTickets({ forceRefresh: true, source: context?.source || 'poll' });
   }, [loadTickets]);
 
   useRealtimeRefresh({

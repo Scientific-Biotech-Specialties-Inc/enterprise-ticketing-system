@@ -47,7 +47,7 @@ class WorkLogController extends Controller
 
         $validated = $request->validate([
             'ticket_id'        => 'nullable|integer|exists:tickets,ticket_ID',
-            'task_description' => 'required|string|max:1000',
+            'task_description' => ['required', 'string', 'max:1000', new \App\Rules\NoMarkup()],
             'hours_spent'      => 'required|numeric|min:0.1|max:24',
             'log_date'         => 'required|date|before_or_equal:today',
         ]);

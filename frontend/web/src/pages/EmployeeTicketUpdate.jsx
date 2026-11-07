@@ -1,3 +1,4 @@
+import { safeUrl } from '@/utils/safeUrl';
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -698,7 +699,7 @@ export default function EmployeeTicketUpdate() {
                     <div className="flex flex-col gap-2">
                       {(ticket.proofAttachments || ticket.proofFiles).map((file, idx) => {
                         const fName = typeof file === 'string' ? file.split('/').pop() : (file.name || file.file_name || `Proof-${idx + 1}`);
-                        const fUrl = typeof file === 'string' ? file : (file.url || file.file_path || file.path || '');
+                        const fUrl = safeUrl(typeof file === 'string' ? file : (file.url || file.file_path || file.path || ''));
                         const isQuarantined = Boolean(
                           typeof file === 'object' && (file?.is_quarantined || file?.quarantined || file?.status === 'quarantined' || file?.virus_detected)
                         );
@@ -907,7 +908,7 @@ export default function EmployeeTicketUpdate() {
                 <div className="flex flex-wrap gap-3">
                   {ticket.attachments.map((file, idx) => {
                     const fName = typeof file === 'string' ? file.split('/').pop() : (file.name || file.file_name || `Attachment-${idx + 1}`);
-                    const fUrl = typeof file === 'string' ? file : (file.url || file.file_path || file.path || '');
+                    const fUrl = safeUrl(typeof file === 'string' ? file : (file.url || file.file_path || file.path || ''));
                     const isQuarantined = Boolean(
                       typeof file === 'object' && (file?.is_quarantined || file?.quarantined || file?.status === 'quarantined' || file?.virus_detected)
                     );
