@@ -64,6 +64,11 @@ vi.mock('@/services/ticketService', () => ({
   updateTicket: vi.fn(() => Promise.resolve({})),
 }));
 
+// Mock useRealtimeRefresh
+vi.mock('@/hooks/useRealtimeRefresh', () => ({
+  default: vi.fn(),
+}));
+
 // Mock messagingEcho
 vi.mock('@/services/messagingEcho', () => ({
   getMessagingEcho: vi.fn(() => ({
