@@ -120,7 +120,7 @@ class TicketController extends Controller
             'branch_id' => ['nullable', 'string', 'max:64', 'exists:branches,slug'],
             'title' => ['required', 'string', 'max:255', $this->ticketService->rejectMarkup(), $this->ticketService->validateProperCasing()],
             'description' => ['required', 'string', $this->ticketService->rejectMarkup()],
-            'attachments' => ['nullable', 'array'],
+            'attachments' => ['nullable', 'array', 'max:' . \App\Services\TicketConfigurationService::getMaxFileCount()],
             'attachments.*' => ['integer'],
             'origin' => ['nullable', 'string', 'max:50'],
             'conversation_id' => ['nullable', 'string', 'max:64'],
@@ -220,7 +220,7 @@ class TicketController extends Controller
             'branch_id' => ['nullable', 'string', 'max:64', 'exists:branches,slug'],
             'title' => ['required', 'string', 'max:255', $this->ticketService->rejectMarkup(), $this->ticketService->validateProperCasing()],
             'description' => ['required', 'string', $this->ticketService->rejectMarkup()],
-            'attachments' => ['nullable', 'array'],
+            'attachments' => ['nullable', 'array', 'max:' . \App\Services\TicketConfigurationService::getMaxFileCount()],
             'attachments.*' => ['integer'],
         ]);
 

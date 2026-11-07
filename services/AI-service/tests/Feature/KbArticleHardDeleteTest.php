@@ -33,22 +33,10 @@ class KbArticleHardDeleteTest extends TestCase
      */
     protected function superAdminHeaders(string $actorName = 'Super Admin'): array
     {
-        $header = base64_encode(json_encode(['alg' => 'RS256', 'typ' => 'JWT']));
-        $payload = base64_encode(json_encode([
-            'sub' => 1,
-            'name' => $actorName,
-            'role' => 'Super Admin',
-            'department' => 'Super Admin',
-            'exp' => time() + 3600,
-        ]));
-        $sig = base64_encode('sig');
-        $token = "{$header}.{$payload}.{$sig}";
+        // Spec 0036 (AC-11): identity comes from a verified token, never from an unsigned payload.
+        $this->actingAsSuperAdmin($actorName);
 
-        return [
-            'Authorization' => "Bearer {$token}",
-            'X-Actor-Name' => $actorName,
-            'Accept' => 'application/json',
-        ];
+        return ['Accept' => 'application/json'];
     }
 
     /**
@@ -56,21 +44,9 @@ class KbArticleHardDeleteTest extends TestCase
      */
     protected function employeeHeaders(): array
     {
-        $header = base64_encode(json_encode(['alg' => 'RS256', 'typ' => 'JWT']));
-        $payload = base64_encode(json_encode([
-            'sub' => 99,
-            'name' => 'Technician User',
-            'role' => 'technician',
-            'department' => 'Support',
-            'exp' => time() + 3600,
-        ]));
-        $sig = base64_encode('sig');
-        $token = "{$header}.{$payload}.{$sig}";
+        $this->actingAsEmployee();
 
-        return [
-            'Authorization' => "Bearer {$token}",
-            'Accept' => 'application/json',
-        ];
+        return ['Accept' => 'application/json'];
     }
 
     /**

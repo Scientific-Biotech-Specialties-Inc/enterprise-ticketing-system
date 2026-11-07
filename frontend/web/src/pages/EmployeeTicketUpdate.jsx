@@ -30,6 +30,7 @@ import DelegateTicketModal from '@/components/employee/DelegateTicketModal';
 import ReassignmentDisapprovalBanner from '@/components/employee/ReassignmentDisapprovalBanner';
 import { isReassignmentDenied, hasPendingReassignment } from '@/utils/reassignmentUtils';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
+import useMaxFileCount from '@/hooks/useMaxFileCount';
 import { useAuth } from '@/context/AuthContext';
 import FilePreviewModal from '@/components/FilePreviewModal';
 import InternalNotesSection from '@/components/InternalNotesSection';
@@ -60,6 +61,7 @@ export default function EmployeeTicketUpdate() {
   const [statusDraft, setStatusDraft] = useState(state?.ticket?.status ?? '');
   const [remarks, setRemarks] = useState('');
   const [attachedFiles, setAttachedFiles] = useState([]);
+  const maxFileCount = useMaxFileCount();
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [showStatusConfirm, setShowStatusConfirm] = useState(false);
@@ -367,7 +369,9 @@ export default function EmployeeTicketUpdate() {
 
   const handleFileChange = (e) => {
     const selected = Array.from(e.target.files);
-    const fileError = validateFiles(selected);
+    const fileError = selected.length > maxFileCount
+      ? `You can attach a maximum of ${maxFileCount} files.`
+      : validateFiles(selected);
     if (fileError) {
       setErrorMessage(fileError);
       setAttachedFiles([]);

@@ -307,7 +307,9 @@ class AiChatController extends Controller
 
     /**
      * DELETE /api/conversations/{id}/messages/{messageId}
-     * Removes a specific message from a conversation's history.
+     * Individual messages are part of the support record (they feed escalation handoffs and
+     * ticket context), so they can never be deleted one by one. The route stays registered so
+     * older clients get a clear 403 instead of a 404.
      */
     public function deleteMessage(Request $request, string $id, string $messageId)
     {
@@ -320,32 +322,16 @@ class AiChatController extends Controller
             return $denied;
         }
 
+        // Keep the ownership check first so another user's conversation still reads as 404.
         $conversation = AiConversation::find($id);
-        if (!$conversation) {
-            return response()->json([
-                'success' => true,
-                'message' => 'Conversation not found',
-            ]);
-        }
-
-        if (!$this->canAccess($conversation, $auth)) {
+        if (!$conversation || !$this->canAccess($conversation, $auth)) {
             return $this->conversationNotFound();
         }
 
-        $messages = is_array($conversation->messages) ? $conversation->messages : [];
-        $updated = array_values(array_filter($messages, function ($m) use ($messageId) {
-            $mId = $m['id'] ?? null;
-            return (string) $mId !== (string) $messageId;
-        }));
-
-        $conversation->messages = $updated;
-        $conversation->save();
-
         return response()->json([
-            'success' => true,
-            'message' => 'Message deleted successfully',
-            'messages' => $updated,
-        ]);
+            'success' => false,
+            'message' => 'Chat messages cannot be deleted.',
+        ], 403);
     }
 
     /**

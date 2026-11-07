@@ -10,12 +10,15 @@ class GeminiService
     protected string $apiKey;
     protected string $model;
     protected string $baseUrl;
+    protected int $timeout;
     protected RagService $ragService;
 
     public function __construct(?RagService $ragService = null)
     {
         $this->apiKey = config('services.gemini.api_key') ?? env('GEMINI_API_KEY', '');
-        $this->model = config('services.gemini.model') ?? env('GEMINI_MODEL', 'gemini-3.5-flash-lite');
+        $this->model = config('services.gemini.model') ?? env('GEMINI_MODEL', 'gemini-3.5-flash');
+        // Spec 0036 (AC-10): at most 15 seconds, then escalate to a manual ticket.
+        $this->timeout = max(1, min((int) config('services.gemini.timeout', 15), 15));
         $this->baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models';
         $this->ragService = $ragService ?? app(RagService::class);
     }
@@ -82,7 +85,14 @@ class GeminiService
         ];
 
         if (!empty($lastUserQuery) && !$isGreeting) {
-            $ragResult = $this->ragService->retrieve($lastUserQuery, 5, 0.20);
+            // Spec 0036 (AC-8): threshold from KB_MIN_SCORE. If the query cannot be embedded we do not
+            // fall back to any other vector space; the customer goes straight to the manual ticket path.
+            try {
+                $ragResult = $this->ragService->retrieve($lastUserQuery, 5);
+            } catch (\App\Exceptions\EmbeddingFailedException $e) {
+                Log::warning('RAG query embedding failed. Escalating to manual ticket creation.', ['reason' => $e->getMessage()]);
+                return $this->fallbackToManual($messages, 'Query embedding failed: ' . $e->getMessage());
+            }
 
             // =========================================================================
             // FALLBACK PATH: No Published article matched customer query
@@ -123,7 +133,7 @@ class GeminiService
         }
 
         try {
-            $url = "{$this->baseUrl}/{$this->model}:generateContent?key={$this->apiKey}";
+            $url = "{$this->baseUrl}/{$this->model}:generateContent";
 
             // 4. Construct System Instruction with Published Article Sources Grounding
             $systemInstruction = "You are an expert enterprise technical support AI assistant for an industrial, equipment, and IT ticketing platform. " .
@@ -197,7 +207,8 @@ class GeminiService
 
             $response = Http::withHeaders([
                 'Content-Type' => 'application/json',
-            ])->timeout(15)->post($url, $payload);
+                'x-goog-api-key' => $this->apiKey,
+            ])->connectTimeout(5)->timeout($this->timeout)->post($url, $payload);
 
             if (!$response->successful()) {
                 Log::error('Gemini API request failed', [
@@ -438,7 +449,7 @@ class GeminiService
         // Try Gemini if API key is present
         if (!empty($this->apiKey)) {
             try {
-                $url = "{$this->baseUrl}/{$this->model}:generateContent?key={$this->apiKey}";
+                $url = "{$this->baseUrl}/{$this->model}:generateContent";
                 $systemInstruction = "You are an enterprise hospital and clinic IT/Service desk triage assistant.\n"
                     . "Your job is to classify incoming support tickets into one of two departments:\n"
                     . "1. 'IT': For software, applications, portals, account access, login/passwords, network/WiFi/internet, database, EHR/EMR, UI bugs, server errors, digital system timeouts, or operating system issues. Software issues DO NOT require physical equipment/hardware.\n"
@@ -462,7 +473,7 @@ class GeminiService
                     ]
                 ];
 
-                $response = Http::withHeaders(['Content-Type' => 'application/json'])
+                $response = Http::withHeaders(['Content-Type' => 'application/json', 'x-goog-api-key' => $this->apiKey])
                     ->timeout(6)
                     ->post($url, $payload);
 

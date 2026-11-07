@@ -436,7 +436,12 @@ services:
       DB_USERNAME: root
       DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+      # Spec 0036: chat timeout (max 15s) and Knowledge Base embedding settings.
+      GEMINI_TIMEOUT_SECONDS: ${GEMINI_TIMEOUT_SECONDS:-15}
+      KB_EMBEDDING_MODEL: ${KB_EMBEDDING_MODEL:-gemini-embedding-001}
+      KB_EMBEDDING_DIMS: ${KB_EMBEDDING_DIMS:-768}
+      KB_MIN_SCORE: ${KB_MIN_SCORE:-0.55}
       CLAMAV_HOST: clamav
       CLAMAV_PORT: 3310
       # Staff JWT verification (VerifyEmployeeJwt): token revocation lookup and branch lookup from auth-service.

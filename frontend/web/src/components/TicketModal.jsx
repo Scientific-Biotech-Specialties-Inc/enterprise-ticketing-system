@@ -4,6 +4,7 @@ import TitleCasingModal from '@/components/TitleCasingModal';
 import { formatProperTitleCase, needsProperCasing } from '@/utils/titleCaseUtils';
 import { getMaxOpenTicketsLimit } from '@/data/ticketLimitConfig';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
+import useMaxFileCount from '@/hooks/useMaxFileCount';
 
 const initialFormData = {
   title: '',
@@ -41,6 +42,7 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
   });
   const [formData, setFormData] = useState(initialFormData);
   const [attachments, setAttachments] = useState([]);
+  const maxFileCount = useMaxFileCount();
   const [fileError, setFileError] = useState('');
   const [touched, setTouched] = useState({});
   const [titleCasingData, setTitleCasingData] = useState(null);
@@ -123,6 +125,12 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
     if (!files.length) return;
 
     setFileError('');
+
+    if (attachments.length + files.length > maxFileCount) {
+      setFileError(`You can attach a maximum of ${maxFileCount} files.`);
+      event.target.value = '';
+      return;
+    }
 
     let currentTotal = attachments.reduce((acc, f) => acc + (f.size || 0), 0);
     const validFiles = [];

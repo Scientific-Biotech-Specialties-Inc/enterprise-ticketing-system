@@ -22,6 +22,9 @@ class KbArticle extends Model
         'size',
         'status',
         'processing_status',
+        'content_hash',
+        'index_error',
+        'probe_score',
         'tags',
         'description',
         'content',
@@ -35,6 +38,7 @@ class KbArticle extends Model
         'history' => 'array',
         'published_at' => 'datetime',
         'archived_at' => 'datetime',
+        'probe_score' => 'float',
     ];
 
     public function chunks()

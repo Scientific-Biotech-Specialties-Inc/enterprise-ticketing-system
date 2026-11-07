@@ -89,6 +89,25 @@ class ConfigAccessTest extends TestCase
         $this->actingAs($this->staff('Super Admin'))->putJson('/api/ticket-configurations/bogus_key', [])->assertStatus(422);
     }
 
+    /**
+     * Regression: a real auth module token has no emp_id claim and this service has no employees
+     * table, so the verifier yields a DTO with only role, email and jti. That superadmin must not get 403.
+     */
+    public function test_superadmin_from_real_token_shape_without_emp_id_reaches_the_controller(): void
+    {
+        $fromJwt = fn (string $role) => new AuthenticatedUserDto([
+            'email' => 'superadmin@hospital.com', 'role' => $role, 'department' => 'superadmin', 'jti' => 'abc123', 'exp' => time() + 600,
+        ]);
+
+        $this->actingAs($fromJwt('superadmin'))->putJson('/api/ticket-configurations/bogus_key', [])->assertStatus(422);
+        $this->actingAs($fromJwt('superadmin'))->putJson('/api/ticket-configurations/system-status', ['status' => 'Bogus'])->assertStatus(422);
+        $this->actingAs($fromJwt('service'))->putJson('/api/ticket-configurations/bogus_key', [])->assertStatus(403);
+
+        // No jti means it did not come through signature verification.
+        $unverified = new AuthenticatedUserDto(['email' => 'x@y.com', 'role' => 'superadmin']);
+        $this->actingAs($unverified)->putJson('/api/ticket-configurations/bogus_key', [])->assertStatus(403);
+    }
+
     public function test_email_dispatch_is_for_internal_services_only(): void
     {
         $headers = $this->internal();

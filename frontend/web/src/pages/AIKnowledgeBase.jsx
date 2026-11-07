@@ -165,12 +165,29 @@ const MOCK_DOCUMENTS = [
 ];
 
 const UPLOAD_STEPS = [
-  'Scanning for Malware',
-  'Uploading Document',
-  'Upload Complete',
-  'Extracting Text',
-  'Chunking Document',
-  'Generating Embeddings',
+  'Scanning for Malware with ClamAV',
+  'Uploading Document File',
+  'Extracting Text Content',
+  'Chunking Document Sections',
+  'Generating Gemini Vector Embeddings',
+  'Indexing Knowledge Base',
+  'Ready for AI Search',
+];
+
+const MANUAL_CREATE_STEPS = [
+  'Validating Content & Metadata',
+  'Chunking Content into Semantic Sections',
+  'Generating Gemini Vector Embeddings',
+  'Indexing Knowledge Base for AI Search',
+  'Ready for AI Search',
+];
+
+const CSV_STEPS = [
+  'Scanning Spreadsheet with ClamAV',
+  'Uploading CSV File',
+  'Parsing SOP Rows and Continuation Steps',
+  'Chunking Extracted SOP Sections',
+  'Generating Gemini Vector Embeddings',
   'Indexing Knowledge Base',
   'Ready for AI Search',
 ];
@@ -218,7 +235,51 @@ const processingColors = {
   'Ready for AI Search': 'bg-emerald-50 text-emerald-700 border-emerald-200',
   'Ready': 'bg-emerald-50 text-emerald-700 border-emerald-200',
   'Processing': 'bg-blue-50 text-blue-700 border-blue-200',
+  'Indexing': 'bg-blue-50 text-blue-700 border-blue-200',
   'Failed': 'bg-red-50 text-red-700 border-red-200',
+  'Indexing failed': 'bg-red-50 text-red-700 border-red-200',
+};
+
+// Spec 0036: indexing states reported by the AI service.
+const isIndexingInProgress = (doc) =>
+  doc?.processingStatus === 'Processing' || doc?.processingStatus === 'Indexing' || doc?.status === 'Processing';
+const isIndexingFailed = (doc) =>
+  ['Failed', 'Indexing failed', 'Indexing Failed'].includes(doc?.processingStatus);
+const isPublishedDoc = (doc) =>
+  (doc?.publishState || doc?.status) === 'Published' || doc?.status === 'Ready';
+const formatProbeScore = (score) =>
+  (typeof score === 'number' && !Number.isNaN(score) ? score.toFixed(2) : 'n/a');
+
+// Spec 0036 fields from the AI service article payload.
+const indexingFields = (item) => ({
+  indexError: item?.index_error ?? null,
+  probeScore: item?.probe_score ?? null,
+  lowRetrievability: Boolean(item?.low_retrievability),
+});
+
+// The AI service stores times in UTC. History timestamps come without a zone ("Y-m-d H:i:s"),
+// so they are read as UTC; a bare date (old mock data) is read as local midnight.
+const parseServerDate = (value) => {
+  if (!value) return null;
+  const s = String(value).trim();
+  let d;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) d = new Date(`${s}T00:00:00`);
+  else if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s)) d = new Date(s);
+  else d = new Date(`${s.replace(' ', 'T')}Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+// Upload date is when the current file was uploaded: the latest replacement, else creation.
+const fileUploadedAt = (item) => {
+  const latestReplacement = (Array.isArray(item?.history) ? item.history : []).find((h) => h?.type === 'file_replacement');
+  return parseServerDate(latestReplacement?.timestamp)?.toISOString() || item?.created_at || null;
+};
+
+const formatUploadDate = (value) => {
+  const d = parseServerDate(value);
+  return d
+    ? d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : '—';
 };
 
 const fileTypeIcons = {
@@ -226,6 +287,9 @@ const fileTypeIcons = {
   DOCX: FileSpreadsheet,
   DOC: FileSpreadsheet,
   TXT: File,
+  CSV: FileSpreadsheet,
+  ARTICLE: Book,
+  MANUAL: Book,
 };
 
 function StatCard({ icon: Icon, label, value, sub, bgClass }) {
@@ -243,7 +307,7 @@ function StatCard({ icon: Icon, label, value, sub, bgClass }) {
   );
 }
 
-function EmptyState({ onUpload, title, description }) {
+function EmptyState({ onUpload, onCreate, title, description }) {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
       <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-3">
@@ -253,16 +317,27 @@ function EmptyState({ onUpload, title, description }) {
         {title || "No knowledge documents have been uploaded yet."}
       </h3>
       <p className="text-xs text-muted-slate mb-5 max-w-sm">
-        {description || "Upload PDF, DOC, DOCX, or TXT files to build your AI knowledge base."}
+        {description || "Create articles directly or upload PDF, DOCX, and CSV files to build your AI knowledge base."}
       </p>
-      <Button
-        onClick={onUpload}
-        size="sm"
-        className="gap-2 text-xs"
-      >
-        <Upload size={14} />
-        Upload Document
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button
+          onClick={onCreate}
+          size="sm"
+          className="gap-2 text-xs bg-[#252578] hover:bg-[#1f1f66] text-white"
+        >
+          <Plus size={14} />
+          Create Article
+        </Button>
+        <Button
+          onClick={onUpload}
+          variant="outline"
+          size="sm"
+          className="gap-2 text-xs"
+        >
+          <Upload size={14} />
+          Upload Document
+        </Button>
+      </div>
     </div>
   );
 }
@@ -539,6 +614,8 @@ function DiscardConfirmModal({ isOpen, onClose, onConfirm, title, description })
 
 function PipelineProgressView({
   selectedFile,
+  displayTitle,
+  displaySub,
   progress,
   currentStepIdx,
   uploadError,
@@ -549,7 +626,7 @@ function PipelineProgressView({
   const totalSize = selectedFile ? (selectedFile.size / 1024 / 1024).toFixed(1) : 0;
   return (
     <div className="space-y-4">
-      {selectedFile && (
+      {selectedFile ? (
         <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-100">
           <FileText size={24} className="text-[#252578] shrink-0" />
           <div className="flex-1 min-w-0">
@@ -558,7 +635,16 @@ function PipelineProgressView({
           </div>
           <span className="text-xs font-semibold text-[#252578]">{Math.round(progress)}%</span>
         </div>
-      )}
+      ) : displayTitle ? (
+        <div className="flex items-center gap-3 p-3 bg-[#252578]/5 rounded-lg border border-[#252578]/20">
+          <Book size={24} className="text-[#252578] shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-gray-900 truncate">{displayTitle}</p>
+            <p className="text-xs text-gray-500">{displaySub || 'Direct Article (Structured Markdown)'}</p>
+          </div>
+          <span className="text-xs font-semibold text-[#252578]">{Math.round(progress)}%</span>
+        </div>
+      ) : null}
 
       <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
         <div
@@ -1029,24 +1115,40 @@ function ReplaceConfirmModal({ isOpen, doc, onClose, onReplaceComplete, onProces
   );
 }
 
-function CreateArticleConfirmModal({ isOpen, onClose, onConfirm, form, selectedFile }) {
+function CreateArticleConfirmModal({ isOpen, onClose, onConfirm, form, selectedFile, mode = 'manual' }) {
   if (!isOpen) return null;
+  const isCsv = mode === 'bulk' || Boolean(selectedFile?.name?.toLowerCase()?.endsWith('.csv'));
+  const isFile = mode === 'file' || Boolean(selectedFile && !isCsv);
+  const isManual = mode === 'manual' || (!selectedFile && !isCsv);
   const fileSizeMb = selectedFile ? (selectedFile.size / (1024 * 1024)).toFixed(2) : '0';
-  const isCsv = selectedFile?.name?.toLowerCase()?.endsWith('.csv');
+  const wordCount = form.content ? form.content.trim().split(/\s+/).filter(Boolean).length : 0;
+  const charCount = form.content?.length || 0;
 
   return (
     <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
       <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[#252578]/10 text-[#252578]">
-          {isCsv ? <FileSpreadsheet size={24} className="text-[#252578]" /> : <FileText size={24} className="text-[#252578]" />}
+          {isCsv ? (
+            <FileSpreadsheet size={24} className="text-[#252578]" />
+          ) : isFile ? (
+            <FileText size={24} className="text-[#252578]" />
+          ) : (
+            <Book size={24} className="text-[#252578]" />
+          )}
         </div>
         <h2 className="mt-4 text-lg font-bold text-gray-900 text-center">
-          {isCsv ? 'Confirm Bulk CSV Knowledge Import' : 'Confirm Knowledge Article Creation'}
+          {isCsv
+            ? 'Confirm Bulk CSV Knowledge Import'
+            : isFile
+              ? 'Confirm Knowledge Document Upload'
+              : 'Confirm Knowledge Article Creation'}
         </h2>
         <p className="mt-2 text-sm text-gray-600 text-center">
           {isCsv
             ? 'Each valid row in this CSV will be parsed into an individual knowledge article, verified with ClamAV, and indexed.'
-            : 'Please review the article details before starting the document processing pipeline.'}
+            : isFile
+              ? 'Please review the document details before starting the antivirus and processing pipeline.'
+              : 'Please review your article content and details before submitting for AI indexing.'}
         </p>
 
         <div className="mt-4 rounded-xl bg-gray-50 border border-gray-100 p-4 space-y-2.5 text-xs">
@@ -1071,7 +1173,7 @@ function CreateArticleConfirmModal({ isOpen, onClose, onConfirm, form, selectedF
                 <span className="font-medium text-gray-700">Read from CSV columns</span>
               </div>
             </>
-          ) : (
+          ) : isFile ? (
             <>
               <div className="flex justify-between items-start gap-2">
                 <span className="font-semibold text-gray-500 uppercase tracking-wider text-[10px]">Title:</span>
@@ -1086,6 +1188,41 @@ function CreateArticleConfirmModal({ isOpen, onClose, onConfirm, form, selectedF
                 <span className="font-medium text-gray-900 text-right truncate max-w-[240px]">
                   {selectedFile?.name} ({fileSizeMb} MB)
                 </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="font-semibold text-gray-500 uppercase tracking-wider text-[10px]">Antivirus Scan:</span>
+                <span className="font-semibold text-emerald-700">ClamAV Daemon Enabled</span>
+              </div>
+              {form.machine && (
+                <div className="flex justify-between items-center">
+                  <span className="font-semibold text-gray-500 uppercase tracking-wider text-[10px]">Machine:</span>
+                  <span className="font-medium text-gray-900">{form.machine}</span>
+                </div>
+              )}
+              {form.version && (
+                <div className="flex justify-between items-center">
+                  <span className="font-semibold text-gray-500 uppercase tracking-wider text-[10px]">Version:</span>
+                  <span className="font-medium text-gray-900">{form.version}</span>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="flex justify-between items-start gap-2">
+                <span className="font-semibold text-gray-500 uppercase tracking-wider text-[10px]">Title:</span>
+                <span className="font-medium text-gray-900 text-right truncate max-w-[240px]">{form.title}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="font-semibold text-gray-500 uppercase tracking-wider text-[10px]">Category:</span>
+                <span className="font-medium text-gray-900">{form.category}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="font-semibold text-gray-500 uppercase tracking-wider text-[10px]">Authoring Mode:</span>
+                <span className="font-semibold text-[#252578]">Direct Article (Markdown / Text)</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="font-semibold text-gray-500 uppercase tracking-wider text-[10px]">Content Size:</span>
+                <span className="font-medium text-gray-800">{wordCount} words ({charCount} chars)</span>
               </div>
               {form.machine && (
                 <div className="flex justify-between items-center">
@@ -1110,7 +1247,7 @@ function CreateArticleConfirmModal({ isOpen, onClose, onConfirm, form, selectedF
         </div>
 
         <p className="mt-2 text-[11px] text-gray-400 text-center">
-          Note: Imported articles will be created in Draft status and will not be accessible to the AI chatbot until published.
+          Note: Articles are created in Draft status and will not be accessible to the AI chatbot until published.
         </p>
 
         <div className="mt-6 flex justify-end gap-3">
@@ -1126,7 +1263,7 @@ function CreateArticleConfirmModal({ isOpen, onClose, onConfirm, form, selectedF
             onClick={onConfirm}
             className="px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-[#252578] hover:bg-[#1f1f66] transition-all cursor-pointer"
           >
-            {isCsv ? 'Confirm & Import CSV' : 'Confirm & Upload'}
+            {isCsv ? 'Confirm & Import CSV' : isFile ? 'Confirm & Upload' : 'Confirm & Create Article'}
           </button>
         </div>
       </div>
@@ -1208,27 +1345,33 @@ function CategoriesManager({ isOpen, onClose }) {
   );
 }
 
-function UploadModal({ isOpen, onClose, onUploadComplete }) {
-  const [uploadMode, setUploadMode] = useState('single'); // 'single' | 'bulk'
+function UploadModal({ isOpen, onClose, onUploadComplete, initialMode = 'manual' }) {
+  const [uploadMode, setUploadMode] = useState(initialMode || 'manual'); // 'manual' | 'file' | 'bulk'
   const [step, setStep] = useState('form');
   const [progress, setProgress] = useState(0);
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
-  const [form, setForm] = useState({ title: '', category: '', machine: '', version: '', description: '', tags: '' });
+  const [form, setForm] = useState({ title: '', category: '', machine: '', version: '', description: '', tags: '', content: '' });
   const [errors, setErrors] = useState({});
   const [uploadError, setUploadError] = useState('');
   const [isMalwareError, setIsMalwareError] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showDiscardModal, setShowDiscardModal] = useState(false);
 
+  useEffect(() => {
+    if (isOpen) {
+      setUploadMode(initialMode || 'manual');
+    }
+  }, [isOpen, initialMode]);
+
   const reset = () => {
-    setUploadMode('single');
+    setUploadMode(initialMode || 'manual');
     setStep('form');
     setProgress(0);
     setCurrentStepIdx(0);
     setSelectedFile(null);
-    setForm({ title: '', category: '', machine: '', version: '', description: '', tags: '' });
+    setForm({ title: '', category: '', machine: '', version: '', description: '', tags: '', content: '' });
     setErrors({});
     setUploadError('');
     setIsMalwareError(false);
@@ -1241,6 +1384,7 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
   const hasUnsavedData = Boolean(
     form.title.trim() ||
     form.category ||
+    form.content.trim() ||
     selectedFile ||
     form.machine.trim() ||
     form.version.trim() ||
@@ -1274,11 +1418,10 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
   };
 
   const isBulkMode = uploadMode === 'bulk' || Boolean(selectedFile?.name?.toLowerCase()?.endsWith('.csv'));
-  const isCsv = isBulkMode;
+  const isManualMode = uploadMode === 'manual';
+  const isFileMode = uploadMode === 'file' && !isBulkMode;
 
   const handleDownloadTemplate = () => {
-    // Exact 7 columns requested: Title,Steps,Symptoms,Machine_Model,Category,Warning,Tags
-    // Contains Option B example (consecutive rows for steps with empty Title)
     const csvContent =
       'Title,Steps,Symptoms,Machine_Model,Category,Warning,Tags\r\n' +
       '"Printer Paper Jam Error E-03","1. Turn off the printer power switch.","Error Code E-03 on screen; paper stuck in feed rollers","Canon X120","Troubleshooting Guides","Turn off power before touching internal rollers.","printer;paper jam;e-03"\r\n' +
@@ -1298,6 +1441,23 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
     URL.revokeObjectURL(url);
   };
 
+  const handleInsertTemplate = (type) => {
+    let tpl = '';
+    if (type === 'troubleshooting') {
+      tpl = `### Problem Description\nDescribe the observed error code, malfunction, or unexpected symptom here.\n\n### Prerequisites & Tools\n- Required safety gear, tools, or administrative permissions.\n\n### Troubleshooting Steps\n1. Check power connection and verify indicator lights.\n2. Open diagnostic menu and check event logs.\n3. Perform calibration and clean optical sensors.\n4. Restart the unit and test normal print/operation.\n\n### Verification\nConfirm that error indicators are cleared and system operates without failure.\n\n### Safety & Operational Warnings\nAlways isolate power before handling internal mechanical or high-voltage assemblies.`;
+    } else if (type === 'faq') {
+      tpl = `### Question / Common Issue\nWhat is this error and when does it typically occur?\n\n### Resolution & Explanation\nDetailed root cause explanation and exact corrective steps.\n\n### Additional Help\nContact the IT service desk if symptoms persist after following these steps.`;
+    } else if (type === 'sop') {
+      tpl = `### Purpose & Scope\nStandard operating procedure for maintenance and daily checks.\n\n### Step-by-Step Procedure\n1. Initial inspection and workspace preparation.\n2. Execute operational workflow according to specification.\n3. Final verification and recording in logbook.\n\n### Quality & Compliance Criteria\nEnsure all parameters meet company and manufacturer safety standards.`;
+    }
+
+    setForm((prev) => ({
+      ...prev,
+      content: prev.content ? `${prev.content}\n\n${tpl}` : tpl,
+    }));
+    if (errors.content) setErrors((prev) => ({ ...prev, content: '' }));
+  };
+
   const handleFileValidateAndSet = (file) => {
     if (!file) return;
 
@@ -1310,14 +1470,14 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
 
     const validExtensions = (uploadMode === 'bulk' || ext === 'csv')
       ? ['csv']
-      : ['pdf', 'docx', 'csv'];
+      : ['pdf', 'docx', 'csv', 'txt'];
 
     if (!validExtensions.includes(ext)) {
       setErrors((prev) => ({
         ...prev,
         file: uploadMode === 'bulk'
           ? 'Invalid file type. Please upload a .CSV spreadsheet.'
-          : 'Invalid file type. Only PDF and DOCX files are supported in single document mode.',
+          : 'Invalid file type. Only PDF and DOCX files are supported in document upload mode.',
       }));
       setSelectedFile(null);
       return;
@@ -1347,17 +1507,28 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
     if (e) e.preventDefault();
     const newErrors = {};
 
-    if (!selectedFile) {
-      newErrors.file = isBulkMode
-        ? 'Please upload a CSV spreadsheet to import.'
-        : 'Please upload a PDF or DOCX file.';
-    }
-
-    if (!isBulkMode) {
+    if (isManualMode) {
       if (!form.title.trim()) {
         newErrors.title = 'Document title is required.';
       }
-
+      if (!form.category) {
+        newErrors.category = 'Please select a category.';
+      }
+      if (!form.content.trim()) {
+        newErrors.content = 'Article content & resolution steps are required.';
+      }
+    } else if (isBulkMode) {
+      if (!selectedFile) {
+        newErrors.file = 'Please upload a CSV spreadsheet to import.';
+      }
+    } else {
+      // isFileMode
+      if (!selectedFile) {
+        newErrors.file = 'Please upload a PDF or DOCX file.';
+      }
+      if (!form.title.trim()) {
+        newErrors.title = 'Document title is required.';
+      }
       if (!form.category) {
         newErrors.category = 'Please select a category.';
       }
@@ -1380,6 +1551,65 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
     setUploadError('');
     setIsMalwareError(false);
 
+    if (isManualMode) {
+      // Step 0: Validating Content & Metadata
+      setCurrentStepIdx(0);
+      setProgress(20);
+      await new Promise(r => setTimeout(r, 200));
+
+      // Step 1: Chunking Content into Semantic Sections
+      setCurrentStepIdx(1);
+      setProgress(40);
+      await new Promise(r => setTimeout(r, 250));
+
+      // Step 2: Generating Gemini Vector Embeddings
+      setCurrentStepIdx(2);
+      setProgress(60);
+
+      let createdArticle = null;
+      try {
+        const payload = {
+          title: form.title.trim(),
+          category: form.category,
+          machine: form.machine.trim() || null,
+          version: form.version.trim() || '1.0',
+          tags: form.tags ? form.tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
+          description: form.description.trim() || form.content.trim().slice(0, 250),
+          content: form.content.trim(),
+          file_type: 'ARTICLE',
+          status: 'Draft',
+        };
+
+        const res = await aiKbClient.post('/articles', payload);
+        if (res.data?.success && res.data?.data) {
+          createdArticle = res.data.data;
+        }
+      } catch (err) {
+        console.error('Failed to create article:', err);
+        const errMsg = err.response?.data?.message || err.message || 'Failed to create and index article.';
+        setUploadError(errMsg);
+        return;
+      }
+
+      // Step 3: Indexing Knowledge Base for AI Search
+      setCurrentStepIdx(3);
+      setProgress(85);
+      await new Promise(r => setTimeout(r, 300));
+
+      // Step 4: Ready for AI Search
+      setCurrentStepIdx(4);
+      setProgress(100);
+
+      if (onUploadComplete && createdArticle) {
+        onUploadComplete(createdArticle);
+      }
+
+      setTimeout(() => {
+        handleForceClose();
+      }, 1400);
+      return;
+    }
+
     // Step 0: Mandatory ClamAV Antivirus Daemon Inspection
     setCurrentStepIdx(0);
     setProgress(15);
@@ -1387,17 +1617,13 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
     const formData = new FormData();
     formData.append('file', selectedFile);
 
-    // Fast heuristic pre-check for test malware strings
     const lowerName = (selectedFile?.name || '').toLowerCase();
     const isMockMalware = lowerName.includes('eicar') || lowerName.includes('malware') || lowerName.includes('virus') || lowerName.includes('infected');
 
-    let isScanClean = true;
-    let threatName = null;
+    let isScanClean = !isMockMalware;
+    let threatName = isMockMalware ? 'Eicar-Test-Signature' : null;
 
-    if (isMockMalware) {
-      isScanClean = false;
-      threatName = 'Eicar-Test-Signature';
-    } else {
+    if (!isMockMalware) {
       try {
         const scanRes = await axiosInstance.post(`${AI_API_URL}/articles/scan-file`, formData, {
           baseURL: '',
@@ -1417,7 +1643,7 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
       }
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 400));
 
     if (!isScanClean) {
       setUploadError(`Security Alert: File failed ClamAV antivirus inspection (${threatName || 'Malware.Detected'}). Upload rejected.`);
@@ -1428,27 +1654,17 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
     // Step 1: Uploading Document
     setCurrentStepIdx(1);
     setProgress(28);
-    await new Promise((resolve) => setTimeout(resolve, 350));
-
-    // Step 2: Upload Complete
-    setCurrentStepIdx(2);
-    setProgress(42);
     await new Promise((resolve) => setTimeout(resolve, 300));
 
-    if (isCsv) {
-      // Step 3: Parsing CSV Rows
+    if (isBulkMode) {
+      // Step 2: Parsing CSV Rows
+      setCurrentStepIdx(2);
+      setProgress(48);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      // Step 3: Chunking Extracted SOP Sections
       setCurrentStepIdx(3);
-      setProgress(58);
-      await new Promise((resolve) => setTimeout(resolve, 350));
-
-      // Step 4: Chunking Rows
-      setCurrentStepIdx(4);
-      setProgress(72);
-      await new Promise((resolve) => setTimeout(resolve, 350));
-
-      // Step 5: Generating Embeddings
-      setCurrentStepIdx(5);
-      setProgress(85);
+      setProgress(68);
 
       let importedDocs = [];
       try {
@@ -1466,13 +1682,18 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
         return;
       }
 
-      // Step 6: Indexing Knowledge Base
-      setCurrentStepIdx(6);
-      setProgress(95);
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      // Step 4: Generating Gemini Vector Embeddings
+      setCurrentStepIdx(4);
+      setProgress(84);
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
-      // Step 7: Ready for AI Search
-      setCurrentStepIdx(7);
+      // Step 5: Indexing Knowledge Base
+      setCurrentStepIdx(5);
+      setProgress(95);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      // Step 6: Ready for AI Search
+      setCurrentStepIdx(6);
       setProgress(100);
 
       if (onUploadComplete && importedDocs.length > 0) {
@@ -1481,82 +1702,87 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
 
       setTimeout(() => {
         handleForceClose();
-      }, 1500);
+      }, 1400);
     } else {
-      // Step 3: Extracting Text
+      // Step 2: Extracting Text
+      setCurrentStepIdx(2);
+      setProgress(50);
+
+      formData.append('title', form.title.trim());
+      formData.append('category', form.category);
+      if (form.machine.trim()) formData.append('machine', form.machine.trim());
+      if (form.version.trim()) formData.append('version', form.version.trim());
+      if (form.tags.trim()) formData.append('tags', form.tags.trim());
+      if (form.description.trim()) formData.append('description', form.description.trim());
+      formData.append('status', 'Draft');
+
+      let createdDoc = null;
+      try {
+        const createRes = await axiosInstance.post(`${AI_API_URL}/articles`, formData, {
+          baseURL: '',
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        if (createRes.data?.success && createRes.data?.data) {
+          createdDoc = createRes.data.data;
+        }
+      } catch (err) {
+        console.error('Failed to upload document:', err);
+        const errMsg = err.response?.data?.message || err.message || 'Failed to process document file.';
+        setUploadError(errMsg);
+        return;
+      }
+
+      // Step 3: Chunking Document Sections
       setCurrentStepIdx(3);
-      setProgress(55);
-      await new Promise((resolve) => setTimeout(resolve, 450));
-
-      // Step 4: Chunking Document
-      setCurrentStepIdx(4);
       setProgress(70);
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await new Promise((resolve) => setTimeout(resolve, 350));
 
-      // Step 5: Generating Embeddings
-      setCurrentStepIdx(5);
+      // Step 4: Generating Vector Embeddings
+      setCurrentStepIdx(4);
       setProgress(85);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 350));
 
-      // Step 6: Indexing Knowledge Base
-      setCurrentStepIdx(6);
+      // Step 5: Indexing Knowledge Base
+      setCurrentStepIdx(5);
       setProgress(95);
-      await new Promise((resolve) => setTimeout(resolve, 450));
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
-      // Step 7: Ready for AI Search
-      setCurrentStepIdx(7);
+      // Step 6: Ready for AI Search
+      setCurrentStepIdx(6);
       setProgress(100);
 
-      const newDoc = {
-        id: Date.now(),
-        title: form.title.trim(),
-        category: form.category,
-        machine: form.machine.trim() || 'No Machine',
-        version: form.version.trim() || '1.0',
-        fileType: selectedFile.name.split('.').pop().toUpperCase(),
-        uploadedBy: 'Super Admin',
-        uploadDate: new Date().toISOString().split('T')[0],
-        size: `${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB`,
-        status: 'Draft',
-        publishState: 'Draft',
-        processingStatus: 'Ready for AI Search',
-        tags: form.tags ? form.tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
-        description: form.description.trim(),
-        history: [
-          {
-            id: Date.now(),
-            type: 'created',
-            timestamp: new Date().toISOString(),
-            actor: 'Super Admin',
-          },
-        ],
-      };
-
-      if (onUploadComplete) {
-        onUploadComplete(newDoc);
+      if (onUploadComplete && createdDoc) {
+        onUploadComplete(createdDoc);
       }
 
       setTimeout(() => {
         handleForceClose();
-      }, 1500);
+      }, 1400);
     }
   };
 
-  const totalSize = selectedFile ? (selectedFile.size / 1024 / 1024).toFixed(1) : 0;
+  const wordCount = form.content ? form.content.trim().split(/\s+/).filter(Boolean).length : 0;
+  const charCount = form.content?.length || 0;
 
   return (
     <>
       <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-        <div className="w-full max-w-2xl rounded-xl bg-white shadow-2xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="w-full max-w-3xl rounded-xl bg-white shadow-2xl max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
             <div>
               <h2 className="text-lg font-bold text-gray-900">
-                {isBulkMode ? 'Bulk CSV Knowledge Import' : 'Upload Knowledge Document'}
+                {isManualMode
+                  ? 'Create Knowledge Article'
+                  : isBulkMode
+                    ? 'Bulk CSV Knowledge Import'
+                    : 'Upload Knowledge Document'}
               </h2>
               <p className="text-xs text-gray-500">
-                {isBulkMode
-                  ? 'Import and index multiple SOPs, procedures, or FAQs from a CSV spreadsheet'
-                  : 'Add a single PDF or DOCX document to the AI knowledge base'}
+                {isManualMode
+                  ? 'Write structured SOPs, procedures, or FAQs directly for AI vector search'
+                  : isBulkMode
+                    ? 'Import and index multiple SOPs, procedures, or FAQs from a CSV spreadsheet'
+                    : 'Add a PDF or DOCX manual to the AI knowledge base with ClamAV antivirus inspection'}
               </p>
             </div>
             <button
@@ -1570,25 +1796,40 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
 
           {step === 'form' && (
             <div className="overflow-y-auto px-6 py-4 space-y-4 flex-1">
-              {/* Upfront Mode Selector Tabs */}
+              {/* 3 Ingestion Mode Selector Tabs */}
               <div className="flex p-1 bg-gray-100/90 rounded-xl border border-gray-200/80">
                 <button
                   type="button"
                   onClick={() => {
-                    setUploadMode('single');
+                    setUploadMode('manual');
+                    setErrors({});
+                  }}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    isManualMode
+                      ? 'bg-[#252578] text-white shadow-xs'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  <Edit3 size={15} />
+                  <span>Write Article</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUploadMode('file');
                     if (selectedFile?.name?.toLowerCase()?.endsWith('.csv')) {
                       setSelectedFile(null);
                     }
-                    setErrors((prev) => ({ ...prev, file: '' }));
+                    setErrors({});
                   }}
                   className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                    uploadMode === 'single'
-                      ? 'bg-white text-[#252578] shadow-xs'
-                      : 'text-gray-500 hover:text-gray-900'
+                    isFileMode
+                      ? 'bg-[#252578] text-white shadow-xs'
+                      : 'text-gray-600 hover:text-gray-900'
                   }`}
                 >
                   <FileText size={15} />
-                  <span>Single Document (PDF / DOCX)</span>
+                  <span>Upload Document (PDF / DOCX)</span>
                 </button>
                 <button
                   type="button"
@@ -1597,21 +1838,199 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
                     if (selectedFile && !selectedFile?.name?.toLowerCase()?.endsWith('.csv')) {
                       setSelectedFile(null);
                     }
-                    setErrors((prev) => ({ ...prev, file: '', title: '', category: '' }));
+                    setErrors({});
                   }}
                   className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                    uploadMode === 'bulk'
+                    isBulkMode
                       ? 'bg-[#252578] text-white shadow-xs'
-                      : 'text-gray-500 hover:text-gray-900'
+                      : 'text-gray-600 hover:text-gray-900'
                   }`}
                 >
                   <FileSpreadsheet size={15} />
-                  <span>Bulk Upload (CSV)</span>
+                  <span>Bulk Import (CSV)</span>
                 </button>
               </div>
 
-              {/* In Bulk Mode: Completely hide the 6 input fields upfront and show clean guidance & 7-column spec */}
-              {isBulkMode ? (
+              {/* Mode 1: Manual Direct Article Creation */}
+              {isManualMode && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="col-span-2">
+                      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                        Article Title <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={form.title}
+                        onChange={(e) => {
+                          setForm({ ...form, title: e.target.value });
+                          if (errors.title) setErrors((prev) => ({ ...prev, title: '' }));
+                        }}
+                        placeholder="e.g. Printer Paper Jam Clearing Procedure (Error E-03)"
+                        className={`w-full rounded-lg border px-3 py-2 text-sm outline-none transition-all ${
+                          errors.title
+                            ? 'border-red-500 focus:ring-2 focus:ring-red-200'
+                            : 'border-gray-200 focus:border-transparent focus:ring-2 focus:ring-[#252578]'
+                        }`}
+                      />
+                      {errors.title && (
+                        <p className="mt-1 text-xs text-red-600 flex items-center gap-1">
+                          <AlertTriangle size={12} />
+                          {errors.title}
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                          Category <span className="text-red-500">*</span>
+                        </label>
+                        <div className="relative group inline-flex items-center">
+                          <Info size={14} className="text-gray-400 hover:text-[#252578] transition-colors cursor-pointer" />
+                          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover:block z-50 w-56 p-2 bg-gray-900 text-white text-[11px] rounded-lg shadow-lg pointer-events-none text-center leading-normal">
+                            Category determines which chatbot topics this article will be indexed to answer.
+                            <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-gray-900" />
+                          </div>
+                        </div>
+                      </div>
+                      <select
+                        value={form.category}
+                        onChange={(e) => {
+                          setForm({ ...form, category: e.target.value });
+                          if (errors.category) setErrors((prev) => ({ ...prev, category: '' }));
+                        }}
+                        className={`w-full rounded-lg border px-3 py-2 text-sm outline-none transition-all bg-white ${
+                          errors.category
+                            ? 'border-red-500 focus:ring-2 focus:ring-red-200'
+                            : 'border-gray-200 focus:border-transparent focus:ring-2 focus:ring-[#252578]'
+                        }`}
+                      >
+                        <option value="">Select category</option>
+                        {MOCK_CATEGORIES.map((c) => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                      {errors.category && (
+                        <p className="mt-1 text-xs text-red-600 flex items-center gap-1">
+                          <AlertTriangle size={12} />
+                          {errors.category}
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Machine Model</label>
+                      <input
+                        type="text"
+                        value={form.machine}
+                        onChange={(e) => setForm({ ...form, machine: e.target.value })}
+                        placeholder="e.g. Canon X120, HP LaserJet Pro"
+                        className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-transparent focus:ring-2 focus:ring-[#252578]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Version</label>
+                      <input
+                        type="text"
+                        value={form.version}
+                        onChange={(e) => setForm({ ...form, version: e.target.value })}
+                        placeholder="e.g. 1.0"
+                        className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-transparent focus:ring-2 focus:ring-[#252578]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Tags</label>
+                      <input
+                        type="text"
+                        value={form.tags}
+                        onChange={(e) => setForm({ ...form, tags: e.target.value })}
+                        placeholder="Comma separated: printer, jam, e-03"
+                        className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-transparent focus:ring-2 focus:ring-[#252578]"
+                      />
+                    </div>
+
+                    <div className="col-span-2">
+                      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Short Description</label>
+                      <textarea
+                        rows={2}
+                        value={form.description}
+                        onChange={(e) => setForm({ ...form, description: e.target.value })}
+                        className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-transparent focus:ring-2 focus:ring-[#252578] resize-none"
+                        placeholder="Brief 1-2 sentence summary of this guide..."
+                      />
+                    </div>
+                  </div>
+
+                  {/* Direct Article Content Editor Area */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
+                      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                        Article Content & Resolution Instructions <span className="text-red-500">*</span>
+                      </label>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] text-gray-400 font-medium">Quick Templates:</span>
+                        <button
+                          type="button"
+                          onClick={() => handleInsertTemplate('troubleshooting')}
+                          className="px-2 py-0.5 rounded-md bg-[#252578]/5 hover:bg-[#252578]/10 text-[#252578] text-[11px] font-semibold transition cursor-pointer border border-[#252578]/20"
+                        >
+                          + Troubleshooting SOP
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleInsertTemplate('faq')}
+                          className="px-2 py-0.5 rounded-md bg-[#252578]/5 hover:bg-[#252578]/10 text-[#252578] text-[11px] font-semibold transition cursor-pointer border border-[#252578]/20"
+                        >
+                          + FAQ Answer
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleInsertTemplate('sop')}
+                          className="px-2 py-0.5 rounded-md bg-[#252578]/5 hover:bg-[#252578]/10 text-[#252578] text-[11px] font-semibold transition cursor-pointer border border-[#252578]/20"
+                        >
+                          + General SOP
+                        </button>
+                      </div>
+                    </div>
+
+                    <textarea
+                      rows={10}
+                      value={form.content}
+                      onChange={(e) => {
+                        setForm({ ...form, content: e.target.value });
+                        if (errors.content) setErrors((prev) => ({ ...prev, content: '' }));
+                      }}
+                      placeholder={`### Symptoms & Problem Description\nDescribe the issue or error codes here...\n\n### Prerequisites\nRequired tools or safety measures...\n\n### Troubleshooting Steps\n1. Step 1: Disconnect power.\n2. Step 2: Clear obstruction.\n\n### Verification\nConfirm error indicator is cleared and equipment operates normally.`}
+                      className={`w-full font-mono text-xs leading-relaxed rounded-lg border p-3 outline-none transition-all ${
+                        errors.content
+                          ? 'border-red-500 focus:ring-2 focus:ring-red-200'
+                          : 'border-gray-200 focus:border-transparent focus:ring-2 focus:ring-[#252578]'
+                      }`}
+                    />
+
+                    <div className="flex items-center justify-between mt-1 text-[11px] text-gray-400">
+                      <span>{wordCount} words · {charCount} characters</span>
+                      {errors.content && (
+                        <span className="text-red-600 flex items-center gap-1 font-semibold">
+                          <AlertTriangle size={12} />
+                          {errors.content}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="mt-3 flex items-center gap-2 text-[11px] text-[#252578] bg-[#252578]/5 border border-[#252578]/20 rounded-lg p-2.5 font-medium">
+                      <CheckCircle size={14} className="text-[#252578] shrink-0" />
+                      <span>Direct articles bypass PDF parsing noise, maximizing semantic accuracy and Gemini vector probe rank.</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Mode 2: Bulk CSV Knowledge Import */}
+              {isBulkMode && (
                 <div className="bg-[#252578]/5 border border-[#252578]/20 rounded-xl p-4.5 space-y-3 text-xs text-[#252578]">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3">
@@ -1682,8 +2101,10 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
                     <span>ClamAV Antivirus Daemon Enabled: All CSV rows and contents are scanned for malware before indexing.</span>
                   </div>
                 </div>
-              ) : (
-                /* In Single Mode: Render the standard 6 document metadata input fields */
+              )}
+
+              {/* Mode 3: Single Document Upload (PDF / DOCX) */}
+              {isFileMode && (
                 <div className="grid grid-cols-2 gap-4">
                   <div className="col-span-2">
                     <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
@@ -1696,11 +2117,12 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
                         setForm({ ...form, title: e.target.value });
                         if (errors.title) setErrors((prev) => ({ ...prev, title: '' }));
                       }}
-                      placeholder="e.g. Printer Configuration Guide"
-                      className={`w-full rounded-lg border px-3 py-2 text-sm outline-none transition-all ${errors.title
+                      placeholder="e.g. Canon X120 Official Service Manual"
+                      className={`w-full rounded-lg border px-3 py-2 text-sm outline-none transition-all ${
+                        errors.title
                           ? 'border-red-500 focus:ring-2 focus:ring-red-200'
                           : 'border-gray-200 focus:border-transparent focus:ring-2 focus:ring-[#252578]'
-                        }`}
+                      }`}
                     />
                     {errors.title && (
                       <p className="mt-1 text-xs text-red-600 flex items-center gap-1">
@@ -1729,10 +2151,11 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
                         setForm({ ...form, category: e.target.value });
                         if (errors.category) setErrors((prev) => ({ ...prev, category: '' }));
                       }}
-                      className={`w-full rounded-lg border px-3 py-2 text-sm outline-none transition-all bg-white ${errors.category
+                      className={`w-full rounded-lg border px-3 py-2 text-sm outline-none transition-all bg-white ${
+                        errors.category
                           ? 'border-red-500 focus:ring-2 focus:ring-red-200'
                           : 'border-gray-200 focus:border-transparent focus:ring-2 focus:ring-[#252578]'
-                        }`}
+                      }`}
                     >
                       <option value="">Select category</option>
                       {MOCK_CATEGORIES.map((c) => (
@@ -1793,96 +2216,99 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
                 </div>
               )}
 
-              {/* Upload File Zone */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                    {isBulkMode ? 'Upload CSV Spreadsheet' : 'Upload File'} <span className="text-red-500">*</span>
-                  </label>
-                  {!isBulkMode && (
-                    <button
-                      type="button"
-                      onClick={handleDownloadTemplate}
-                      className="inline-flex items-center gap-1 text-xs text-[#252578] hover:text-[#2E85D8] font-medium transition-colors cursor-pointer"
-                    >
-                      <Download size={13} />
-                      Download CSV Template
-                    </button>
-                  )}
-                </div>
-
-                <div
-                  onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-                  onDragLeave={() => setDragOver(false)}
-                  onDrop={handleFileDrop}
-                  className={`border-2 border-dashed rounded-xl p-8 text-center transition-all ${errors.file
-                      ? 'border-red-400 bg-red-50/20'
-                      : dragOver
-                        ? 'border-[#252578] bg-[#252578]/5'
-                        : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                >
-                  {selectedFile ? (
-                    <div className="space-y-2">
-                      {isBulkMode ? (
-                        <FileSpreadsheet size={34} className="mx-auto text-[#252578]" />
-                      ) : (
-                        <FileText size={34} className="mx-auto text-[#252578]" />
-                      )}
-                      <p className="text-sm font-semibold text-gray-700">{selectedFile.name}</p>
-                      <p className="text-xs text-gray-400">
-                        {(selectedFile.size / 1024).toFixed(1)} KB {isBulkMode ? '· Spreadsheet Ready for Parsing' : ''}
-                      </p>
+              {/* Upload File Zone (Only for File and Bulk Modes) */}
+              {!isManualMode && (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                      {isBulkMode ? 'Upload CSV Spreadsheet' : 'Upload File'} <span className="text-red-500">*</span>
+                    </label>
+                    {!isBulkMode && (
                       <button
                         type="button"
-                        onClick={() => setSelectedFile(null)}
-                        className="text-xs text-red-500 hover:underline cursor-pointer"
+                        onClick={handleDownloadTemplate}
+                        className="inline-flex items-center gap-1 text-xs text-[#252578] hover:text-[#2E85D8] font-medium transition-colors cursor-pointer"
                       >
-                        Remove file
+                        <Download size={13} />
+                        Download CSV Template
                       </button>
-                    </div>
-                  ) : (
-                    <>
-                      {isBulkMode ? (
-                        <FileSpreadsheet size={32} className="mx-auto text-gray-300 mb-2" />
-                      ) : (
-                        <Upload size={32} className="mx-auto text-gray-300 mb-2" />
-                      )}
-                      <p className="text-sm text-gray-500">
-                        {isBulkMode
-                          ? 'Drag & drop a CSV spreadsheet here, or '
-                          : 'Drag & drop a file here, or '}
-                        <span className="text-[#252578] font-semibold">browse</span>
-                      </p>
-                      <p className="text-xs text-gray-400 mt-1">
-                        {isBulkMode ? 'Supported: .CSV spreadsheet (max 10 MB)' : 'Supported: PDF, DOCX (max 10 MB)'}
-                      </p>
-                      <input
-                        type="file"
-                        accept={isBulkMode ? '.csv' : '.pdf,.docx'}
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) handleFileValidateAndSet(file);
-                        }}
-                        className="hidden"
-                        id="file-upload"
-                      />
-                      <label
-                        htmlFor="file-upload"
-                        className="inline-block mt-3 px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-600 hover:border-[#252578] hover:text-[#252578] transition-all cursor-pointer shadow-2xs"
-                      >
-                        Choose File
-                      </label>
-                    </>
+                    )}
+                  </div>
+
+                  <div
+                    onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                    onDragLeave={() => setDragOver(false)}
+                    onDrop={handleFileDrop}
+                    className={`border-2 border-dashed rounded-xl p-8 text-center transition-all ${
+                      errors.file
+                        ? 'border-red-400 bg-red-50/20'
+                        : dragOver
+                          ? 'border-[#252578] bg-[#252578]/5'
+                          : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    {selectedFile ? (
+                      <div className="space-y-2">
+                        {isBulkMode ? (
+                          <FileSpreadsheet size={34} className="mx-auto text-[#252578]" />
+                        ) : (
+                          <FileText size={34} className="mx-auto text-[#252578]" />
+                        )}
+                        <p className="text-sm font-semibold text-gray-700">{selectedFile.name}</p>
+                        <p className="text-xs text-gray-400">
+                          {(selectedFile.size / 1024).toFixed(1)} KB {isBulkMode ? '· Spreadsheet Ready for Parsing' : ''}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedFile(null)}
+                          className="text-xs text-red-500 hover:underline cursor-pointer"
+                        >
+                          Remove file
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        {isBulkMode ? (
+                          <FileSpreadsheet size={32} className="mx-auto text-gray-300 mb-2" />
+                        ) : (
+                          <Upload size={32} className="mx-auto text-gray-300 mb-2" />
+                        )}
+                        <p className="text-sm text-gray-500">
+                          {isBulkMode
+                            ? 'Drag & drop a CSV spreadsheet here, or '
+                            : 'Drag & drop a file here, or '}
+                          <span className="text-[#252578] font-semibold">browse</span>
+                        </p>
+                        <p className="text-xs text-gray-400 mt-1">
+                          {isBulkMode ? 'Supported: .CSV spreadsheet (max 10 MB)' : 'Supported: PDF, DOCX, TXT (max 10 MB)'}
+                        </p>
+                        <input
+                          type="file"
+                          accept={isBulkMode ? '.csv' : '.pdf,.docx,.txt'}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleFileValidateAndSet(file);
+                          }}
+                          className="hidden"
+                          id="file-upload"
+                        />
+                        <label
+                          htmlFor="file-upload"
+                          className="inline-block mt-3 px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold text-gray-600 hover:border-[#252578] hover:text-[#252578] transition-all cursor-pointer shadow-2xs"
+                        >
+                          Choose File
+                        </label>
+                      </>
+                    )}
+                  </div>
+                  {errors.file && (
+                    <p className="mt-1.5 text-xs text-red-600 flex items-center gap-1">
+                      <AlertTriangle size={12} />
+                      {errors.file}
+                    </p>
                   )}
                 </div>
-                {errors.file && (
-                  <p className="mt-1.5 text-xs text-red-600 flex items-center gap-1">
-                    <AlertTriangle size={12} />
-                    {errors.file}
-                  </p>
-                )}
-              </div>
+              )}
             </div>
           )}
 
@@ -1892,7 +2318,7 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
                 <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl p-4 flex items-start gap-3">
                   <AlertTriangle size={20} className="text-red-600 shrink-0 mt-0.5" />
                   <div className="flex-1">
-                    <p className="font-semibold">{isMalwareError ? 'Security Alert' : 'Upload Failed'}</p>
+                    <p className="font-semibold">{isMalwareError ? 'Security Alert' : 'Creation Failed'}</p>
                     <p className="text-xs text-red-600 mt-0.5">{uploadError}</p>
                   </div>
                 </div>
@@ -1900,12 +2326,20 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
 
               <PipelineProgressView
                 selectedFile={selectedFile}
+                displayTitle={form.title}
+                displaySub={isManualMode ? `${wordCount} words · Direct Article` : null}
                 progress={progress}
                 currentStepIdx={currentStepIdx}
                 uploadError={uploadError}
-                successTitle={isBulkMode ? "Knowledge Base Articles Imported Successfully!" : "Knowledge Article Created Successfully!"}
+                successTitle={
+                  isManualMode
+                    ? 'Knowledge Article Created & Indexed Successfully!'
+                    : isBulkMode
+                      ? 'Knowledge Base Articles Imported Successfully!'
+                      : 'Knowledge Document Uploaded & Indexed Successfully!'
+                }
                 successMessage="Status set to Draft. Indexed and ready for AI search, but hidden from the chatbot until published."
-                steps={UPLOAD_STEPS}
+                steps={isManualMode ? MANUAL_CREATE_STEPS : isBulkMode ? CSV_STEPS : UPLOAD_STEPS}
               />
             </div>
           )}
@@ -1925,7 +2359,11 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
                   onClick={handleValidateAndPromptConfirm}
                   className="px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-[#252578] hover:bg-[#1f1f66] transition-all cursor-pointer shadow-sm"
                 >
-                  {isBulkMode ? 'Import CSV Articles' : 'Upload & Process'}
+                  {isManualMode
+                    ? 'Create & Index Article'
+                    : isBulkMode
+                      ? 'Import CSV Articles'
+                      : 'Upload & Process'}
                 </button>
               </>
             )}
@@ -1963,12 +2401,15 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
         onConfirm={startSimulatedUpload}
         form={form}
         selectedFile={selectedFile}
+        mode={uploadMode}
       />
 
       <DiscardConfirmModal
         isOpen={showDiscardModal}
         onClose={() => setShowDiscardModal(false)}
         onConfirm={handleForceClose}
+        title="Discard Unsaved Article Changes?"
+        description="You have unsaved changes in this article. Are you sure you want to discard your draft?"
       />
     </>
   );
@@ -2263,8 +2704,12 @@ function DocumentContentPreview({ doc, onReplacePrompt }) {
   );
 }
 
-function DocumentDetailModal({ isOpen, doc, onClose, onPublish, onArchivePrompt, onReplacePrompt }) {
+function DocumentDetailModal({ isOpen, doc, onClose, onPublish, onArchivePrompt, onReplacePrompt, onRetryIndex, isRetrying = false }) {
   if (!isOpen || !doc) return null;
+
+  const indexing = isRetrying || isIndexingInProgress(doc);
+  const indexFailed = !indexing && isIndexingFailed(doc);
+  const lowRetrievability = !indexFailed && isPublishedDoc(doc) && doc.lowRetrievability;
 
   const isPublished = (doc.publishState || doc.status) === 'Published';
   const canPublish = (doc.processingStatus === 'Ready for AI Search' || doc.processingStatus === 'Ready') && doc.status !== 'Processing';
@@ -2330,7 +2775,7 @@ function DocumentDetailModal({ isOpen, doc, onClose, onPublish, onArchivePrompt,
             <div><p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Version</p><p className="text-sm font-medium text-gray-800 mt-0.5">{doc.version || '—'}</p></div>
             <div><p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">File Type</p><p className="text-sm font-medium text-gray-800 mt-0.5">{doc.fileType}</p></div>
             <div><p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Uploaded By</p><p className="text-sm font-medium text-gray-800 mt-0.5">{doc.uploadedBy}</p></div>
-            <div><p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Upload Date</p><p className="text-sm font-medium text-gray-800 mt-0.5">{doc.uploadDate}</p></div>
+            <div><p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Upload Date</p><p className="text-sm font-medium text-gray-800 mt-0.5">{formatUploadDate(doc.uploadDate)}</p></div>
             <div><p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">File Size</p><p className="text-sm font-medium text-gray-800 mt-0.5">{doc.size}</p></div>
             <div>
               <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Publish State</p>
@@ -2365,6 +2810,49 @@ function DocumentDetailModal({ isOpen, doc, onClose, onPublish, onArchivePrompt,
                 </span>
               )}
             </div>
+            {indexing && (
+              <div className="flex items-center gap-2 mb-3 p-3 rounded-lg bg-blue-50 border border-blue-200 text-xs text-blue-800">
+                <Loader size={14} className="animate-spin flex-shrink-0" />
+                <span>
+                  Indexing for AI search.
+                  {isPublishedDoc(doc) ? ' The AI keeps using the previous version until this finishes.' : ''}
+                </span>
+              </div>
+            )}
+            {indexFailed && (
+              <div className="flex items-start justify-between gap-3 mb-3 p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800">
+                <div className="flex items-start gap-2 min-w-0">
+                  <AlertTriangle size={14} className="text-red-600 flex-shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="font-semibold">Indexing failed</p>
+                    <p className="mt-0.5 break-words">{doc.indexError || 'The embedding service did not return a result.'}</p>
+                    {isPublishedDoc(doc) && (
+                      <p className="mt-1 text-red-700">The AI keeps using the previous indexed version of this article.</p>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onRetryIndex && onRetryIndex(doc)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-red-600 hover:bg-red-700 transition-all cursor-pointer flex-shrink-0"
+                >
+                  <RefreshCw size={14} />
+                  Retry
+                </button>
+              </div>
+            )}
+            {lowRetrievability && (
+              <div className="flex items-start gap-2 mb-3 p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
+                <AlertCircle size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-semibold">Published, low retrievability (score {formatProbeScore(doc.probeScore)})</p>
+                  <p className="mt-0.5">
+                    When searched by its own title and description, this article did not rank in the AI's top 3 results,
+                    or its match score is below the threshold. Try a clearer title or description using the words customers would use.
+                  </p>
+                </div>
+              </div>
+            )}
             <div className="space-y-2">
               {AI_PROCESSING_STEPS.map((step, i) => (
                 <div key={i} className={`flex items-center gap-2.5 text-sm ${step.done ? 'text-gray-700' : 'text-gray-300'}`}>
@@ -2463,7 +2951,7 @@ function DocumentDetailModal({ isOpen, doc, onClose, onPublish, onArchivePrompt,
 }
 
 function EditMetadataModal({ isOpen, doc, onClose, onSave, onReplaceFile }) {
-  const [form, setForm] = useState({ title: '', category: '', machine: '', version: '', description: '', tags: '' });
+  const [form, setForm] = useState({ title: '', category: '', machine: '', version: '', description: '', tags: '', content: '' });
   const [errors, setErrors] = useState({});
   const [showDiscardModal, setShowDiscardModal] = useState(false);
 
@@ -2476,6 +2964,7 @@ function EditMetadataModal({ isOpen, doc, onClose, onSave, onReplaceFile }) {
         version: doc.version || '',
         description: doc.description || '',
         tags: (doc.tags || []).join(', '),
+        content: doc.content || '',
       });
       setErrors({});
       setShowDiscardModal(false);
@@ -2491,7 +2980,8 @@ function EditMetadataModal({ isOpen, doc, onClose, onSave, onReplaceFile }) {
       form.machine !== (doc.machine || '') ||
       form.version !== (doc.version || '') ||
       form.description !== (doc.description || '') ||
-      form.tags !== ((doc.tags || []).join(', '))
+      form.tags !== ((doc.tags || []).join(', ')) ||
+      form.content !== (doc.content || '')
     )
   );
 
@@ -2589,7 +3079,25 @@ function EditMetadataModal({ isOpen, doc, onClose, onSave, onReplaceFile }) {
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Description</label>
-              <textarea rows={3} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-transparent focus:ring-2 focus:ring-[#252578] resize-none" />
+              <textarea rows={2} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-transparent focus:ring-2 focus:ring-[#252578] resize-none" />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  Article Content & Instructions
+                </label>
+                <span className="text-[10px] text-gray-400">
+                  {form.content ? form.content.trim().split(/\s+/).filter(Boolean).length : 0} words
+                </span>
+              </div>
+              <textarea
+                rows={6}
+                value={form.content}
+                onChange={e => setForm({ ...form, content: e.target.value })}
+                className="w-full font-mono text-xs leading-relaxed rounded-lg border border-gray-200 px-3 py-2 outline-none focus:border-transparent focus:ring-2 focus:ring-[#252578]"
+                placeholder="Markdown formatted procedure steps..."
+              />
             </div>
 
             {/* Replace Existing File section */}
@@ -2685,7 +3193,7 @@ function AIKnowledgeBase() {
           {
             id: doc.id ? doc.id * 100 + 1 : idx + 100,
             type: 'created',
-            timestamp: doc.uploadDate ? `${doc.uploadDate} 09:00` : '2026-06-15 09:00',
+            timestamp: doc.uploadDate ? (String(doc.uploadDate).length === 10 ? `${doc.uploadDate} 09:00` : String(doc.uploadDate).substring(0, 16).replace('T', ' ')) : '2026-06-15 09:00',
             actor: doc.uploadedBy || 'Super Admin',
           },
         ],
@@ -2709,6 +3217,7 @@ function AIKnowledgeBase() {
   const [filterFileType, setFilterFileType] = useState('');
   const [sortOrder, setSortOrder] = useState('newest');
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadModalMode, setUploadModalMode] = useState('manual');
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -2739,7 +3248,7 @@ function AIKnowledgeBase() {
               fileType: item.file_type || 'PDF',
               size: item.size || item.file_size || '1.0 MB',
               uploadedBy: item.uploaded_by || 'Super Admin',
-              uploadDate: item.created_at ? item.created_at.split('T')[0] : '2026-06-15',
+              uploadDate: fileUploadedAt(item) || '2026-06-15',
               status: publishState === 'Published' ? 'Ready' : publishState,
               publishState,
               processingStatus: item.processing_status || (publishState === 'Published' ? 'Ready for AI Search' : 'Ready'),
@@ -2749,6 +3258,7 @@ function AIKnowledgeBase() {
               file_path: item.file_path || null,
               chunks_count: item.chunks_count ?? 0,
               embeddings_count: item.embeddings_count ?? 0,
+              ...indexingFields(item),
               history: Array.isArray(item.history) && item.history.length > 0 ? item.history : [
                 {
                   id: item.id * 100 + 1,
@@ -2834,7 +3344,7 @@ function AIKnowledgeBase() {
     if (filterCategory) docs = docs.filter(d => d.category === filterCategory);
     if (filterStatus) {
       if (filterStatus === 'Processing') {
-        docs = docs.filter(d => d.processingStatus === 'Processing' || d.status === 'Processing');
+        docs = docs.filter(d => isIndexingInProgress(d));
       } else {
         docs = docs.filter(d => (d.publishState || d.status) === filterStatus || (filterStatus === 'Published' && d.status === 'Ready'));
       }
@@ -2850,7 +3360,7 @@ function AIKnowledgeBase() {
     published: documents.filter(d => (d.publishState || d.status) === 'Published' || d.status === 'Ready').length,
     draft: documents.filter(d => (d.publishState || d.status) === 'Draft').length,
     archived: documents.filter(d => (d.publishState || d.status) === 'Archived').length,
-    processing: documents.filter(d => d.processingStatus === 'Processing' || d.status === 'Processing').length,
+    processing: documents.filter(d => isIndexingInProgress(d)).length,
     categories: MOCK_CATEGORIES.length,
   }), [documents]);
 
@@ -2918,6 +3428,8 @@ function AIKnowledgeBase() {
               file_path: fresh.file_path || prev?.file_path || null,
               chunks_count: fresh.chunks_count ?? prev?.chunks_count,
               embeddings_count: fresh.embeddings_count ?? prev?.embeddings_count,
+              processingStatus: fresh.processing_status || prev?.processingStatus,
+              ...indexingFields(fresh),
               history: fresh.history || prev?.history || [],
             }));
           }
@@ -2927,7 +3439,7 @@ function AIKnowledgeBase() {
   };
   const handleEdit = (doc) => { setSelectedDoc(doc); setShowEditModal(true); };
   const handleDelete = (doc) => {
-    if (doc.processingStatus === 'Processing' || doc.status === 'Processing') {
+    if (isIndexingInProgress(doc)) {
       setDeleteBlockedMsg('This article is currently being processed and cannot be deleted until that finishes.');
       return;
     }
@@ -2991,6 +3503,8 @@ function AIKnowledgeBase() {
           ...backendDoc,
           status: backendDoc.publishState === 'Published' || backendDoc.status === 'Published' ? 'Ready' : backendDoc.status,
           publishState: backendDoc.publishState || 'Published',
+          processingStatus: backendDoc.processing_status || doc.processingStatus,
+          ...indexingFields(backendDoc),
           history: Array.isArray(backendDoc.history) && backendDoc.history.length > 0 ? backendDoc.history : [historyEntry, ...(doc.history || [])],
         };
         setDocuments((prev) => {
@@ -2999,15 +3513,58 @@ function AIKnowledgeBase() {
           return next;
         });
         setSelectedDoc((prev) => (prev && prev.id === doc.id) ? normalized : prev);
+
+        // Spec 0036 (AC-5): published, but its own title and description did not rank it highly.
+        if (res.data?.low_retrievability) {
+          setPublishBlockedMsg(
+            `"${doc.title}" is published, but the AI may struggle to find it (match score ${formatProbeScore(res.data?.probe?.score)}). ` +
+            'Try a clearer title or description that uses the words customers would use.'
+          );
+        }
       }
     } catch (err) {
       console.warn('Failed to publish article on AI service:', err);
-      const errMsg = err.response?.data?.message || "Failed to publish article. Please ensure document content is processed.";
+      const errMsg = err.response?.data?.error_code === 'NOT_INDEXED'
+        ? "This article isn't indexed for AI search yet. Wait for indexing to finish, or use Retry Indexing if it failed, then publish again."
+        : (err.response?.data?.message || "Failed to publish article. Please ensure document content is processed.");
       setPublishBlockedMsg(errMsg);
       // Revert optimistic update
       setDocuments(previousDocs);
       try { localStorage.setItem('ai_kb_documents', JSON.stringify(previousDocs)); } catch { }
       setSelectedDoc(doc);
+    }
+  };
+
+  // Spec 0036: Retry for "Indexing failed" (POST /articles/{id}/reindex).
+  // A Published article keeps serving its previous version to the AI while this runs.
+  const [retryingIds, setRetryingIds] = useState([]);
+  const applyBackendIndexState = (docId, backendDoc) => {
+    const patch = {
+      processingStatus: backendDoc?.processing_status,
+      ...indexingFields(backendDoc),
+      ...(Array.isArray(backendDoc?.history) && backendDoc.history.length > 0 ? { history: backendDoc.history } : {}),
+    };
+    setDocuments((prev) => prev.map(d => d.id === docId ? { ...d, ...patch } : d));
+    setSelectedDoc((prev) => (prev && prev.id === docId) ? { ...prev, ...patch } : prev);
+  };
+
+  const handleRetryIndex = async (doc) => {
+    if (!doc || retryingIds.includes(doc.id)) return;
+    setRetryingIds((prev) => [...prev, doc.id]);
+    setPublishBlockedMsg('');
+    try {
+      const res = await aiKbClient.post(`/articles/${doc.id}/reindex`);
+      if (res.data?.data) applyBackendIndexState(doc.id, res.data.data);
+    } catch (err) {
+      console.warn('Retry indexing failed:', err);
+      if (err.response?.data?.data) applyBackendIndexState(doc.id, err.response.data.data);
+      setPublishBlockedMsg(
+        err.response?.data?.error_code === 'INDEXING_IN_PROGRESS'
+          ? 'This article is already being indexed. Please wait a moment and refresh.'
+          : (err.response?.data?.message || 'Indexing failed again. Please try later.')
+      );
+    } finally {
+      setRetryingIds((prev) => prev.filter(id => id !== doc.id));
     }
   };
 
@@ -3104,6 +3661,7 @@ function AIKnowledgeBase() {
         version: form.version.trim(),
         tags: form.tags ? form.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
         description: form.description.trim(),
+        content: form.content ?? d.content,
         history: [historyEntry, ...(d.history || [])],
       } : d);
       try { localStorage.setItem('ai_kb_documents', JSON.stringify(next)); } catch { }
@@ -3118,12 +3676,13 @@ function AIKnowledgeBase() {
       version: form.version.trim(),
       tags: form.tags ? form.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
       description: form.description.trim(),
+      content: form.content ?? prev.content,
       history: [historyEntry, ...(prev.history || [])],
     } : null);
 
     setShowEditModal(false);
 
-    // Sync metadata updates to AI-service backend
+    // Sync metadata and content updates to AI-service backend
     aiKbClient.put(`/articles/${selectedDoc.id}`, {
       title: form.title.trim(),
       category: form.category,
@@ -3131,6 +3690,7 @@ function AIKnowledgeBase() {
       version: form.version.trim(),
       tags: form.tags ? form.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
       description: form.description.trim(),
+      content: form.content,
     }).catch((err) => {
       console.warn('Failed to update article on AI service:', err);
     });
@@ -3159,7 +3719,7 @@ function AIKnowledgeBase() {
             content: newFileOrData.content || d.content,
             description: newFileOrData.description || d.description,
             file_path: newFileOrData.file_path || d.file_path,
-            uploadDate: now.split('T')[0],
+            uploadDate: now,
             processingStatus: 'Ready for AI Search',
             history: newFileOrData.history || d.history,
           };
@@ -3176,7 +3736,7 @@ function AIKnowledgeBase() {
           ...d,
           fileType: newFileOrData?.name ? newFileOrData.name.split('.').pop()?.toUpperCase() : d.fileType,
           size: newFileOrData?.size ? `${(newFileOrData.size / (1024 * 1024)).toFixed(1)} MB` : d.size,
-          uploadDate: now.split('T')[0],
+          uploadDate: now,
           processingStatus: 'Ready for AI Search',
           history: [historyEntry, ...(d.history || [])],
         };
@@ -3196,7 +3756,7 @@ function AIKnowledgeBase() {
           content: newFileOrData.content || prev.content,
           description: newFileOrData.description || prev.description,
           file_path: newFileOrData.file_path || prev.file_path,
-          uploadDate: now.split('T')[0],
+          uploadDate: now,
           processingStatus: 'Ready for AI Search',
           history: newFileOrData.history || prev.history,
         };
@@ -3213,7 +3773,7 @@ function AIKnowledgeBase() {
         ...prev,
         fileType: newFileOrData?.name ? newFileOrData.name.split('.').pop()?.toUpperCase() : prev.fileType,
         size: newFileOrData?.size ? `${(newFileOrData.size / (1024 * 1024)).toFixed(1)} MB` : prev.size,
-        uploadDate: now.split('T')[0],
+        uploadDate: now,
         processingStatus: 'Ready for AI Search',
         history: [historyEntry, ...(prev.history || [])],
       };
@@ -3256,7 +3816,7 @@ function AIKnowledgeBase() {
     if (!selectedDoc) return;
     const docToDelete = selectedDoc;
 
-    if (docToDelete.processingStatus === 'Processing' || docToDelete.status === 'Processing') {
+    if (isIndexingInProgress(docToDelete)) {
       setDeleteModalError('Cannot delete article while an extraction or indexing process is currently in progress. Please wait for the process to complete or cancel it.');
       setDeleteBlockedMsg('Cannot delete article while an extraction or indexing process is currently in progress.');
       return;
@@ -3330,11 +3890,25 @@ function AIKnowledgeBase() {
               Categories
             </Button>
             <Button
-              variant="default"
-              onClick={() => setShowUploadModal(true)}
+              variant="outline"
+              onClick={() => {
+                setUploadModalMode('file');
+                setShowUploadModal(true);
+              }}
             >
               <Upload size={16} />
               Upload Document
+            </Button>
+            <Button
+              variant="default"
+              onClick={() => {
+                setUploadModalMode('manual');
+                setShowUploadModal(true);
+              }}
+              className="bg-[#252578] hover:bg-[#1f1f66] text-white gap-1.5"
+            >
+              <Plus size={16} />
+              Create Article
             </Button>
           </div>
         }
@@ -3483,7 +4057,14 @@ function AIKnowledgeBase() {
               </div>
             ) : filteredDocs.length === 0 ? (
               <EmptyState
-                onUpload={() => setShowUploadModal(true)}
+                onCreate={() => {
+                  setUploadModalMode('manual');
+                  setShowUploadModal(true);
+                }}
+                onUpload={() => {
+                  setUploadModalMode('file');
+                  setShowUploadModal(true);
+                }}
                 title={activeTab === 'draft' ? "No draft documents found" : "No published documents found"}
                 description={
                   activeTab === 'draft'
@@ -3517,10 +4098,12 @@ function AIKnowledgeBase() {
                   <tbody>
                     {filteredDocs.map(doc => {
                       const FileIcon = fileTypeIcons[doc.fileType] || FileText;
-                      const isMidProcess = doc.processingStatus === 'Processing' || doc.status === 'Processing';
+                      const isMidProcess = isIndexingInProgress(doc) || retryingIds.includes(doc.id);
+                      const hasIndexFailed = !isMidProcess && isIndexingFailed(doc);
                       const isPublished = (doc.publishState || doc.status) === 'Published';
                       const canPublish = (doc.processingStatus === 'Ready for AI Search' || doc.processingStatus === 'Ready') && doc.status !== 'Processing';
                       const PublishIcon = publishStateIcons[doc.publishState || 'Draft'] || FileText;
+                      const showLowRetrievability = isPublishedDoc(doc) && doc.lowRetrievability && !hasIndexFailed;
 
                       return (
                         <tr key={doc.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-all">
@@ -3548,29 +4131,41 @@ function AIKnowledgeBase() {
                               {doc.fileType}
                             </span>
                           </td>
-                          <td className="px-3 py-2.5 text-xs text-muted-slate whitespace-nowrap font-medium">{doc.uploadDate}</td>
+                          <td className="px-3 py-2.5 text-xs text-muted-slate whitespace-nowrap font-medium">{formatUploadDate(doc.uploadDate)}</td>
                           <td className="px-3 py-2.5 whitespace-nowrap">
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${publishStateColors[doc.publishState || 'Draft']}`}>
                                 {PublishIcon && <PublishIcon size={10} />}
                                 {doc.publishState || 'Draft'}
                               </span>
-                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                                isMidProcess
-                                  ? 'bg-blue-50 text-blue-700 border-blue-200'
-                                  : doc.processingStatus === 'Failed'
-                                    ? 'bg-red-50 text-red-700 border-red-200'
-                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                              }`}>
+                              <span
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                                  isMidProcess
+                                    ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                    : hasIndexFailed
+                                      ? 'bg-red-50 text-red-700 border-red-200'
+                                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                }`}
+                                title={hasIndexFailed && doc.indexError ? doc.indexError : undefined}
+                              >
                                 {isMidProcess ? (
                                   <Loader size={10} className="animate-spin" />
-                                ) : doc.processingStatus === 'Failed' ? (
+                                ) : hasIndexFailed ? (
                                   <AlertTriangle size={10} />
                                 ) : (
                                   <CheckCircle size={10} />
                                 )}
-                                {doc.processingStatus || 'Ready for AI Search'}
+                                {isMidProcess ? 'Indexing' : hasIndexFailed ? 'Indexing failed' : (doc.processingStatus || 'Ready for AI Search')}
                               </span>
+                              {showLowRetrievability && (
+                                <span
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border bg-amber-50 text-amber-700 border-amber-200"
+                                  title="Its own title and description did not rank it in the AI's top 3 results, or the match score is below the threshold."
+                                >
+                                  <AlertCircle size={10} />
+                                  Published, low retrievability ({formatProbeScore(doc.probeScore)})
+                                </span>
+                              )}
                             </div>
                           </td>
                           <td className="px-3 py-2.5 whitespace-nowrap text-right">
@@ -3609,6 +4204,12 @@ function AIKnowledgeBase() {
                                     <span>Publish</span>
                                   </DropdownMenuItem>
                                 )}
+                                {hasIndexFailed && (
+                                  <DropdownMenuItem onClick={() => handleRetryIndex(doc)} className="cursor-pointer text-xs text-red-700">
+                                    <RefreshCw size={13} className="mr-2 text-red-600" />
+                                    <span>Retry Indexing</span>
+                                  </DropdownMenuItem>
+                                )}
                                 <DropdownMenuItem onClick={() => handleReplace(doc)} className="cursor-pointer text-xs">
                                   <RefreshCw size={13} className="mr-2 text-muted-slate" />
                                   <span>Replace</span>
@@ -3643,13 +4244,20 @@ function AIKnowledgeBase() {
         <AISidePanel summary={summary} />
       </div>
 
-      <UploadModal isOpen={showUploadModal} onClose={() => setShowUploadModal(false)} onUploadComplete={handleDocumentCreated} />
+      <UploadModal
+        isOpen={showUploadModal}
+        initialMode={uploadModalMode}
+        onClose={() => setShowUploadModal(false)}
+        onUploadComplete={handleDocumentCreated}
+      />
       <DocumentDetailModal
         isOpen={showDetailModal}
         doc={selectedDoc}
         onClose={() => setShowDetailModal(false)}
         onPublish={handlePublish}
         onArchivePrompt={handleArchivePrompt}
+        onRetryIndex={handleRetryIndex}
+        isRetrying={selectedDoc ? retryingIds.includes(selectedDoc.id) : false}
         onReplacePrompt={(doc) => {
           setShowDetailModal(false);
           setSelectedDoc(doc);

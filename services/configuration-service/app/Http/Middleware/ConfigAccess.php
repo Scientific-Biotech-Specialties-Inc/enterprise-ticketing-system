@@ -38,15 +38,40 @@ class ConfigAccess
 
         // Admin level: a verified staff token with an admin role.
         return app(AuthenticateSubsystem::class)->handle($request, function (Request $verified) use ($next) {
-            $user = $verified->user();
-            $role = str_replace([' ', '_', '-'], '', strtolower(trim((string) ($user->role ?? ''))));
-
-            if ($user && (int) ($user->emp_id ?? 0) > 0 && in_array($role, self::ADMIN_ROLES, true)) {
+            if (self::isVerifiedAdmin($verified->user())) {
                 return $next($verified);
             }
 
             return response()->json(['message' => 'Forbidden: administrator access required.'], 403);
         });
+    }
+
+    /**
+     * A verified staff principal with an admin or superadmin role.
+     *
+     * Staff means a local employee record (emp_id) or a principal built from a signed employee JWT.
+     * This service has no employees table, so a real token resolves to a DTO without emp_id; the jti
+     * proves it came through signature verification, and the absence of a client id rules out customers.
+     */
+    public static function isVerifiedAdmin($user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        $role = str_replace([' ', '_', '-'], '', strtolower(trim((string) ($user->role ?? ''))));
+        if (!in_array($role, self::ADMIN_ROLES, true)) {
+            return false;
+        }
+
+        if ((int) ($user->emp_id ?? 0) > 0) {
+            return true;
+        }
+
+        return $user instanceof \Ticketing\Auth\Dto\AuthenticatedUserDto
+            && !empty($user->jti)
+            && empty($user->client_id)
+            && empty($user->client_ID);
     }
 
     public static function hasValidInternalToken(Request $request): bool

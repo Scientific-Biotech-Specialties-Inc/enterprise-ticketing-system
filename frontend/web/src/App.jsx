@@ -20,6 +20,7 @@ import { BranchProvider } from '@/context/BranchContext';
 import PrivateRoute from '@/routes/PrivateRoute';
 import GuestRoute from '@/routes/GuestRoute';
 import AuthGate from '@/routes/AuthGate';
+import WrongPortal from '@/components/WrongPortal.jsx';
 import SkeletonLoader from '@/components/SkeletonLoader.jsx';
 import PageTitleUpdater from '@/components/PageTitleUpdater.jsx';
 import MaintenanceGate from '@/components/MaintenanceGate.jsx';
@@ -141,6 +142,11 @@ function EmployeePortalGate() {
   if (isCSManager)      return <Navigate to="/cs-manager/dashboard" replace />;
   if (isCS)             return <Navigate to="/cs/dashboard" replace />;
   if (isEmployee)       return <Navigate to="/employee/dashboard" replace />;
+
+  const isCustomer       = !isCS && !isEmployee && !isSuperAdmin && !isAdmin && !isItManager && !isServiceManager && !isCSManager;
+  if (isCustomer) {
+    return <WrongPortal portalType="employee" />;
+  }
 
   // Unknown role on the employee portal → back to auth module
   window.location.replace('/');
@@ -427,6 +433,11 @@ function App() {
 
               <Route path="/employee-login" element={<Navigate to="/login/employee" replace />} />
               <Route path="/customer-login" element={<Navigate to="/customer" replace />} />
+
+              {/* Employee portal URLs opened on the customer portal: Access Denied, not a 404 or redirect. */}
+              {import.meta.env.VITE_APP_MODE === 'customer' && (
+                <Route path="/ticketing/*" element={<WrongPortal portalType="employee" />} />
+              )}
 
               <Route
                 path="*"

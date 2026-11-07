@@ -261,8 +261,7 @@ class TicketConfigurationController extends Controller
             return response()->json(['message' => 'Unauthorized: Authentication required.'], 401);
         }
 
-        $role = strtolower(str_replace([' ', '_', '-'], '', (string) ($user->role ?? '')));
-        if ((int) ($user->emp_id ?? 0) > 0 && in_array($role, ['superadmin', 'admin'], true)) {
+        if (\App\Http\Middleware\ConfigAccess::isVerifiedAdmin($user)) {
             return null;
         }
 
@@ -969,7 +968,9 @@ class TicketConfigurationController extends Controller
                         'string',
                         'regex:/^[\+]?[(]?[0-9]{1,4}[)]?[-\s\.\/0-9]{6,25}$/'
                     ],
-                    'contactEmail' => 'required|email|max:255',
+                    // Plain `email` accepts dotless domains such as user@localhost; `filter` plus the
+                    // TLD regex rejects those, consecutive dots, commas, and other malformed input.
+                    'contactEmail' => ['required', 'string', 'max:255', 'email:rfc,filter', 'regex:/^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$/'],
                     'socialLinks' => 'nullable|array',
                     'socialLinks.*.id' => 'sometimes|string|max:64',
                     'socialLinks.*.platform' => 'required|string|in:LinkedIn,Facebook,Twitter / X,Twitter,YouTube,Instagram,Other',
@@ -989,6 +990,7 @@ class TicketConfigurationController extends Controller
                     'contactNumber.regex' => 'Please provide a valid phone number (e.g. +63 2 8635 9999).',
                     'contactEmail.required' => 'Contact email is required.',
                     'contactEmail.email' => 'Please provide a valid contact email address.',
+                    'contactEmail.regex' => 'Please provide a valid contact email address.',
                     'socialLinks.*.platform.in' => 'Selected social platform is not supported.',
                 ]);
 

@@ -3,6 +3,9 @@ import React, { useEffect, useRef } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth, resolveUserRole, resolveUserDepartment } from '@/context/AuthContext';
 import tokenStore from '@/auth/tokenStore';
+import WrongPortal from '@/components/WrongPortal.jsx';
+
+export { WrongPortal };
 
 // ─── Role helpers ─────────────────────────────────────────────────────────────
 export const checkIsCSManager = (user) => {
@@ -96,38 +99,6 @@ export const checkIsEmployee = (user) => {
   if (dept === 'service' || dept.includes('engineer')) return true;
   return role === 'employee' || role.includes('service') || role.includes('engineer');
 };
-
-// ─── Wrong Portal page ────────────────────────────────────────────────────────
-function WrongPortal() {
-  const { logout } = useAuth();
-  
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="text-center max-w-md px-6">
-        <div className="text-6xl mb-4">🚫</div>
-        <h1 className="text-2xl font-bold text-gray-800 mb-2">Wrong Portal</h1>
-        <p className="text-gray-500 mb-6">
-          This portal is for <strong>customers only</strong>.<br />
-          Employees and Customer Service agents must log in through the main company portal.
-        </p>
-        <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-          <a
-            href="http://localhost:5173"
-            className="inline-block px-6 py-3 bg-[#252578] text-white rounded-lg font-medium hover:bg-[#1a1a5e] transition-colors"
-          >
-            Go to Employee Portal
-          </a>
-          <button
-            onClick={logout}
-            className="inline-block px-6 py-3 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-colors"
-          >
-            Log Out & Switch User
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── Private Route ────────────────────────────────────────────────────────────
 // isCustomerSite: true when running as the customer-only container (port 5006)
@@ -245,12 +216,17 @@ export default function PrivateRoute({ children, role }) {
   // ── Customer portal (port 5006) ──────────────────────────────────────────
   if (isCustomerSite) {
     // Only customers are allowed here
-    if (!isCustomer) return <WrongPortal />;
-    // Customers can access any customer route — fall through to render
+    if (!isCustomer) return <WrongPortal portalType="customer" />;
+    // Staff only routes (superadmin, cs, employee, ...) are never available on the customer portal,
+    // even though the routes are registered in the shared route table. Show Access Denied rather
+    // than silently redirecting, so the customer knows the URL is not for them.
+    if (role && role.toLowerCase() !== 'customer') {
+      return <WrongPortal portalType="employee" />;
+    }
   } else {
     // ── Employee/CS portal (port 5173/5005) ─────────────────────────────────
     if (isCustomer) {
-      return <WrongPortal />;
+      return <WrongPortal portalType="employee" />;
     }
 
     // Role-specific route authorization

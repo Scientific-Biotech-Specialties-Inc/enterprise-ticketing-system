@@ -100,32 +100,11 @@ class IndexKbArticleJob implements ShouldQueue
             case 'add':
             case 'update':
             default:
-                // Atomic per-article re-indexing transaction
-                DB::transaction(function () use ($article, $ragService) {
-                    $article->update(['processing_status' => 'Processing']);
-
-                    if ($this->contentOverride !== null) {
-                        $article->content = $this->contentOverride;
-                        $article->save();
-                    }
-
-                    // Re-chunk and re-embed article content
-                    $ragService->indexArticle($article);
-
-                    // If article is Published, activate its embeddings
-                    $isActive = ($article->status === 'Published');
-                    KbEmbedding::where('article_id', $article->id)->update([
-                        'is_active' => $isActive,
-                        'updated_at' => now(),
-                    ]);
-
-                    $article->update([
-                        'processing_status' => 'Ready for AI Search',
-                    ]);
-
-                    $ragService->refreshIndex($article->id);
-                });
-                Log::info("IndexKbArticleJob: Article #{$article->id} index successfully updated [Status: {$article->status}].");
+                // Spec 0036: indexArticle() embeds first, then swaps the new set in one transaction
+                // (activating it when Published), and marks 'Indexing failed' on its own if embedding fails.
+                // It must not run inside an outer transaction, since it calls the embedding API.
+                $result = $ragService->indexArticle($article, $this->contentOverride);
+                Log::info("IndexKbArticleJob: Article #{$article->id} index {$result} [Status: {$article->status}].");
                 break;
         }
     }
@@ -145,7 +124,7 @@ class IndexKbArticleJob implements ShouldQueue
             $article = KbArticle::find($this->articleId);
             if ($article) {
                 $article->update([
-                    'processing_status' => 'Indexing Failed',
+                    'processing_status' => RagService::STATUS_FAILED,
                 ]);
             }
         } catch (\Throwable $e) {

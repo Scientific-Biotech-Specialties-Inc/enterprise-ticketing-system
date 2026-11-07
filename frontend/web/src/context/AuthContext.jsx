@@ -678,11 +678,29 @@ export function AuthProvider({ children }) {
       setIsLoading(false);
 
       if (typeof window !== 'undefined') {
-        const isCustomerSite =
+        const isCustomerSite = import.meta.env.VITE_APP_MODE === 'customer';
+        const isCustomerUser =
           user?.role === 'customer' ||
-          import.meta.env.VITE_APP_MODE === 'customer' ||
-          window.location.pathname.includes('/customer');
-        const targetUrl = isCustomerSite ? (import.meta.env.BASE_URL || '/') : '/';
+          (!isStaffUser(user) &&
+            !window.location.pathname.includes('/employee') &&
+            !window.location.pathname.includes('/superadmin') &&
+            !window.location.pathname.includes('/cs') &&
+            !window.location.pathname.includes('/admin'));
+
+        let targetUrl = '/';
+        if (isCustomerSite) {
+          targetUrl = import.meta.env.BASE_URL || '/';
+        } else if (isCustomerUser) {
+          if (import.meta.env.VITE_CUSTOMER_PORTAL_URL) {
+            targetUrl = import.meta.env.VITE_CUSTOMER_PORTAL_URL;
+          } else if (window.location.port === '5173' || window.location.port === '5005') {
+            targetUrl = `${window.location.protocol}//${window.location.hostname}:5006/`;
+          } else {
+            targetUrl = '/';
+          }
+        } else {
+          targetUrl = '/';
+        }
         window.location.replace(targetUrl);
       }
 
@@ -715,11 +733,29 @@ export function AuthProvider({ children }) {
       setIsLoading(false);
 
       if (typeof window !== 'undefined') {
-        const isCustomerSite =
+        const isCustomerSite = import.meta.env.VITE_APP_MODE === 'customer';
+        const isCustomerUser =
           user?.role === 'customer' ||
-          import.meta.env.VITE_APP_MODE === 'customer' ||
-          window.location.pathname.includes('/customer');
-        const targetUrl = isCustomerSite ? (import.meta.env.BASE_URL || '/') : '/';
+          (!isStaffUser(user) &&
+            !window.location.pathname.includes('/employee') &&
+            !window.location.pathname.includes('/superadmin') &&
+            !window.location.pathname.includes('/cs') &&
+            !window.location.pathname.includes('/admin'));
+
+        let targetUrl = '/';
+        if (isCustomerSite) {
+          targetUrl = import.meta.env.BASE_URL || '/';
+        } else if (isCustomerUser) {
+          if (import.meta.env.VITE_CUSTOMER_PORTAL_URL) {
+            targetUrl = import.meta.env.VITE_CUSTOMER_PORTAL_URL;
+          } else if (window.location.port === '5173' || window.location.port === '5005') {
+            targetUrl = `${window.location.protocol}//${window.location.hostname}:5006/`;
+          } else {
+            targetUrl = '/';
+          }
+        } else {
+          targetUrl = '/';
+        }
         window.location.replace(targetUrl);
       }
     }
