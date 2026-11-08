@@ -145,3 +145,4 @@ server {
         proxy_set_header Cookie $http_cookie;
     }
 }
+

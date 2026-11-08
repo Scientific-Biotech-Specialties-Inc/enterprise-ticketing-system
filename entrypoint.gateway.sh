@@ -18,3 +18,4 @@ envsubst '$TICKET_SERVICE_URL $EMPLOYEE_SERVICE_URL $CUSTOMER_SERVICE_URL $CONFI
   > /etc/nginx/conf.d/default.conf
 
 exec nginx -g "daemon off;"
+
