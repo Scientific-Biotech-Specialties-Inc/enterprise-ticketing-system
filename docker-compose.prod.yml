@@ -1,5 +1,6 @@
 services:
 
+  # 1. Primary Relational Database
   db:
     image: mysql:8
     container_name: capstone-db-prod
@@ -13,7 +14,10 @@ services:
     volumes:
       - db_data_prod:/var/lib/mysql
     networks:
-      - default
+      default:
+      shared-capstone-network:
+        aliases:
+          - db
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
@@ -21,6 +25,7 @@ services:
       retries: 10
       start_period: 30s
 
+  # 2. Redis Cache & Queue Broker
   redis:
     image: redis:7-alpine
     container_name: capstone-redis-prod
@@ -29,8 +34,12 @@ services:
       - redis_data_prod:/data
     command: redis-server --appendonly yes
     networks:
-      - default
+      default:
+      shared-capstone-network:
+        aliases:
+          - redis
 
+  # 3. Customer WebSocket Server (Laravel Reverb)
   reverb:
     build:
       context: ./services/customer-service
@@ -39,9 +48,9 @@ services:
     environment:
       APP_ENV: production
       APP_DEBUG: "false"
-      REVERB_APP_ID: local
-      REVERB_APP_KEY: local
-      REVERB_APP_SECRET: local
+      REVERB_APP_ID: ${REVERB_APP_ID:-local}
+      REVERB_APP_KEY: ${REVERB_APP_KEY:-local}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET:-local}
       REDIS_HOST: redis
       REVERB_SERVER_HOST: 0.0.0.0
       REVERB_SERVER_PORT: 6001
@@ -54,6 +63,7 @@ services:
         aliases:
           - reverb
 
+  # 4. Customer Service (Port 8000)
   customer-service:
     build:
       context: ./services/customer-service
@@ -74,19 +84,20 @@ services:
       SESSION_DRIVER: redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      REVERB_APP_ID: local
-      REVERB_APP_KEY: local
-      REVERB_APP_SECRET: local
+      REVERB_APP_ID: ${REVERB_APP_ID:-local}
+      REVERB_APP_KEY: ${REVERB_APP_KEY:-local}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET:-local}
       REVERB_HOST: reverb
       REVERB_PORT: 6001
       MAIL_MAILER: smtp
-      MAIL_HOST: smtp.gmail.com
-      MAIL_PORT: 587
+      MAIL_HOST: ${MAIL_HOST:-smtp.gmail.com}
+      MAIL_PORT: ${MAIL_PORT:-587}
       MAIL_USERNAME: ${MAIL_USERNAME}
       MAIL_PASSWORD: ${MAIL_PASSWORD}
-      MAIL_ENCRYPTION: tls
+      MAIL_ENCRYPTION: ${MAIL_ENCRYPTION:-tls}
       MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS}
       MAIL_FROM_NAME: "Enterprise Ticketing System"
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
     depends_on:
       db:
         condition: service_healthy
@@ -100,6 +111,7 @@ services:
         aliases:
           - customer-service
 
+  # 5. Customer Service Queue Worker
   customer-service-queue:
     build:
       context: ./services/customer-service
@@ -119,9 +131,9 @@ services:
       QUEUE_CONNECTION: redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      REVERB_APP_ID: local
-      REVERB_APP_KEY: local
-      REVERB_APP_SECRET: local
+      REVERB_APP_ID: ${REVERB_APP_ID:-local}
+      REVERB_APP_KEY: ${REVERB_APP_KEY:-local}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET:-local}
       REVERB_HOST: reverb
       REVERB_PORT: 6001
     command: php artisan queue:work redis --sleep=1 --tries=3 --timeout=90 --max-jobs=1000 --max-time=3600
@@ -135,6 +147,7 @@ services:
     networks:
       - default
 
+  # 6. Ticket Service Scheduler
   ticket-scheduler:
     build:
       context: ./services/ticket-service
@@ -155,9 +168,10 @@ services:
       SESSION_DRIVER: redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      REVERB_APP_ID: local
-      REVERB_APP_KEY: local
-      REVERB_APP_SECRET: local
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      REVERB_APP_ID: ${REVERB_APP_ID:-local}
+      REVERB_APP_KEY: ${REVERB_APP_KEY:-local}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET:-local}
       REVERB_HOST: reverb
       REVERB_PORT: 6001
     command: php artisan schedule:work
@@ -171,6 +185,7 @@ services:
     networks:
       - default
 
+  # 7. Core Ticket Service (Port 8000)
   ticket-service:
     build:
       context: ./services/ticket-service
@@ -191,9 +206,11 @@ services:
       SESSION_DRIVER: redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      REVERB_APP_ID: local
-      REVERB_APP_KEY: local
-      REVERB_APP_SECRET: local
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      PHP_CLI_SERVER_WORKERS: 4
+      REVERB_APP_ID: ${REVERB_APP_ID:-local}
+      REVERB_APP_KEY: ${REVERB_APP_KEY:-local}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET:-local}
       REVERB_HOST: reverb
       REVERB_PORT: 6001
     depends_on:
@@ -209,6 +226,7 @@ services:
         aliases:
           - ticket-service
 
+  # 8. Ticket Service Queue Worker
   ticket-service-queue:
     build:
       context: ./services/ticket-service
@@ -228,9 +246,9 @@ services:
       QUEUE_CONNECTION: redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      REVERB_APP_ID: local
-      REVERB_APP_KEY: local
-      REVERB_APP_SECRET: local
+      REVERB_APP_ID: ${REVERB_APP_ID:-local}
+      REVERB_APP_KEY: ${REVERB_APP_KEY:-local}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET:-local}
       REVERB_HOST: reverb
       REVERB_PORT: 6001
     command: php artisan queue:work redis --sleep=1 --tries=3 --timeout=90 --max-jobs=1000 --max-time=3600
@@ -244,6 +262,79 @@ services:
     networks:
       - default
 
+  # 9. Employee Service (Port 8000)
+  employee-service:
+    build:
+      context: ./services/employee-service
+    container_name: employee-service-prod
+    restart: always
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      DB_CONNECTION: mysql
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_DATABASE: ${MYSQL_DATABASE}
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      CACHE_DRIVER: redis
+      BROADCAST_DRIVER: reverb
+      QUEUE_CONNECTION: redis
+      SESSION_DRIVER: redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REVERB_APP_ID: ${REVERB_APP_ID:-local}
+      REVERB_APP_KEY: ${REVERB_APP_KEY:-local}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET:-local}
+      REVERB_HOST: reverb
+      REVERB_PORT: 6001
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      PHP_CLI_SERVER_WORKERS: 4
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      reverb:
+        condition: service_started
+    networks:
+      default:
+      shared-capstone-network:
+        aliases:
+          - employee-service
+
+  # 10. Configuration Service (Port 8000)
+  configuration-service:
+    build:
+      context: ./services/configuration-service
+    container_name: configuration-service-prod
+    restart: always
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      DB_CONNECTION: mysql
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_DATABASE: ${MYSQL_DATABASE}
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      CACHE_DRIVER: redis
+      SESSION_DRIVER: redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      default:
+      shared-capstone-network:
+        aliases:
+          - configuration-service
+
+  # 11. Notification Service (Port 8000)
   notification-service:
     build:
       context: ./services/notification-service
@@ -262,8 +353,12 @@ services:
       db:
         condition: service_healthy
     networks:
-      - default
+      default:
+      shared-capstone-network:
+        aliases:
+          - notification-service
 
+  # 12. Analytics Service (Port 8000)
   analytics-service:
     build:
       context: ./services/analytics-service
@@ -279,12 +374,77 @@ services:
       DB_DATABASE: ${MYSQL_DATABASE}
       DB_USERNAME: root
       DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      CACHE_DRIVER: redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
     networks:
-      - default
+      default:
+      shared-capstone-network:
+        aliases:
+          - analytics-service
 
+  # 13. ClamAV Antivirus Daemon (Port 3310)
+  clamav:
+    image: clamav/clamav:stable
+    container_name: capstone-clamav-prod
+    restart: always
+    networks:
+      default:
+      shared-capstone-network:
+        aliases:
+          - clamav
+
+  # 14. Attachment Service (Port 8000)
+  attachment-service:
+    build:
+      context: ./services/attachment-service
+    container_name: attachment-service-prod
+    restart: always
+    volumes:
+      - attachment_data_prod:/var/www/storage/app/public
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      DB_CONNECTION: mysql
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_DATABASE: ${MYSQL_DATABASE}
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      CACHE_DRIVER: redis
+      BROADCAST_DRIVER: reverb
+      QUEUE_CONNECTION: redis
+      SESSION_DRIVER: redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REVERB_APP_ID: ${REVERB_APP_ID:-local}
+      REVERB_APP_KEY: ${REVERB_APP_KEY:-local}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET:-local}
+      REVERB_HOST: reverb
+      REVERB_PORT: 6001
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      TICKET_SERVICE_URL: http://ticket-service:8000
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      clamav:
+        condition: service_started
+    networks:
+      default:
+      shared-capstone-network:
+        aliases:
+          - attachment-service
+
+  # 15. AI Service with Gemini 2.0 Flash (Port 8000)
   ai-service:
     build:
       context: ./services/AI-service
@@ -299,13 +459,119 @@ services:
       DB_DATABASE: ${MYSQL_DATABASE}
       DB_USERNAME: root
       DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+      GEMINI_TIMEOUT_SECONDS: ${GEMINI_TIMEOUT_SECONDS:-15}
+      KB_EMBEDDING_MODEL: ${KB_EMBEDDING_MODEL:-gemini-embedding-001}
+      KB_EMBEDDING_DIMS: ${KB_EMBEDDING_DIMS:-768}
+      KB_MIN_SCORE: ${KB_MIN_SCORE:-0.55}
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      AUTH_SERVICE_URL: ${AUTH_SERVICE_URL:-http://auth-service:8000}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
     depends_on:
       db:
         condition: service_healthy
+      clamav:
+        condition: service_started
     networks:
-      - default
+      default:
+      shared-capstone-network:
+        aliases:
+          - ai-service
 
-  # Employee frontend - auth module proxies to ticketing_web:5005
+  # 16. MongoDB 7 for Real-Time Chat Persistence
+  mongodb:
+    image: mongo:7.0.14
+    container_name: capstone-mongodb-prod
+    restart: always
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-secret}
+    volumes:
+      - mongodb_data_prod:/data/db
+    networks:
+      default:
+      shared-capstone-network:
+        aliases:
+          - mongodb
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 17. Messaging Reverb WebSocket (Port 6002)
+  messaging-reverb:
+    build:
+      context: ./services/messaging-service
+    container_name: capstone-messaging-reverb-prod
+    restart: always
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      REVERB_APP_ID: ${MESSAGING_REVERB_APP_ID:-messaging-local}
+      REVERB_APP_KEY: ${MESSAGING_REVERB_APP_KEY:-messaging-local-key}
+      REVERB_APP_SECRET: ${MESSAGING_REVERB_APP_SECRET:-messaging-local-secret}
+      REDIS_HOST: redis
+      REVERB_SERVER_HOST: 0.0.0.0
+      REVERB_SERVER_PORT: 6002
+    command: php artisan reverb:start --host=0.0.0.0 --port=6002
+    depends_on:
+      - redis
+    networks:
+      default:
+      shared-capstone-network:
+        aliases:
+          - messaging-reverb
+
+  # 18. Messaging Service (Port 8000)
+  messaging-service:
+    build:
+      context: ./services/messaging-service
+    container_name: messaging-service-prod
+    restart: always
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      DB_CONNECTION: mongodb
+      MONGODB_URI: mongodb://${MONGO_ROOT_USERNAME:-root}:${MONGO_ROOT_PASSWORD:-secret}@mongodb:27017/messaging?authSource=admin
+      MONGODB_DATABASE: messaging
+      PASSPORT_CONNECTION: mysql
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_DATABASE: ${MYSQL_DATABASE}
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      CACHE_DRIVER: redis
+      BROADCAST_DRIVER: reverb
+      QUEUE_CONNECTION: redis
+      SESSION_DRIVER: redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REVERB_APP_ID: ${MESSAGING_REVERB_APP_ID:-messaging-local}
+      REVERB_APP_KEY: ${MESSAGING_REVERB_APP_KEY:-messaging-local-key}
+      REVERB_APP_SECRET: ${MESSAGING_REVERB_APP_SECRET:-messaging-local-secret}
+      REVERB_HOST: messaging-reverb
+      REVERB_PORT: 6002
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      messaging-reverb:
+        condition: service_started
+    networks:
+      default:
+      shared-capstone-network:
+        aliases:
+          - messaging-service
+
+  # 19. Employee Frontend SPA (Port 5005)
   ticketing-web:
     build:
       context: ./frontend/web
@@ -324,7 +590,7 @@ services:
         aliases:
           - ticketing_web
 
-  # Customer frontend - auth module proxies to customer_ticketing_web:5006
+  # 20. Customer Frontend SPA (Port 5006)
   customer-ticketing-web:
     build:
       context: ./frontend/web
@@ -343,94 +609,42 @@ services:
         aliases:
           - customer_ticketing_web
 
-  mongodb:
-    image: mongo:6.0.14
-    container_name: capstone-mongodb-prod
+  # 21. Production Nginx Gateway Reverse Proxy (Ports 80 & 443)
+  ticketing-gateway:
+    image: nginx:alpine
+    container_name: ticketing-gateway-prod
     restart: always
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-secret}
+    ports:
+      - "80:80"
+      - "443:443"
     volumes:
-      - mongodb_data_prod:/data/db
-    networks:
-      - default
-      - shared-capstone-network
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  messaging-reverb:
-    build:
-      context: ./services/messaging-service
-    container_name: capstone-messaging-reverb-prod
-    restart: always
-    environment:
-      APP_ENV: production
-      APP_DEBUG: "false"
-      REVERB_APP_ID: messaging-local
-      REVERB_APP_KEY: messaging-local-key
-      REVERB_APP_SECRET: messaging-local-secret
-      REDIS_HOST: redis
-      REVERB_SERVER_HOST: 0.0.0.0
-      REVERB_SERVER_PORT: 6002
-    command: php artisan reverb:start --host=0.0.0.0 --port=6002
-    depends_on:
-      - redis
+      - ./nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       default:
       shared-capstone-network:
         aliases:
-          - messaging-reverb
-
-  messaging-service:
-    build:
-      context: ./services/messaging-service
-    container_name: messaging-service-prod
-    restart: always
-    env_file:
-      - ./services/messaging-service/.env
-    environment:
-      APP_ENV: production
-      APP_DEBUG: "false"
-      DB_CONNECTION: mongodb
-      DB_HOST: db
-      DB_PORT: 3306
-      DB_DATABASE: ${MYSQL_DATABASE}
-      DB_USERNAME: root
-      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      CACHE_DRIVER: redis
-      BROADCAST_DRIVER: reverb
-      QUEUE_CONNECTION: redis
-      SESSION_DRIVER: redis
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REVERB_APP_ID: messaging-local
-      REVERB_APP_KEY: messaging-local-key
-      REVERB_APP_SECRET: messaging-local-secret
-      REVERB_HOST: messaging-reverb
-      REVERB_PORT: 6002
+          - ticketing-gateway
     depends_on:
-      mongodb:
-        condition: service_healthy
-      redis:
-        condition: service_started
-      messaging-reverb:
-        condition: service_started
-    networks:
-      default:
-      shared-capstone-network:
-        aliases:
-          - messaging-service
+      - customer-service
+      - ticket-service
+      - employee-service
+      - configuration-service
+      - attachment-service
+      - messaging-service
+      - analytics-service
+      - ai-service
+      - ticketing-web
+      - customer-ticketing-web
 
 volumes:
   db_data_prod:
   redis_data_prod:
   mongodb_data_prod:
+  attachment_data_prod:
 
 networks:
   default:
     driver: bridge
   shared-capstone-network:
-    external: true
+    name: shared-capstone-network
+    driver: bridge
