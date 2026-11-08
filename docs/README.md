@@ -97,20 +97,10 @@ This documentation suite is organized into focused, modular domain guides:
    docker compose ps
    ```
 
-5. **Access the Applications:**
-   * **Customer Portal**: [http://localhost/](http://localhost/) (or direct dev port [http://localhost:5006/](http://localhost:5006/))
-   * **Employee / Support Portal**: [http://localhost/ticketing/](http://localhost/ticketing/) (or direct dev port [http://localhost:5005/](http://localhost:5005/))
-   * **API Gateway Entrypoint**: [http://localhost/api/ticketing/](http://localhost/api/ticketing/)
-
----
-
 ## Repository Structure
 
 ```
 .
-├── .agents/                    # Workspace agent rules & customizations
-│   └── rules/
-│       └── coding-standards.md # Enforced AI coding standards
 ├── docs/                       # Technical & architectural documentation suite
 ├── frontend/
 │   └── web/                    # Single-Page React 19 application (Employee & Customer modes)
@@ -131,16 +121,4 @@ This documentation suite is organized into focused, modular domain guides:
 
 ---
 
-## AI Agent Quick Task Map
-
-When working on specific feature areas or bugfixes, reference this quick map to locate the relevant source code:
-
-| Engineering Task | Primary Backend Files | Primary Frontend Files | Key Directives |
-| :--- | :--- | :--- | :--- |
-| **Authentication & Tokens** | [AuthController.php](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/services/customer-service/app/Http/Controllers/AuthController.php)<br/>[AuthenticateSubsystem.php](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/services/ticket-service/app/Http/Middleware/AuthenticateSubsystem.php)<br/>[DecryptRsaPayload.php](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/services/customer-service/app/Http/Middleware/DecryptRsaPayload.php) | [Loginpage.jsx](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/frontend/web/src/pages/Loginpage.jsx)<br/>[rsa.js](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/frontend/web/src/utils/rsa.js)<br/>[axiosInstance.js](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/frontend/web/src/api/axiosInstance.js) | Never transmit unencrypted passwords. Respect dual-token validation. |
-| **Ticket Lifecycle & SLAs** | [TicketController.php](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/services/ticket-service/app/Http/Controllers/TicketController.php)<br/>[SLAService.php](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/services/ticket-service/app/Services/SLAService.php)<br/>[SLARuleController.php](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/services/ticket-service/app/Http/Controllers/SLARuleController.php) | [MyTickets.jsx](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/frontend/web/src/pages/MyTickets.jsx)<br/>[EmployeeMyTickets.jsx](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/frontend/web/src/pages/EmployeeMyTickets.jsx)<br/>[CSIncoming.jsx](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/frontend/web/src/pages/CSIncoming.jsx) | Invalidate Redis cache on updates via `SCAN`. Broadcast `TicketChanged`. |
-| **File Uploads & Antivirus** | [AttachmentController.php](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/services/attachment-service/app/Http/Controllers/AttachmentController.php)<br/>[ClamAVScanner.php](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/services/attachment-service/app/Services/ClamAVScanner.php) | [FilePreviewModal.jsx](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/frontend/web/src/components/FilePreviewModal.jsx) | Stream to ClamAV (port 3310) before saving. Max size 15MB. |
-| **Live Chat & Messaging** | [MessageController.php](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/services/messaging-service/app/Http/Controllers/MessageController.php)<br/>[Message.php](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/services/messaging-service/app/Models/Message.php) | [MessagingPage.jsx](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/frontend/web/src/pages/MessagingPage.jsx) | Store in MongoDB `messages`. Broadcast over Reverb (port 6002). |
-| **Predictive Analytics** | [PredictiveAnalyticsController.php](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/services/analytics-service/app/Http/Controllers/PredictiveAnalyticsController.php)<br/>[FeedbackController.php](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/services/analytics-service/app/Http/Controllers/FeedbackController.php) | [PredictiveAnalytics.jsx](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/frontend/web/src/pages/PredictiveAnalytics.jsx)<br/>[AdminReports.jsx](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/frontend/web/src/pages/AdminReports.jsx) | Read from local analytics MySQL tables. Render via Chart.js. |
-| **Gateway & Reverse Proxy** | [nginx.conf](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/nginx.conf)<br/>[nginx.prod.conf](file:///c:/Users/Shelley/Desktop/projects/php/enterprise-ticketing-system/nginx.prod.conf) | N/A | Maintain route parity between dev and prod configurations. |
 
