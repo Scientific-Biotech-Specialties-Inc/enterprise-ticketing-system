@@ -9,9 +9,13 @@ echo "======================================================"
 SERVICES=(
     "customer-service-prod"
     "ticket-service-prod"
+    "employee-service-prod"
+    "configuration-service-prod"
+    "attachment-service-prod"
     "notification-service-prod"
     "analytics-service-prod"
     "ai-service-prod"
+    "messaging-service-prod"
 )
 
 for SERVICE in "${SERVICES[@]}"; do
