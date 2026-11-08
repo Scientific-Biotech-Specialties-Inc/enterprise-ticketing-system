@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { updateEmployeeTicket } from '@/services/ticketService';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
+import useMaxFileCount from '@/hooks/useMaxFileCount';
+import ActionErrorModal, { getActionError } from './ActionErrorModal';
 
 function ProofFileItem({ file, onRemove }) {
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -49,12 +52,15 @@ export default function ProofCompletionModal({
   onClose,
   onStatusChange,
 }) {
+  useLockBodyScroll(Boolean(ticket));
   const navigate = useNavigate();
   const [proofFiles, setProofFiles] = useState([]);
+  const maxFileCount = useMaxFileCount();
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [remarks, setRemarks] = useState('');
+  const [submitError, setSubmitError] = useState(null);
 
   useEffect(() => {
     setProofFiles([]);
@@ -62,6 +68,7 @@ export default function ProofCompletionModal({
     setSuccessMessage('');
     setIsSubmitting(false);
     setRemarks('');
+    setSubmitError(null);
   }, [ticket]);
 
   if (!ticket) return null;
@@ -152,8 +159,10 @@ export default function ProofCompletionModal({
         navigate('/employee/machine');
       }, 1500);
     } catch (err) {
-      const msg = err?.response?.data?.message;
-      setErrorMessage(msg || 'Failed to submit proof. Please try again.');
+      // Every failed submission opens a modal explaining why; the inline text stays as a reminder.
+      const notice = getActionError(err, 'Failed to submit proof.');
+      setSubmitError(notice);
+      setErrorMessage(notice.inline);
     } finally {
       setIsSubmitting(false);
     }
@@ -174,6 +183,12 @@ export default function ProofCompletionModal({
       return;
     }
 
+    if (proofFiles.length + newFiles.length > maxFileCount) {
+      setErrorMessage(`You can attach a maximum of ${maxFileCount} files.`);
+      e.target.value = null;
+      return;
+    }
+
     const fileError = validateFiles(newFiles, proofFiles);
     if (fileError) {
       setErrorMessage(fileError);
@@ -186,6 +201,7 @@ export default function ProofCompletionModal({
   };
 
   return (
+    <>
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-[1.5px] overflow-y-auto py-10" onClick={onClose}>
       <div
         className="bg-white rounded-xl shadow-2xl w-full max-w-xl mx-4 my-auto relative flex flex-col max-h-[85vh] animate-in fade-in zoom-in-95 duration-200"
@@ -356,5 +372,8 @@ export default function ProofCompletionModal({
         </div>
       </div>
     </div>
+    {/* Sibling of the backdrop so clicks in the notice do not bubble to the backdrop's onClose. */}
+    <ActionErrorModal error={submitError} onClose={() => setSubmitError(null)} />
+    </>
   );
 }

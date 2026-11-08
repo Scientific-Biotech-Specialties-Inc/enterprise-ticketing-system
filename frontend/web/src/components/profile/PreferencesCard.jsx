@@ -1,25 +1,34 @@
-import React, { useState } from 'react';
-import { SlidersHorizontal } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { SlidersHorizontal, AlertCircle, CheckCircle, Bell, Mail, Info } from 'lucide-react';
+import { getNotificationPreferences, updateNotificationPreferences } from '@/services/ticketService';
 
-function ToggleRow({ label, description, checked, onChange }) {
+function ChannelToggleRow({ icon: Icon, label, description, checked, onChange, disabled }) {
   return (
-    <div className="flex items-center justify-between px-6 py-3">
-      <div>
-        <p className="text-sm font-semibold text-gray-700">{label}</p>
-        <p className="text-xs text-gray-500">{description}</p>
+    <div className="flex items-center justify-between px-6 py-3.5 hover:bg-slate-50/50 transition-colors font-sans">
+      <div className="flex items-start gap-3">
+        <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
+          checked ? 'bg-blue-50 text-accent' : 'bg-slate-100 text-muted-slate'
+        }`}>
+          <Icon size={16} />
+        </div>
+        <div>
+          <p className="text-sm font-semibold text-dark-slate">{label}</p>
+          <p className="text-xs text-muted-slate">{description}</p>
+        </div>
       </div>
       <button
         type="button"
         role="switch"
         aria-checked={checked}
+        disabled={disabled}
         onClick={() => onChange(!checked)}
-        className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[#252578]/20 ${
-          checked ? 'bg-[#252578]' : 'bg-gray-200'
+        className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+          checked ? 'bg-primary' : 'bg-slate-200'
         }`}
       >
         <span
-          className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform ring-0 transition duration-200 ${
-            checked ? 'translate-x-4' : 'translate-x-0'
+          className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-xs transform ring-0 transition duration-200 ${
+            checked ? 'translate-x-5' : 'translate-x-0'
           }`}
         />
       </button>
@@ -29,67 +38,166 @@ function ToggleRow({ label, description, checked, onChange }) {
 
 export default function PreferencesCard({ role }) {
   const [prefs, setPrefs] = useState({
-    emailNotifications: true,
-    systemAlerts: true,
-    loginAlerts: true,
+    email: true,
+    in_app: true,
   });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [warningMessage, setWarningMessage] = useState('');
 
-  const toggle = (key) => () => {
-    setPrefs((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
+  // Fetch preferences on mount
+  useEffect(() => {
+    let isMounted = true;
+    const fetchPrefs = async () => {
+      setLoading(true);
+      try {
+        const data = await getNotificationPreferences();
+        if (isMounted && data) {
+          setPrefs({
+            email: Boolean(data.email ?? data.preferences?.email ?? true),
+            in_app: Boolean(data.in_app ?? data.preferences?.in_app ?? true),
+          });
+        }
+      } catch (err) {
+        console.warn('Could not load notification preferences from server, using defaults.', err);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
 
-  const handleSave = (e) => {
-    e.preventDefault();
+    fetchPrefs();
+    return () => { isMounted = false; };
+  }, []);
+
+  const handleToggle = async (channel, newValue) => {
+    if (saving) return;
+
+    setError('');
+    setSuccess('');
+    setWarningMessage('');
+
+    const nextEmail = channel === 'email' ? newValue : prefs.email;
+    const nextInApp = channel === 'in_app' ? newValue : prefs.in_app;
+
+    // TS005 Rule: At least one channel must remain enabled at all times
+    if (!nextEmail && !nextInApp) {
+      setError('At least one notification channel must stay enabled so you don\'t miss updates.');
+      return;
+    }
+
+    // Inline non-blocking warning when disabling a channel
+    if (!newValue) {
+      if (channel === 'email') {
+        setWarningMessage('Disabling Email means you will only receive ticket updates via In-App notifications.');
+      } else if (channel === 'in_app') {
+        setWarningMessage('Disabling In-App notifications means you will only receive updates via Email alerts.');
+      }
+    } else {
+      if (nextEmail && nextInApp) {
+        setWarningMessage('');
+      } else if (!nextEmail) {
+        setWarningMessage('Disabling Email means you will only receive ticket updates via In-App notifications.');
+      } else if (!nextInApp) {
+        setWarningMessage('Disabling In-App notifications means you will only receive updates via Email alerts.');
+      }
+    }
+
+    // Optimistically update
+    const previousPrefs = { ...prefs };
+    const updatedPrefs = { email: nextEmail, in_app: nextInApp };
+    setPrefs(updatedPrefs);
+    setSaving(true);
+
+    try {
+      await updateNotificationPreferences(updatedPrefs);
+      setSuccess('Notification preferences updated immediately.');
+      // Auto-clear success after 4 seconds
+      setTimeout(() => setSuccess(''), 4000);
+    } catch (err) {
+      // Revert to previous state on failure
+      setPrefs(previousPrefs);
+      const errMsg = err.response?.data?.message || 'Failed to save preference changes. Reverting to previous state.';
+      setError(errMsg);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-[0_8px_30px_rgb(0,0,0,0.02)]">
-      <div className="px-6 pt-5 pb-4 border-b border-gray-100 flex items-center gap-3">
-        <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
-          <SlidersHorizontal size={16} className="text-blue-600" />
+    <div className="bg-card rounded-xl border border-border shadow-xs font-sans">
+      <div className="px-6 pt-5 pb-4 border-b border-border flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
+            <SlidersHorizontal size={16} className="text-accent" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-dark-slate">Notification Preferences</h3>
+            <p className="text-xs text-muted-slate">Configure how and where you receive ticket updates.</p>
+          </div>
         </div>
-        <div>
-          <h3 className="text-sm font-bold text-gray-800">Preferences</h3>
-          <p className="text-xs text-gray-500">Notifications and display settings.</p>
+        {saving && (
+          <span className="text-[11px] font-medium text-muted-slate animate-pulse">
+            Saving...
+          </span>
+        )}
+      </div>
+
+      <div className="p-6 pb-2">
+        {error && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2 text-xs text-red-700 font-medium animate-fade-in">
+            <AlertCircle size={15} className="shrink-0 mt-0.5 text-red-600" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {warningMessage && !error && (
+          <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2 text-xs text-amber-800 font-medium animate-fade-in">
+            <Info size={15} className="shrink-0 mt-0.5 text-amber-600" />
+            <span>{warningMessage}</span>
+          </div>
+        )}
+
+        {success && (
+          <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2 text-xs text-emerald-700 font-semibold animate-fade-in">
+            <CheckCircle size={15} className="shrink-0 text-emerald-600" />
+            <span>{success}</span>
+          </div>
+        )}
+
+        <div className="mb-2">
+          <p className="text-[10px] font-bold text-muted-slate uppercase tracking-widest">
+            Delivery Channels
+          </p>
         </div>
       </div>
 
-      <form onSubmit={handleSave}>
-        <div className="pt-4 pb-1 px-6">
-          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Notifications</p>
-        </div>
-        <div className="divide-y divide-gray-50">
-          <ToggleRow
-            label="Email notifications"
-            description="Receive alerts via email"
-            checked={prefs.emailNotifications}
-            onChange={toggle('emailNotifications')}
-          />
-          <ToggleRow
-            label="System alerts"
-            description="In-app notifications and banners"
-            checked={prefs.systemAlerts}
-            onChange={toggle('systemAlerts')}
-          />
-          {role === 'Admin' && (
-            <ToggleRow
-              label="Login alerts"
-              description="Email me when a new login is detected"
-              checked={prefs.loginAlerts}
-              onChange={toggle('loginAlerts')}
-            />
-          )}
-        </div>
+      <div className="divide-y divide-border pb-4">
+        <ChannelToggleRow
+          icon={Mail}
+          label="Email Notifications"
+          description="Receive ticket creations, replies, and status changes directly in your inbox"
+          checked={prefs.email}
+          onChange={(newVal) => handleToggle('email', newVal)}
+          disabled={loading || saving}
+        />
+        <ChannelToggleRow
+          icon={Bell}
+          label="In-App Notifications"
+          description="Real-time notifications and alerts inside the ticketing portal"
+          checked={prefs.in_app}
+          onChange={(newVal) => handleToggle('in_app', newVal)}
+          disabled={loading || saving}
+        />
+      </div>
 
-        <div className="px-6 pb-5 pt-2">
-          <button
-            type="submit"
-            className="h-9 px-5 text-sm font-semibold bg-[#252578] hover:bg-[#1f1f66] text-white rounded-xl transition-colors"
-          >
-            Save preferences
-          </button>
-        </div>
-      </form>
+      <div className="px-6 py-3 bg-slate-50/70 border-t border-border rounded-b-xl">
+        <p className="text-[11px] text-muted-slate">
+          * At least one channel must stay enabled to ensure you never miss critical ticket updates.
+        </p>
+      </div>
     </div>
   );
 }
+

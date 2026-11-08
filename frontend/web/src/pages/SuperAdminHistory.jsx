@@ -2,6 +2,11 @@ import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Search } from 'lucide-react';
 import { getSuperAdminHistory } from '@/services/ticketService';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
+import { PageHeader } from '@/components/ui/page-header';
+import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from '@/components/ui/table';
+import { DataTableSkeleton } from '@/components/ui/skeleton';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 
 export default function SuperAdminHistory() {
   const [search, setSearch] = useState('');
@@ -45,68 +50,77 @@ export default function SuperAdminHistory() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-3xl font-bold text-[#252578]">Configuration History</h1>
-        <p className="mt-1 text-sm text-gray-500">Timeline of all equipment categories and priority level updates.</p>
-      </div>
+      <PageHeader
+        pattern="B"
+        title="Configuration History"
+        subtitle="Timeline of all equipment categories and priority level updates."
+      />
 
       <div className="relative w-full">
-        <Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
-        <input
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-muted pointer-events-none" />
+        <Input
           type="text"
           placeholder="Search history..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-[#252578]"
+          className="pl-9 h-9 text-xs"
         />
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white shadow-sm">
-        <table className="w-full text-left">
-          <thead className="border-b border-gray-100 bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
-            <tr>
-              <th className="px-5 py-4 whitespace-nowrap">Timestamp</th>
-              <th className="px-5 py-4 whitespace-nowrap">User</th>
-              <th className="px-5 py-4 whitespace-nowrap">Action</th>
-              <th className="px-5 py-4 whitespace-nowrap">Module</th>
-              <th className="px-5 py-4 whitespace-nowrap">Target</th>
-              <th className="px-5 py-4 whitespace-nowrap">Details</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {loading && filtered.length === 0 ? (
-              <tr>
-                <td colSpan="6" className="px-5 py-8 text-center text-sm text-gray-500">
-                  <div className="flex items-center justify-center gap-2">
-                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-[#252578] border-t-transparent" />
-                    Loading history...
-                  </div>
-                </td>
-              </tr>
-            ) : filtered.length === 0 ? (
-              <tr>
-                <td colSpan="6" className="px-5 py-8 text-center text-sm text-gray-500">No history records found.</td>
-              </tr>
-            ) : (
-              filtered.map((log) => (
-                <tr key={log.id} className="hover:bg-gray-50">
-                  <td className="px-5 py-4 text-sm text-gray-600 whitespace-nowrap">{log.timestamp}</td>
-                  <td className="px-5 py-4 text-sm text-gray-800 whitespace-nowrap font-medium">{log.user}</td>
-                  <td className="px-5 py-4 text-sm whitespace-nowrap">
-                    <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                      log.action === 'Created' ? 'bg-green-100 text-green-700' :
-                      log.action === 'Deleted' ? 'bg-red-100 text-red-700' :
-                      'bg-blue-100 text-blue-700'
-                    }`}>{log.action}</span>
-                  </td>
-                  <td className="px-5 py-4 text-sm text-gray-600 whitespace-nowrap">{log.module}</td>
-                  <td className="px-5 py-4 text-sm text-gray-800 whitespace-nowrap font-medium">{log.target}</td>
-                  <td className="px-5 py-4 text-sm text-gray-600">{log.details}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+      <div className="rounded-xl border border-border bg-card shadow-xs overflow-hidden">
+        {loading && filtered.length === 0 ? (
+          <div className="p-4">
+            <DataTableSkeleton columns={6} rows={6} />
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="whitespace-nowrap text-[11px] font-bold text-muted-slate uppercase tracking-wider py-2.5 px-3">Timestamp</TableHead>
+                  <TableHead className="whitespace-nowrap text-[11px] font-bold text-muted-slate uppercase tracking-wider py-2.5 px-3">User</TableHead>
+                  <TableHead className="whitespace-nowrap text-[11px] font-bold text-muted-slate uppercase tracking-wider py-2.5 px-3">Action</TableHead>
+                  <TableHead className="whitespace-nowrap text-[11px] font-bold text-muted-slate uppercase tracking-wider py-2.5 px-3">Module</TableHead>
+                  <TableHead className="whitespace-nowrap text-[11px] font-bold text-muted-slate uppercase tracking-wider py-2.5 px-3">Target</TableHead>
+                  <TableHead className="whitespace-nowrap text-[11px] font-bold text-muted-slate uppercase tracking-wider py-2.5 px-3">Details</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filtered.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center py-8 text-xs text-slate-muted">
+                      No history records found.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filtered.map((log) => (
+                    <TableRow key={log.id}>
+                      <TableCell className="text-slate-muted whitespace-nowrap text-xs font-mono py-2.5 px-3">{log.timestamp}</TableCell>
+                      <TableCell className="font-semibold text-slate-dark whitespace-nowrap text-xs py-2.5 px-3">{log.user}</TableCell>
+                      <TableCell className="whitespace-nowrap py-2.5 px-3">
+                        <Badge
+                          size="sm"
+                          variant={
+                            log.action === 'Created'
+                              ? 'success'
+                              : log.action === 'Deleted'
+                              ? 'destructive'
+                              : 'info'
+                          }
+                        >
+                          {log.action}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-slate-muted whitespace-nowrap text-xs py-2.5 px-3">{log.module}</TableCell>
+                      <TableCell className="font-semibold text-slate-dark whitespace-nowrap text-xs py-2.5 px-3">{log.target}</TableCell>
+                      <TableCell className="text-slate-muted text-xs py-2.5 px-3">{log.details}</TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        )}
       </div>
     </div>
   );

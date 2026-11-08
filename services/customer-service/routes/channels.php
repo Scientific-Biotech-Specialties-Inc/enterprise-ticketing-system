@@ -15,5 +15,5 @@ use Illuminate\Support\Facades\Broadcast;
 */
 
 Broadcast::channel('employee-status', function ($user) {
-    return $user instanceof Employee && $user->role === 'customer service';
+    return $user instanceof Employee && in_array($user->role, ['customer service', 'head of cs', 'head of customer service', 'cs']);
 });

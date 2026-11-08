@@ -41,6 +41,9 @@ class TicketCacheService
                         }
                         if (!empty($keys)) {
                             foreach ($keys as $key) {
+                                try {
+                                    $client->del($key);
+                                } catch (\Throwable $e) {}
                                 $this->forgetCleanKey($key, $prefix);
                             }
                         }
@@ -55,12 +58,48 @@ class TicketCacheService
                         $keys = $response[1];
                         if (!empty($keys)) {
                             foreach ($keys as $key) {
+                                try {
+                                    $redis->del($key);
+                                } catch (\Throwable $e) {}
                                 $this->forgetCleanKey($key, $prefix);
                             }
                         }
                         $loopCount++;
                     } while ($iterator != 0 && $loopCount < 1000);
                 }
+            }
+
+            // Cross-service Redis key invalidation without Laravel prefix
+            try {
+                $rawHost = config('database.redis.cache.host', config('database.redis.default.host', 'redis'));
+                $rawPort = (int) config('database.redis.cache.port', config('database.redis.default.port', 6379));
+                $rawPassword = config('database.redis.cache.password', config('database.redis.default.password'));
+
+                $rawClient = new \Redis();
+                if (@$rawClient->connect($rawHost, $rawPort, 1.5)) {
+                    if ($rawPassword) {
+                        $rawClient->auth($rawPassword);
+                    }
+                    foreach ($patterns as $pattern) {
+                        $it = null;
+                        $loops = 0;
+                        do {
+                            $rawKeys = $rawClient->scan($it, $pattern, 100);
+                            if ($rawKeys === false) break;
+                            if (!empty($rawKeys)) {
+                                foreach ($rawKeys as $rk) {
+                                    try {
+                                        $rawClient->del($rk);
+                                    } catch (\Throwable $e) {}
+                                }
+                            }
+                            $loops++;
+                        } while ($it > 0 && $loops < 500);
+                    }
+                    $rawClient->close();
+                }
+            } catch (\Throwable $e) {
+                // Non-blocking fallback
             }
         } catch (\Exception $e) {
             Log::warning('Redis cache clearing failed: ' . $e->getMessage());

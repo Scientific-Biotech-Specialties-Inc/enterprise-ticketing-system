@@ -1,47 +1,43 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Inbox, Clock, CheckCircle, Archive, Bot } from 'lucide-react';
+import { Inbox, Clock, CheckCircle2, Archive, Bot, Eye, ArrowRight } from 'lucide-react';
 import TicketModal from '@/components/TicketModal';
 import CustomerTicketDetailModal from '@/components/CustomerTicketDetailModal';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import {
   createTicket,
   discardCustomerTicket,
-  getCachedTicketFormOptions,
   getCustomerDashboard,
-  getTicketFormOptions,
   prefetchTicketFormOptions,
-  saveCustomerTicketDetail,
   getTicketDetails,
   updateTicket,
+  reopenTicket,
 } from '@/services/ticketService';
-import { statusColors } from '@/constants/employeeTickets';
-import SkeletonLoader from '@/components/SkeletonLoader';
 import { useAuth } from '@/context/AuthContext';
-import { getExternalTicketsFromStorage, seedDemoExternalTicket } from '@/data/mockFeedbackData';
 import { parseUTCDate } from '@/utils/dateUtils';
 import { getMaxOpenTicketsLimit, OPEN_STATUS_SET } from '@/data/ticketLimitConfig';
+import { DashboardHeader } from '@/components/ui/page-header';
+import { MetricCard } from '@/components/ui/metric-card';
+import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from '@/components/ui/table';
+import { DataTableSkeleton } from '@/components/ui/data-table';
+import { ConfirmationModal } from '@/components/ui/confirmation-modal';
+import { Button } from '@/components/ui/button';
+import { useToast } from '@/context/ToastContext';
 
 const getStoredUser = () => {
   try {
-    return JSON.parse(localStorage.getItem('user') || 'null');
+    return JSON.parse(sessionStorage.getItem('user') || 'null');
   } catch {
     return null;
   }
-};
-
-const formatTimeAgo = (dateStr) => {
-  if (!dateStr) return '';
-  const date = parseUTCDate(dateStr);
-  if (!date || isNaN(date.getTime())) return dateStr;
-  const seconds = Math.floor((new Date() - date) / 1000);
-  if (seconds < 60) return 'just now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
 };
 
 export default function CustomerDashboard() {
@@ -51,7 +47,6 @@ export default function CustomerDashboard() {
 
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [confirmDiscard, setConfirmDiscard] = useState(null);
-  const [createdTicket, setCreatedTicket] = useState(null);
   const [summary, setSummary] = useState({
     open: 0,
     in_progress: 0,
@@ -60,11 +55,10 @@ export default function CustomerDashboard() {
   });
   const [recentTickets, setRecentTickets] = useState([]);
   const [modalLoading, setModalLoading] = useState(false);
-  const [showSuccess, setShowSuccess] = useState(false);
-  const [createdTicketId, setCreatedTicketId] = useState(null);
   const [loadingText, setLoadingText] = useState('Loading...');
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, isAuthenticated } = useAuth();
+  const toast = useToast();
   const effectiveUser = user || getStoredUser();
   const customerName = effectiveUser?.first_name
     ? `${effectiveUser.first_name}${effectiveUser.last_name ? ' ' + effectiveUser.last_name : ''}`
@@ -72,30 +66,41 @@ export default function CustomerDashboard() {
   const customerId = effectiveUser?.id || 1;
 
   useEffect(() => {
-    if (!effectiveUser) return;
-    window.history.pushState(null, '', window.location.href);
-    const handlePopState = () => {
-      window.history.pushState(null, '', window.location.href);
-      navigate('/customer-dashboard', { replace: true });
+    const handlePageShow = (e) => {
+      const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('is_logged_out') === 'true';
+      if (e.persisted || !isAuthenticated || !effectiveUser || isLoggedOut) {
+        navigate('/', { replace: true });
+      }
     };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [effectiveUser, navigate]);
+    window.addEventListener('pageshow', handlePageShow);
+    return () => window.removeEventListener('pageshow', handlePageShow);
+  }, [isAuthenticated, effectiveUser, navigate]);
 
+  useEffect(() => {
+    const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('is_logged_out') === 'true';
+    if (!effectiveUser || !isAuthenticated || isLoggedOut) {
+      navigate('/', { replace: true });
+      return undefined;
+    }
 
-  const buildDashboardSignature = useCallback((payload) => {
-    const summary = payload?.summary || {};
-    const recentTickets = payload?.recent_tickets || [];
-    return [
-      summary.open ?? 0,
-      summary.in_progress ?? 0,
-      summary.resolved ?? 0,
-      summary.closed ?? 0,
-      ...recentTickets.map((ticket) => [ticket.id, ticket.status, ticket.title].join(':')),
-    ].join('|');
-  }, []);
+    // Lock browser Back and Forward buttons on customer-dashboard while logged in
+    // so the user cannot use the Back button to return to the landing page or login page.
+    window.history.pushState(window.history.state, '', window.location.href);
+    const handlePopState = (e) => {
+      if (sessionStorage.getItem('is_logged_out') === 'true') {
+        navigate('/', { replace: true });
+        return;
+      }
+      e.stopImmediatePropagation();
+      window.history.pushState(window.history.state, '', window.location.href);
+    };
+    window.addEventListener('popstate', handlePopState, true);
+    return () => {
+      window.removeEventListener('popstate', handlePopState, true);
+    };
+  }, [effectiveUser, isAuthenticated, navigate]);
 
-  const loadDashboardData = useCallback(async ({ forceRefresh = false, source = 'manual', payload } = {}) => {
+  const loadDashboardData = useCallback(async ({ forceRefresh = false, source = 'manual' } = {}) => {
     if (source !== 'websocket' && source !== 'poll') {
       setDashboardLoading(true);
     }
@@ -111,48 +116,27 @@ export default function CustomerDashboard() {
         closed: stats.closed ?? 0,
       });
 
-      const apiTickets = (data?.recent_tickets || []).map(t => ({
-        ...t,
-        statusColor: statusColors[t.status] || 'bg-gray-100 text-gray-700'
-      }));
-      const externalTickets = getExternalTicketsFromStorage().map(t => ({
-        ...t,
-        statusColor: statusColors[t.status] || 'bg-gray-100 text-gray-700'
-      }));
-      const combined = [...externalTickets, ...apiTickets].filter(
+      const apiTickets = (data?.recent_tickets || []);
+      const combined = apiTickets.filter(
         t => t.status !== 'Discarded' && t.status !== 'Discarded by Customer'
       );
       setRecentTickets(combined);
-
     } catch (error) {
-      const external = getExternalTicketsFromStorage();
-      if (external.length > 0) {
-        setRecentTickets(external.filter(
-          t => t.status !== 'Discarded' && t.status !== 'Discarded by Customer'
-        ).map(t => ({
-          ...t,
-          statusColor: statusColors[t.status] || 'bg-gray-100 text-gray-700'
-        })));
-      } else {
-        setDashboardError('Failed to load dashboard data.');
-      }
+      setDashboardError('Failed to load dashboard data.');
     } finally {
       setDashboardLoading(false);
     }
   }, [customerId]);
 
-
-
   useEffect(() => {
-    seedDemoExternalTicket();
+    try {
+      localStorage.removeItem('demo_external_tickets');
+    } catch {
+      // ignore
+    }
 
-    prefetchTicketFormOptions().catch(() => {
-      // Modal handles display error if options cannot be fetched.
-    });
-
-    loadDashboardData({ forceRefresh: false }).catch(() => {
-      // State handled in loadDashboardData.
-    });
+    prefetchTicketFormOptions().catch(() => {});
+    loadDashboardData({ forceRefresh: false }).catch(() => {});
   }, [loadDashboardData]);
 
   useRealtimeRefresh({
@@ -161,17 +145,6 @@ export default function CustomerDashboard() {
     intervalMs: 0,
     deferRefresh: false,
   });
-
-  const dateStr = new Intl.DateTimeFormat('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }).format(new Date());
-
-  const summaryData = [
-    { title: 'Open Tickets', count: summary.open, color: 'text-amber-500', bg: 'bg-amber-50', border: 'border-amber-200', icon: Inbox },
-    { title: 'In Progress', count: summary.in_progress, color: 'text-blue-500', bg: 'bg-blue-50', border: 'border-blue-200', icon: Clock },
-    { title: 'Resolved', count: summary.resolved, color: 'text-green-500', bg: 'bg-green-50', border: 'border-green-200', icon: CheckCircle },
-    { title: 'Closed', count: summary.closed, color: 'text-gray-700', bg: 'bg-gray-50', border: 'border-gray-200', icon: Archive },
-  ];
-
-  // Removed shadowed notifications array mapping to avoid ReferenceError, and we pass slice directly to Notifications component.
 
   const handleConfirmDiscard = async () => {
     if (!confirmDiscard) return;
@@ -188,7 +161,7 @@ export default function CustomerDashboard() {
       localStorage.setItem('customer_created_tickets', JSON.stringify(updatedList));
       setConfirmDiscard(null);
       setSelectedTicket(null);
-      window.alert('Ticket discarded successfully.');
+      toast.success('Ticket discarded successfully.');
       loadDashboardData();
       return;
     }
@@ -198,11 +171,11 @@ export default function CustomerDashboard() {
       await discardCustomerTicket(ticketId);
       setConfirmDiscard(null);
       setSelectedTicket(null);
-      window.alert('Ticket discarded successfully.');
+      toast.success('Ticket discarded successfully.');
       loadDashboardData();
     } catch (err) {
       console.error('Failed to discard ticket:', err);
-      window.alert(err?.response?.data?.message || 'Failed to discard ticket.');
+      toast.error(err?.response?.data?.message || 'Failed to discard ticket.');
     }
   };
 
@@ -232,6 +205,7 @@ export default function CustomerDashboard() {
         resolved_at: fullTicket.resolved_at || null,
         proofAttachments: fullTicket.proofAttachments || [],
         proofFiles: fullTicket.proofFiles || [],
+        attachments: fullTicket.attachments || fullTicket.ticket_attachments || t.attachments || [],
         can_discard: (fullTicket.status || t.status) === 'Open' && !fullTicket.assigned_to,
       });
     } catch (err) {
@@ -272,7 +246,7 @@ export default function CustomerDashboard() {
       });
       localStorage.setItem('customer_created_tickets', JSON.stringify(updatedList));
       setSelectedTicket(null);
-      window.alert('Ticket resolved successfully.');
+      toast.success('Ticket resolved successfully.');
       loadDashboardData();
       return;
     }
@@ -286,11 +260,11 @@ export default function CustomerDashboard() {
         statusId: 3, // Resolved
       });
       setSelectedTicket(null);
-      window.alert('Ticket resolved successfully.');
+      toast.success('Ticket resolved successfully.');
       loadDashboardData({ forceRefresh: true });
     } catch (err) {
       console.error('Failed to resolve ticket:', err);
-      window.alert(err?.response?.data?.message || 'Failed to resolve ticket.');
+      toast.error(err?.response?.data?.message || 'Failed to resolve ticket.');
     } finally {
       setModalLoading(false);
     }
@@ -300,9 +274,9 @@ export default function CustomerDashboard() {
     const isMock = selectedTicket ? !!selectedTicket.isMock : false;
     if (isMock) {
       const stored = JSON.parse(localStorage.getItem('customer_created_tickets') || '[]');
+      const timestamp = new Date().toISOString();
       const updatedList = stored.map(t => {
         if (t.id === ticketId || t.ticket_ID === ticketId) {
-          const timestamp = new Date().toISOString();
           const timeline = t.timeline || [
             { id: 'creation', type: 'system', text: 'Ticket created.', timestamp: t.date_created }
           ];
@@ -325,27 +299,22 @@ export default function CustomerDashboard() {
       });
       localStorage.setItem('customer_created_tickets', JSON.stringify(updatedList));
       setSelectedTicket(null);
-      window.alert('Ticket reopened successfully.');
+      toast.success('Ticket reopened successfully.');
       loadDashboardData();
-      return;
+      return { success: true };
     }
 
-    setLoadingText('Reopening ticket...');
-    setModalLoading(true);
     try {
       const numericId = Number(String(ticketId).replace(/\D/g, ''));
-      await updateTicket({
-        ticketId: numericId,
-        statusId: 8, // Reopened
-      });
+      const res = await reopenTicket(numericId, reason);
       setSelectedTicket(null);
-      window.alert('Ticket reopened successfully.');
+      toast.success('Ticket reopened successfully.');
       loadDashboardData();
+      return res;
     } catch (err) {
       console.error('Failed to reopen ticket:', err);
-      window.alert(err?.response?.data?.message || 'Failed to reopen ticket.');
-    } finally {
-      setModalLoading(false);
+      toast.error(err?.response?.data?.message || 'Failed to reopen ticket.');
+      throw err;
     }
   };
 
@@ -370,140 +339,164 @@ export default function CustomerDashboard() {
       });
       
       const newTicketId = response.ticket?.ticket_ID || response.ticket_ID;
-      setCreatedTicketId(newTicketId);
       setIsTicketModalOpen(false);
-      setShowSuccess(true);
+      toast.success('RECORD ADDED SUCCESSFULLY');
       setTimeout(() => {
         loadDashboardData({ forceRefresh: true });
-      }, 300);
+        if (newTicketId) {
+          navigate('/messages', { state: { selectedTicketId: newTicketId } });
+        }
+      }, 500);
     } catch (err) {
       console.error(err);
-      window.alert(err?.response?.data?.message || 'Failed to create ticket.');
+      toast.error(err?.response?.data?.message || 'Failed to create ticket.');
     } finally {
       setModalLoading(false);
     }
   };
 
-  const handleCloseSuccess = () => {
-    setShowSuccess(false);
-    if (createdTicketId) {
-      navigate('/messages', { state: { selectedTicketId: createdTicketId } });
-    }
-  };
-
   return (
-    <div className="flex flex-col gap-8">
-      {/* Hero Section */}
-        <div className="relative rounded-xl overflow-hidden bg-linear-to-br from-[#252578] via-[#3535a0] to-[#1a1a5c] px-8 py-7 flex flex-col md:flex-row md:items-center gap-4 shadow-md">
-          <div
-            className="absolute inset-0 opacity-10"
-            style={{ backgroundImage: 'radial-gradient(circle at 80% 50%, #ffffff 0%, transparent 60%)' }}
-          />
-          <div className="relative z-10 flex-1">
-            <p className="text-white/70 text-sm font-medium mb-1">{dateStr}</p>
-            <h1 className="text-2xl md:text-3xl font-bold text-white mb-1">
-              Welcome back, {customerName}!
-            </h1>
-            <p className="text-white/70 text-sm">Here's a summary of your equipment support tickets.</p>
-          </div>
-          <div className="relative z-10 flex flex-col gap-2 shrink-0">
-            <Link
-              to="/ai-support"
-              className="px-5 py-2.5 bg-white/20 hover:bg-white/30 border border-white/30 rounded-xl text-white text-sm font-semibold transition-all flex items-center gap-2"
-            >
-              <Bot size={20} />
+    <div className="flex flex-col gap-6 font-sans">
+      {/* Pattern A Dashboard Header (DESIGN.md Section VI.3) */}
+      <DashboardHeader
+        eyebrow="CUSTOMER PORTAL"
+        userName={customerName}
+        subtitle="Here is your equipment support and ticket status summary."
+      />
+
+      {/* Action banner with AI Assistant link */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl bg-gradient-to-r from-primary to-accent text-white shadow-sm">
+        <div>
+          <h2 className="text-lg font-bold">Need instant diagnostic assistance?</h2>
+          <p className="text-xs text-white/80 mt-0.5">Consult with our AI Support Assistant for immediate troubleshooting before creating a ticket.</p>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <Link to="/ai-support">
+            <Button variant="secondary" className="bg-white/20 hover:bg-white/30 text-white border border-white/30 text-xs">
+              <Bot className="h-4 w-4 mr-1.5" />
               AI Support Assistant
-            </Link>
+            </Button>
+          </Link>
+        </div>
+      </div>
+
+      {dashboardError && (
+        <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-xs text-destructive font-medium">
+          {dashboardError}
+        </div>
+      )}
+
+      {/* Summary Metric Cards (DESIGN.md Section VI.4) */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <MetricCard
+          title="Open Tickets"
+          value={summary.open}
+          icon={<Inbox className="h-5 w-5 text-sky-600" />}
+          iconBg="bg-sky-50"
+          loading={dashboardLoading}
+        />
+        <MetricCard
+          title="In Progress"
+          value={summary.in_progress}
+          icon={<Clock className="h-5 w-5 text-amber-600" />}
+          iconBg="bg-amber-50"
+          loading={dashboardLoading}
+        />
+        <MetricCard
+          title="Resolved"
+          value={summary.resolved}
+          icon={<CheckCircle2 className="h-5 w-5 text-emerald-600" />}
+          iconBg="bg-emerald-50"
+          loading={dashboardLoading}
+        />
+        <MetricCard
+          title="Closed"
+          value={summary.closed}
+          icon={<Archive className="h-5 w-5 text-slate-600" />}
+          iconBg="bg-slate-100"
+          loading={dashboardLoading}
+        />
+      </div>
+
+      {/* Recent Tickets Table Section (DESIGN.md Section VI.10) */}
+      <div className="p-6 rounded-2xl bg-surface border border-slate-100 shadow-sm">
+        <div className="flex justify-between items-center mb-4">
+          <div>
+            <h2 className="text-lg font-bold text-dark-slate">Recent Support Tickets</h2>
+            <p className="text-xs text-muted-slate mt-0.5">Latest equipment maintenance and service requests</p>
           </div>
+          <Link
+            to="/my-tickets"
+            className="text-xs font-semibold text-accent hover:underline flex items-center gap-1"
+          >
+            View All <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
         </div>
 
-        {/* Summary Cards */}
-        {dashboardError && <p className="text-sm text-red-500">{dashboardError}</p>}
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {summaryData.map((card, idx) => (
-            <div key={idx} className={`p-6 rounded-xl bg-white border ${card.border} shadow-[0_4px_20px_rgba(0,0,0,0.03)] hover:-translate-y-1 transition-transform duration-300 relative overflow-hidden group`}>
-               <div className={`absolute top-4 right-4 w-8 h-8 rounded-full ${card.bg} flex items-center justify-center ${card.color}`}>
-                   <card.icon size={22} />
-               </div>
-               <div className={`text-4xl font-bold ${card.color}`}>{dashboardLoading ? '-' : card.count}</div>
-               <div className={`text-sm font-medium mt-2 ${card.color} opacity-80`}>{card.title}</div>
-            </div>
-          ))}
-        </div>
-
-      <div className="flex flex-col xl:flex-row gap-8">
-        {/* Recent Tickets Table */}
-        <div className="flex-1 bg-white/60 backdrop-blur-md rounded-xl border border-white/50 shadow-[0_8px_30px_rgba(0,0,0,0.04)] p-6">
-          <div className="flex justify-between items-center mb-6">
-            <div>
-              <h2 className="text-lg font-bold text-gray-800">Recent Tickets</h2>
-              <p className="text-sm text-gray-500">Latest submitted support tickets</p>
-            </div>
-            <Link to="/my-tickets" className="text-sm font-semibold text-[#252578] flex items-center gap-1 hover:underline">
-              View All <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
-            </Link>
+        {dashboardLoading ? (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-32">Ticket ID</TableHead>
+                <TableHead>Title & Equipment</TableHead>
+                <TableHead className="w-36">Status</TableHead>
+                <TableHead className="w-20 text-center">Action</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <DataTableSkeleton columns={4} rows={4} />
+            </TableBody>
+          </Table>
+        ) : recentTickets.length === 0 ? (
+          <div className="text-center py-10 text-muted-slate text-xs">
+            No tickets found. Submit a support ticket to get started.
           </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-separate border-spacing-y-3">
-              <thead>
-                <tr className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4">
-                  <th className="px-4 pb-2">Ticket ID</th>
-                  <th className="px-4 pb-2">Title</th>
-                  <th className="px-4 pb-2">Status</th>
-                  <th className="px-4 pb-2 text-center">View</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentTickets.length === 0 && (
-                  dashboardLoading ? (
-                    <tr>
-                      <td colSpan="4" className="p-0">
-                        <table className="w-full">
-                          <tbody>
-                            <SkeletonLoader variant="table-row" />
-                          </tbody>
-                        </table>
-                      </td>
-                    </tr>
-                  ) : (
-                    <tr>
-                      <td colSpan="4" className="px-4 py-6 text-center text-sm text-gray-500">
-                        No tickets yet.
-                      </td>
-                    </tr>
-                  )
-                )}
-                {recentTickets.map((t, idx) => (
-                  <tr key={idx} className="bg-white shadow-sm hover:shadow-md transition-shadow rounded-xl group">
-                    <td className="px-4 py-4 rounded-l-2xl text-sm font-medium text-gray-800 border-y border-l border-gray-100 whitespace-nowrap">{t.id}</td>
-                    <td className="px-4 py-4 border-y border-gray-100 max-w-[280px]">
-                      <div className="text-sm font-semibold text-gray-800 truncate whitespace-nowrap overflow-hidden text-ellipsis" title={t.title}>{t.title}</div>
-                      <div className="text-xs text-gray-500 mt-1 truncate whitespace-nowrap overflow-hidden text-ellipsis" title={t.equipment}>{t.equipment}</div>
-                    </td>
-                    <td className="px-4 py-4 border-y border-gray-100">
-                      <span className={`px-3 py-1 text-xs font-semibold rounded-full flex w-fit items-center gap-1.5 ${t.statusColor}`}>
-                        <div className="w-1.5 h-1.5 rounded-full bg-current"></div>
-                        {t.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-4 rounded-r-2xl border-y border-r border-gray-100 text-center">
-                      <button
-                        onClick={() => handleViewTicket(t)}
-                        aria-label={`View ${t.id}`}
-                        className="p-2 text-blue-500 hover:bg-blue-50 rounded-full transition-colors"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-32">Ticket ID</TableHead>
+                <TableHead>Title & Equipment</TableHead>
+                <TableHead className="w-36">Status</TableHead>
+                <TableHead className="w-20 text-center">Action</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {recentTickets.map((t) => (
+                <TableRow key={t.id || t.ticket_ID}>
+                  <TableCell className="font-semibold text-primary text-xs">
+                    {t.id || t.ticket_ID}
+                  </TableCell>
+                  <TableCell className="max-w-[280px]">
+                    <div className="font-semibold text-dark-slate text-xs truncate" title={t.title}>
+                      {t.title}
+                    </div>
+                    {t.equipment && (
+                      <div className="text-[11px] text-muted-slate truncate mt-0.5" title={t.equipment}>
+                        {t.equipment}
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={getStatusBadgeVariant(t.status)}>
+                      {t.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-center">
+                    <button
+                      type="button"
+                      onClick={() => handleViewTicket(t)}
+                      aria-label={`View ticket ${t.id}`}
+                      className="p-1.5 rounded-lg text-muted-slate hover:text-accent hover:bg-slate-100 transition-colors"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
       </div>
 
       {/* Ticket Modal */}
@@ -523,51 +516,22 @@ export default function CustomerDashboard() {
           onReopen={(ticketId, reason) => handleReopenTicket(ticketId, reason)}
           onResolve={(ticketId) => handleResolveTicket(ticketId)}
           customerName={customerName}
+          onFeedbackSubmitted={() => {
+            loadDashboardData({ forceRefresh: true });
+          }}
         />
       )}
 
-      {/* Confirm Discard Modal */}
-      {confirmDiscard && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
-            <h2 className="text-lg font-bold text-gray-900">Discard this ticket?</h2>
-            <p className="mt-2 text-sm text-gray-600">This will mark {confirmDiscard.id} as Discarded by Customer in your current browser.</p>
-            <div className="mt-6 flex justify-end gap-3">
-              <button onClick={() => setConfirmDiscard(null)} className="rounded-xl px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-100">Cancel</button>
-              <button onClick={handleConfirmDiscard} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700">Discard</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {modalLoading && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-[1.5px] animate-in fade-in duration-200">
-          <div className="bg-white rounded-xl p-6 shadow-2xl flex flex-col items-center gap-4 max-w-xs w-full mx-4 border border-gray-100">
-            <div className="w-10 h-10 border-4 border-[#252578]/10 border-t-[#252578] rounded-full animate-spin" />
-            <p className="text-sm font-semibold text-[#252578] text-center font-sans">
-              {loadingText}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {showSuccess && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-[1.5px]" onClick={handleCloseSuccess}>
-          <div className="bg-white rounded-xl p-8 shadow-2xl flex flex-col items-center gap-4 max-w-sm w-full mx-4 border border-gray-100" onClick={(e) => e.stopPropagation()}>
-            <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
-              <CheckCircle size={32} className="text-green-600" />
-            </div>
-            <h3 className="text-lg font-bold text-gray-900">Ticket Created</h3>
-            <p className="text-sm text-gray-500 text-center">Your ticket has been submitted successfully.</p>
-            <button
-              onClick={handleCloseSuccess}
-              className="mt-2 px-6 py-2.5 bg-[#252578] text-white rounded-xl text-sm font-semibold hover:bg-[#1a1a5c] transition-colors"
-            >
-              Got it
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Confirm Discard Modal (using ONE UI ConfirmationModal) */}
+      <ConfirmationModal
+        isOpen={!!confirmDiscard}
+        onClose={() => setConfirmDiscard(null)}
+        onConfirm={handleConfirmDiscard}
+        title="Discard Ticket"
+        description={`Are you sure you want to discard ticket ${confirmDiscard?.id}? This action will cancel the request.`}
+        confirmLabel="Discard"
+        variant="destructive"
+      />
     </div>
   );
 }

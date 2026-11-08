@@ -1,5 +1,6 @@
 import React from 'react';
 import { AlertTriangle, ExternalLink, X } from 'lucide-react';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 
 /**
  * Modern modal shown when an active ongoing ticket already exists for the selected machine,
@@ -14,6 +15,7 @@ export default function DuplicateTicketModal({
   onViewTicket,
   onSelectDifferentMachine,
 }) {
+  useLockBodyScroll(isOpen);
   if (!isOpen) return null;
 
   return (

@@ -1,0 +1,40 @@
+name: 'CD - Deploy to Azure'
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: 'Deploy to Azure VM'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 'SSH into Azure VM and Deploy'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AZURE_VM_HOST }}
+          username: ${{ secrets.AZURE_VM_USERNAME }}
+          key: ${{ secrets.AZURE_SSH_KEY }}
+          port: ${{ secrets.AZURE_SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            TARGET_DIR="${{ secrets.AZURE_TARGET_DIR || '~/enterprise-ticketing-system' }}"
+            echo "=> Navigating to $TARGET_DIR..."
+            cd "$TARGET_DIR"
+
+            echo "=> Fetching latest code from ${{ github.ref_name }}..."
+            git fetch origin
+            git checkout ${{ github.ref_name }}
+            git pull origin ${{ github.ref_name }}
+
+            echo "=> Ensuring deployment scripts are executable..."
+            chmod +x deploy-prod.sh production-optimize.sh
+
+            echo "=> Executing production deployment..."
+            ./deploy-prod.sh
+

@@ -4,7 +4,7 @@ import { refreshAccessToken } from '@/auth/refreshSession';
 
 const messagingClient = axios.create({
   baseURL: '/api/ticketing/messaging',
-  withCredentials: false,
+  withCredentials: true,
   headers: {
     'X-Requested-With': 'XMLHttpRequest',
     'Accept': 'application/json',
@@ -51,9 +51,29 @@ export const getTicketMessages = async (ticketId) => {
   }));
 };
 
-export const sendTicketMessage = async (ticketId, messageText) => {
-  const response = await messagingClient.post(`/tickets/${ticketId}/messages`, {
-    message: messageText,
+export const sendTicketMessage = async (ticketId, messageText, attachments = []) => {
+  let payload;
+  let headers = {};
+
+  if (Array.isArray(attachments) && attachments.length > 0 && (attachments[0] instanceof File || attachments[0] instanceof Blob)) {
+    const formData = new FormData();
+    if (messageText !== undefined && messageText !== null) {
+      formData.append('message', messageText);
+    }
+    attachments.forEach((file) => {
+      formData.append('attachments[]', file);
+    });
+    payload = formData;
+    headers['Content-Type'] = 'multipart/form-data';
+  } else {
+    payload = {
+      message: messageText || '',
+      attachments: attachments || [],
+    };
+  }
+
+  const response = await messagingClient.post(`/tickets/${ticketId}/messages`, payload, {
+    headers,
   });
   const data = response.data?.data;
   if (data) {
@@ -75,7 +95,31 @@ export const editTicketMessage = async (ticketId, messageId, messageText) => {
   return data;
 };
 
+export const getMessageEditHistory = async (ticketId, messageId) => {
+  const response = await messagingClient.get(`/tickets/${ticketId}/messages/${messageId}/history`);
+  return response.data;
+};
+
 export const deleteTicketMessage = async (ticketId, messageId) => {
   const response = await messagingClient.delete(`/tickets/${ticketId}/messages/${messageId}`);
   return response.data;
 };
+
+export const pingThreadPresence = async (ticketId) => {
+  try {
+    const response = await messagingClient.post(`/tickets/${ticketId}/presence`);
+    return response.data;
+  } catch (err) {
+    return null;
+  }
+};
+
+export const clearThreadPresence = async (ticketId) => {
+  try {
+    const response = await messagingClient.delete(`/tickets/${ticketId}/presence`);
+    return response.data;
+  } catch (err) {
+    return null;
+  }
+};
+

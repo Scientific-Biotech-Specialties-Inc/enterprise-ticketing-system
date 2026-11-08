@@ -13,6 +13,8 @@ use App\Models\RecurringIssueAnalytic;
 
 class PredictiveAnalyticsController extends Controller
 {
+    use \App\Http\Controllers\Concerns\ResolvesVerifiedPrincipal;
+
     /**
      * Return comprehensive predictive analytics metrics.
      * All data is read from the analytics-service's own database tables,
@@ -20,6 +22,15 @@ class PredictiveAnalyticsController extends Controller
      */
     public function getPredictiveMetrics(Request $request)
     {
+        // Spec 0034: staff only, decided by the verified user (never by a header).
+        $principal = $this->verifiedPrincipal($request);
+        if (!$principal) {
+            return response()->json(['status' => 'error', 'message' => 'Unauthenticated.'], 401);
+        }
+        if ($principal['type'] !== 'staff') {
+            return response()->json(['status' => 'error', 'message' => 'Staff access only.'], 403);
+        }
+
         try {
             $ticketVolume = $this->buildTicketVolume();
             $performance  = $this->buildPerformance();
@@ -70,7 +81,12 @@ class PredictiveAnalyticsController extends Controller
             $predTotal[$period] = $snap->predicted_total;
         }
 
-        return compact('volume', 'peakDay', 'pred_total' ) + ['pred_total' => $predTotal];
+        return [
+            'volume'     => $volume,
+            'peak_day'   => $peakDay,
+            'peakDay'    => $peakDay,
+            'pred_total' => $predTotal,
+        ];
     }
 
     // ─── Employee Performance ─────────────────────────────────────────────────

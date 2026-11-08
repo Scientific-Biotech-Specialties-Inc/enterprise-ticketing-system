@@ -40,16 +40,27 @@ export const extractDisapprovalReasonFromText = (text) => {
 export const isReassignmentDenied = (ticket) => {
   if (!ticket) return false;
 
+  // Active pending reassignment request supersedes any past denial
+  const statusStr = String(ticket.reassignmentStatus || ticket.assignment_status || ticket.status || '').toLowerCase();
+  if (
+    ['pending', 'reassignment_requested', 'pending reassignment', 'pending reassign'].includes(statusStr) ||
+    ticket.reassignmentRequested === true ||
+    ticket.status === 'Pending Reassignment' ||
+    ticket.has_pending_reassignment
+  ) {
+    return false;
+  }
+
   // Direct status or boolean flags
-  const statusStr = String(ticket.reassignmentStatus || ticket.assignment_status || '').toLowerCase();
-  if (['denied', 'rejected', 'disapproved'].includes(statusStr)) {
+  if (['denied', 'rejected', 'disapproved', 'failed', 'reassignment failed', 'reassignment disapproved'].includes(statusStr)) {
     return true;
   }
 
   if (
     ticket.deniedReassignment === true ||
     ticket.reassignmentDenied === true ||
-    ticket.reassignmentDisapproved === true
+    ticket.reassignmentDisapproved === true ||
+    ticket.reassignmentFailed === true
   ) {
     return true;
   }
@@ -170,4 +181,37 @@ export const getReassignmentDisapprovalReason = (ticket) => {
   }
 
   return '';
+};
+
+/**
+ * Checks if a ticket has an active pending reassignment request awaiting CS coordinator review.
+ */
+export const hasPendingReassignment = (ticket) => {
+  if (!ticket) return false;
+  const statusStr = String(ticket.reassignmentStatus || ticket.assignment_status || ticket.status || '').toLowerCase();
+  if (['pending', 'reassignment_requested', 'pending reassignment', 'pending reassign'].includes(statusStr)) {
+    return true;
+  }
+  if (
+    ticket.reassignmentRequested === true ||
+    ticket.status === 'Pending Reassignment' ||
+    ticket.has_pending_reassignment
+  ) {
+    return true;
+  }
+  return false;
+};
+
+/**
+ * Helper to get the canonical employee incoming status string.
+ */
+export const getEmployeeIncomingDisplayStatus = (ticket) => {
+  if (!ticket) return 'Open';
+  if (isReassignmentDenied(ticket)) {
+    return 'Reassignment Failed';
+  }
+  if (hasPendingReassignment(ticket)) {
+    return 'Pending Reassignment';
+  }
+  return ticket.status || 'Open';
 };

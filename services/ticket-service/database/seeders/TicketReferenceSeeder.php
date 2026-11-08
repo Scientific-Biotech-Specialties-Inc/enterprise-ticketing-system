@@ -13,9 +13,8 @@ class TicketReferenceSeeder extends Seeder
     {
         $now = Carbon::now();
         
-        DB::table('employees')->upsert([
+        $employeeRecords = [
             [
-                'emp_id' => 1,
                 'first_name' => 'Ava',
                 'last_name' => 'Santos',
                 'email' => 'cs@gmail.com',
@@ -25,7 +24,15 @@ class TicketReferenceSeeder extends Seeder
                 'password_hash' => Hash::make('12345678'),
             ],
             [
-                'emp_id' => 2,
+                'first_name' => 'Head of',
+                'last_name' => 'CS',
+                'email' => 'headofcs@gmail.com',
+                'role' => 'head of cs',
+                'department' => 'Customer Service',
+                'is_active' => true,
+                'password_hash' => Hash::make('12345678'),
+            ],
+            [
                 'first_name' => 'Mark',
                 'last_name' => 'Reyes',
                 'email' => 'employee@gmail.com',
@@ -35,7 +42,6 @@ class TicketReferenceSeeder extends Seeder
                 'password_hash' => Hash::make('12345678'),
             ],
             [
-                'emp_id' => 3,
                 'first_name' => 'John',
                 'last_name' => 'Dela Cruz',
                 'email' => 'tech1@example.com',
@@ -45,7 +51,6 @@ class TicketReferenceSeeder extends Seeder
                 'password_hash' => Hash::make('12345678'),
             ],
             [
-                'emp_id' => 4,
                 'first_name' => 'Bernadette',
                 'last_name' => 'Gonzaga',
                 'email' => 'slosinada@gmail.com',
@@ -54,7 +59,14 @@ class TicketReferenceSeeder extends Seeder
                 'is_active' => true,
                 'password_hash' => Hash::make('12345678'),
             ],
-        ], ['emp_id'], ['first_name', 'last_name', 'email', 'role', 'department', 'is_active', 'password_hash']);
+        ];
+
+        foreach ($employeeRecords as $record) {
+            DB::table('employees')->updateOrInsert(
+                ['email' => $record['email']],
+                $record
+            );
+        }
 
         DB::table('clients')->upsert([
             [

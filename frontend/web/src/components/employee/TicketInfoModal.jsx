@@ -1,17 +1,23 @@
+import { safeUrl } from '@/utils/safeUrl';
 import React, { useState, useEffect } from 'react';
+import { ShieldAlert, AlertTriangle, Clock, Bell } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { statusColors, priorityColors } from '@/constants/employeeTickets';
 import { formatDisplayDate } from '@/utils/dateUtils';
 import FilePreviewModal from '@/components/FilePreviewModal';
 import InternalNotesSection from '@/components/InternalNotesSection';
 import ReassignmentDisapprovalBanner from '@/components/employee/ReassignmentDisapprovalBanner';
+import ReassignmentModal from '@/components/employee/ReassignmentModal';
 import { isReassignmentDenied } from '@/utils/reassignmentUtils';
 import { getTicketDetails } from '@/services/ticketService';
+import TicketFeedbackSection from '@/components/feedback/TicketFeedbackSection';
+import { hasFeedbackBeenSubmitted } from '@/data/mockFeedbackData';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 
-export default function TicketInfoModal({ ticket, onClose }) {
+export default function TicketInfoModal({ ticket, onClose, onReassignSuccess }) {
   const navigate = useNavigate();
   const [previewFile, setPreviewFile] = useState(null);
+  const [showReassignModal, setShowReassignModal] = useState(false);
   const [ticketDetails, setTicketDetails] = useState(ticket);
 
   useLockBodyScroll(!!ticket);
@@ -31,6 +37,8 @@ export default function TicketInfoModal({ ticket, onClose }) {
               disapprovalReason: prev?.disapprovalReason || full.disapprovalReason,
               reassignmentStatus: prev?.reassignmentStatus || full.reassignmentStatus,
               deniedReassignment: prev?.deniedReassignment ?? full.deniedReassignment,
+              proofRejected: prev?.proofRejected ?? full.proofRejected,
+              rejectionReason: prev?.rejectionReason ?? full.rejectionReason,
             }));
           }
         })
@@ -44,7 +52,8 @@ export default function TicketInfoModal({ ticket, onClose }) {
 
   const handleUpdate = () => {
     onClose();
-    navigate('/employee/ticket-update', { state: { ticket: currentTicket } });
+    const tId = currentTicket.ticket_ID || currentTicket.id;
+    navigate('/employee/ticket-update', { state: { ticketId: tId, ticket: currentTicket } });
   };
 
   return (
@@ -71,6 +80,32 @@ export default function TicketInfoModal({ ticket, onClose }) {
                 Escalated
               </span>
             )}
+            {(currentTicket.proofRejected || currentTicket.rejectionReason) && (
+              <span className="text-xs font-bold px-3 py-1 bg-rose-100 text-rose-800 rounded-full border border-rose-200">
+                Proof Rejected
+              </span>
+            )}
+            {(() => {
+              const rawSla = currentTicket.sla_status || currentTicket.slaStatus || (currentTicket.sla_breached ? 'Breached' : null);
+              const normalized = rawSla ? String(rawSla).toLowerCase().replace(/[\s_-]+/g, '') : '';
+              if (normalized === 'breached' || normalized === 'violated') {
+                return (
+                  <span className="inline-flex items-center gap-1 text-xs font-bold px-3 py-1 bg-rose-100 text-rose-800 rounded-full border border-rose-200">
+                    <AlertTriangle className="w-3 h-3 text-rose-600 shrink-0" />
+                    <span>SLA Breached</span>
+                  </span>
+                );
+              }
+              if (normalized === 'atrisk') {
+                return (
+                  <span className="inline-flex items-center gap-1 text-xs font-bold px-3 py-1 bg-amber-100 text-amber-800 rounded-full border border-amber-200">
+                    <Clock className="w-3 h-3 text-amber-600 shrink-0" />
+                    <span>SLA At Risk</span>
+                  </span>
+                );
+              }
+              return null;
+            })()}
           </div>
           <p className="text-sm text-gray-500 mt-1">
             {ticket.equipment && `${ticket.equipment}`}
@@ -82,37 +117,65 @@ export default function TicketInfoModal({ ticket, onClose }) {
           {/* Description */}
           {ticket.description && (
             <div className="bg-gray-50 rounded-xl p-3">
-              <p className="text-[10px] text-gray-400 mb-1">Description</p>
-              <p className="text-sm text-gray-700 leading-relaxed">{ticket.description}</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-dark mb-1">Description</p>
+              <p className="text-sm font-normal text-slate-600 leading-relaxed">{ticket.description}</p>
             </div>
           )}
 
           {/* Requestor / Date Filed */}
           <div className="grid grid-cols-2 gap-3">
             <div className="bg-gray-50 rounded-xl p-3">
-              <p className="text-[10px] text-gray-400 mb-0.5">Requestor</p>
-              <p className="text-sm font-semibold text-gray-800">{ticket.customer || '—'}</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-dark mb-0.5">Requestor</p>
+              <p className="text-sm font-normal text-slate-600">{ticket.customer || '—'}</p>
               {ticket.facility && (
-                <p className="text-xs text-gray-500 mt-0.5">{ticket.facility}</p>
+                <p className="text-xs text-slate-muted mt-0.5">{ticket.facility}</p>
               )}
             </div>
             <div className="bg-gray-50 rounded-xl p-3">
-              <p className="text-[10px] text-gray-400 mb-0.5">Date Filed</p>
-              <p className="text-sm font-semibold text-gray-800">{ticket.date ? formatDisplayDate(ticket.date) : '—'}</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-dark mb-0.5">Date Filed</p>
+              <p className="text-sm font-normal text-slate-600">{ticket.date ? formatDisplayDate(ticket.date) : '—'}</p>
             </div>
           </div>
 
           {/* Category / Last Updated */}
           <div className="grid grid-cols-2 gap-3">
             <div className="bg-gray-50 rounded-xl p-3">
-              <p className="text-[10px] text-gray-400 mb-1">Category</p>
-              <p className="text-sm font-semibold text-gray-800">{ticket.category || '—'}</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-dark mb-1">Category</p>
+              <p className="text-sm font-normal text-slate-600">{ticket.category || '—'}</p>
             </div>
             <div className="bg-gray-50 rounded-xl p-3">
-              <p className="text-[10px] text-gray-400 mb-0.5">Last Updated</p>
-              <p className="text-sm font-semibold text-gray-800">{ticket.lastUpdate ?? '—'}</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-dark mb-0.5">Last Updated</p>
+              <p className="text-sm font-normal text-slate-600">{ticket.lastUpdate ? formatDisplayDate(ticket.lastUpdate) : '—'}</p>
             </div>
           </div>
+
+          {/* SLA Target Resolution */}
+          {(currentTicket.resolution_due_at || currentTicket.due_at || currentTicket.sla_due_date || currentTicket.sla?.resolution?.target) && (
+            <div className="bg-rose-50/50 border border-rose-100 rounded-xl p-3">
+              <p className="text-xs font-bold uppercase tracking-wider text-rose-900 mb-0.5 flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5 text-rose-600" />
+                <span>SLA Resolution Target</span>
+              </p>
+              <p className="text-sm font-semibold text-rose-800">
+                {formatDisplayDate(currentTicket.resolution_due_at || currentTicket.due_at || currentTicket.sla_due_date || currentTicket.sla?.resolution?.target)}
+              </p>
+            </div>
+          )}
+
+          {/* Customer Service Reminder Prompt Alert */}
+          {(currentTicket.last_reminder_sent_at || currentTicket.lastReminderSentAt) && (
+            <div className="flex items-start gap-3 bg-indigo-50 border border-indigo-200 rounded-xl p-3.5 text-xs text-indigo-900 shadow-2xs">
+              <div className="w-6 h-6 rounded-full bg-indigo-200 text-indigo-800 flex items-center justify-center shrink-0 mt-0.5">
+                <Bell className="w-3.5 h-3.5" />
+              </div>
+              <div className="flex-1">
+                <span className="font-bold text-indigo-950 block text-xs">Customer Service Reminder Dispatched</span>
+                <p className="text-indigo-800 text-xs mt-0.5 leading-relaxed">
+                  A reminder prompt was dispatched on {formatDisplayDate(currentTicket.last_reminder_sent_at || currentTicket.lastReminderSentAt)}. Please review and provide a progress update.
+                </p>
+              </div>
+            </div>
+          )}
 
           {ticket.attachments && ticket.attachments.length > 0 && (
             <div className="bg-gray-50 rounded-xl p-3">
@@ -120,7 +183,25 @@ export default function TicketInfoModal({ ticket, onClose }) {
               <div className="flex flex-wrap gap-2">
                 {ticket.attachments.map((file, idx) => {
                   const fName = typeof file === 'string' ? file.split('/').pop() : (file.name || file.file_name || `Attachment-${idx + 1}`);
-                  const fUrl = typeof file === 'string' ? file : (file.url || file.file_path || file.path || '');
+                  const fUrl = safeUrl(typeof file === 'string' ? file : (file.url || file.file_path || file.path || ''));
+                  const isQuarantined = Boolean(
+                    typeof file === 'object' && (file?.is_quarantined || file?.quarantined || file?.status === 'quarantined' || file?.virus_detected)
+                  );
+
+                  if (isQuarantined) {
+                    return (
+                      <span
+                        key={file.id || file.attachment_id || idx}
+                        className="flex items-center gap-1.5 bg-red-50 border border-red-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-red-600 cursor-not-allowed"
+                        title="File quarantined: Threat detected by antivirus scan"
+                      >
+                        <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                        <span className="line-through">{fName}</span>
+                        <span className="text-[9px] bg-red-100 text-red-700 px-1 py-0.5 rounded font-bold uppercase">Blocked</span>
+                      </span>
+                    );
+                  }
+
                   return (
                     <a
                       key={file.id || file.attachment_id || idx}
@@ -148,7 +229,25 @@ export default function TicketInfoModal({ ticket, onClose }) {
               <div className="flex flex-wrap gap-2">
                 {(ticket.proofAttachments || ticket.proofFiles).map((file, idx) => {
                   const fName = typeof file === 'string' ? file.split('/').pop() : (file.name || file.file_name || `Proof-${idx + 1}`);
-                  const fUrl = typeof file === 'string' ? file : (file.url || file.file_path || file.path || '');
+                  const fUrl = safeUrl(typeof file === 'string' ? file : (file.url || file.file_path || file.path || ''));
+                  const isQuarantined = Boolean(
+                    typeof file === 'object' && (file?.is_quarantined || file?.quarantined || file?.status === 'quarantined' || file?.virus_detected)
+                  );
+
+                  if (isQuarantined) {
+                    return (
+                      <span
+                        key={file.id || file.proof_ID || idx}
+                        className="flex items-center gap-1.5 bg-red-50 border border-red-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-red-600 cursor-not-allowed"
+                        title="Proof file quarantined: Threat detected by antivirus scan"
+                      >
+                        <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                        <span className="line-through">{fName}</span>
+                        <span className="text-[9px] bg-red-100 text-red-700 px-1 py-0.5 rounded font-bold uppercase">Blocked</span>
+                      </span>
+                    );
+                  }
+
                   return (
                     <a
                       key={file.id || file.proof_ID || idx}
@@ -178,7 +277,26 @@ export default function TicketInfoModal({ ticket, onClose }) {
             />
           )}
 
-          <ReassignmentDisapprovalBanner ticket={currentTicket} />
+          <ReassignmentDisapprovalBanner
+            ticket={currentTicket}
+            onRequestReassignAgain={() => setShowReassignModal(true)}
+          />
+
+          {(currentTicket.proofRejected || currentTicket.rejectionReason) && (
+            <div className="flex items-start gap-3 bg-rose-50 border border-rose-200 rounded-xl p-3.5 text-xs text-rose-800">
+              <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse mt-1 shrink-0" />
+              <div className="space-y-1">
+                <span className="font-bold text-rose-900 block text-xs uppercase tracking-wide">
+                  Proof of Completion Rejected by Customer Service
+                </span>
+                <p className="text-xs text-rose-800 font-medium leading-relaxed">
+                  {currentTicket.rejectionReason
+                    ? `Reason: "${currentTicket.rejectionReason}"`
+                    : 'Please review and re-upload your proof of completion.'}
+                </p>
+              </div>
+            </div>
+          )}
 
           {currentTicket.reassignmentRequested && !isReassignmentDenied(currentTicket) && (
             <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
@@ -189,10 +307,26 @@ export default function TicketInfoModal({ ticket, onClose }) {
               </div>
             </div>
           )}
+
+          {/* Customer Satisfaction Feedback */}
+          {(currentTicket.status === 'Resolved' || currentTicket.status === 'Closed' || hasFeedbackBeenSubmitted(currentTicket.id || currentTicket.ticket_ID)) && (
+            <div className="pt-2">
+              <TicketFeedbackSection ticket={currentTicket} readOnly={true} />
+            </div>
+          )}
         </div>
 
         {/* Footer */}
         <div className="p-6 border-t border-gray-150 flex-shrink-0 flex justify-end gap-3">
+          {isReassignmentDenied(currentTicket) && (
+            <button
+              type="button"
+              onClick={() => setShowReassignModal(true)}
+              className="px-5 py-2.5 border border-red-200 text-red-700 hover:bg-red-50 text-sm font-semibold rounded-xl transition-all"
+            >
+              Request Reassignment Again
+            </button>
+          )}
           <button
             type="button"
             onClick={handleUpdate}
@@ -206,6 +340,30 @@ export default function TicketInfoModal({ ticket, onClose }) {
         <FilePreviewModal
           file={previewFile}
           onClose={() => setPreviewFile(null)}
+        />
+      )}
+      {showReassignModal && (
+        <ReassignmentModal
+          ticket={currentTicket}
+          onClose={() => setShowReassignModal(false)}
+          onReassignSuccess={(ticketId, reason) => {
+            setShowReassignModal(false);
+            setTicketDetails((prev) => ({
+              ...prev,
+              reassignmentRequested: true,
+              reassignmentStatus: 'Pending',
+              reassignmentReason: reason,
+              status: 'Pending Reassignment',
+              deniedReassignment: false,
+              reassignmentDenied: false,
+              disapprovalReason: null,
+              reassignmentDenyReason: null,
+            }));
+            if (typeof onReassignSuccess === 'function') {
+              onReassignSuccess(ticketId, reason);
+            }
+            onClose();
+          }}
         />
       )}
     </div>

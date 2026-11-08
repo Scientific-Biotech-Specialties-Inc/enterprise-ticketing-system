@@ -27,22 +27,63 @@ class EmployeeAssignmentController extends Controller
             'employee_ids.*' => ['integer', 'exists:employees,emp_id'],
             'assigned_by_email' => ['nullable', 'email'],
             'priority_ID' => ['nullable', 'integer', 'exists:ticket_priorities,priority_ID'],
+            'override_track' => ['nullable', 'boolean'],
+            'override_reason' => ['nullable', 'string', 'max:500'],
         ]);
 
-        $employees = DB::table('employees')
+        $ticket = DB::table('tickets')->where('ticket_ID', $ticketId)->first();
+        if (!$ticket) {
+            return response()->json(['message' => 'Ticket not found.'], 404);
+        }
+
+        $query = DB::table('employees')
             ->whereIn('emp_id', $validated['employee_ids'])
-            ->select('emp_id as id', 'role')
-            ->get();
+            ->select('emp_id as id', 'first_name', 'last_name', 'role', 'department', 'position_level', 'technical_role');
+        if (\Illuminate\Support\Facades\Schema::hasColumn('employees', 'branch')) {
+            $query->addSelect('branch');
+        } elseif (\Illuminate\Support\Facades\Schema::hasColumn('employees', 'branch_id')) {
+            $query->addSelect('branch_id as branch');
+        }
+        $employees = $query->get();
 
         $invalid = $employees->contains(function ($row) {
             $r = strtolower(trim((string) $row->role));
-            return in_array($r, ['customer service', 'customer support', 'cs']);
+            return in_array($r, ['customer service', 'customer support', 'cs', 'customer']);
         });
 
         if ($invalid) {
             return response()->json([
                 'message' => 'Customer-service users cannot be assignees.',
             ], 422);
+        }
+
+        // Server-side category track eligibility check (TS110)
+        $track = EmployeeDirectoryController::resolveCategoryTrack($ticket);
+        $role = strtolower(trim((string) ($user->role ?? '')));
+        $isAdmin = in_array($role, ['admin', 'superadmin', 'super admin'], true);
+        $overrideTrack = filter_var($request->input('override_track', false), FILTER_VALIDATE_BOOLEAN);
+        $overrideReason = trim((string) $request->input('override_reason', ''));
+
+        foreach ($employees as $row) {
+            $eligibility = EmployeeDirectoryController::checkEligibility($row, $ticket, $track);
+            if (!$eligibility['eligible']) {
+                if ($isAdmin && $overrideTrack) {
+                    if (empty($overrideReason)) {
+                        return response()->json([
+                            'message' => 'Override reason is required when assigning an employee outside their category track.',
+                            'code' => 'OVERRIDE_REASON_REQUIRED',
+                        ], 422);
+                    }
+                    \Illuminate\Support\Facades\Log::warning("Admin [{$user->email}] bypassed track eligibility for ticket #{$ticketId} (Assignee: {$row->id}). Reason: {$overrideReason}");
+                } else {
+                    return response()->json([
+                        'message' => 'Selected employee is not eligible for this ticket category track.',
+                        'code' => 'INELIGIBLE_EMPLOYEE',
+                        'track' => $track,
+                        'reason' => $eligibility['reason'],
+                    ], 422);
+                }
+            }
         }
 
         $assignedBy = DB::table('employees')
@@ -72,6 +113,27 @@ class EmployeeAssignmentController extends Controller
                 'priority_ID' => ['nullable', 'integer', 'exists:ticket_priorities,priority_ID'],
             ]);
 
+            $ticket = DB::table('tickets')->where('ticket_ID', $ticketId)->first();
+            if ($ticket) {
+                $track = EmployeeDirectoryController::resolveCategoryTrack($ticket);
+                $assignees = DB::table('employees')
+                    ->whereIn('emp_id', $validated['employee_ids'])
+                    ->select('emp_id as id', 'first_name', 'last_name', 'role', 'department', 'position_level', 'technical_role', 'branch')
+                    ->get();
+
+                foreach ($assignees as $row) {
+                    $eligibility = EmployeeDirectoryController::checkEligibility($row, $ticket, $track);
+                    if (!$eligibility['eligible']) {
+                        return response()->json([
+                            'message' => 'Selected employee is not eligible for this ticket category.',
+                            'code' => 'INELIGIBLE_EMPLOYEE',
+                            'track' => $track,
+                            'reason' => $eligibility['reason'],
+                        ], 422);
+                    }
+                }
+            }
+
             $result = $this->assignmentService->acceptTicket($ticketId, $user, $validated);
             return response()->json($result['data'], $result['status']);
         }
@@ -89,9 +151,9 @@ class EmployeeAssignmentController extends Controller
         }
 
         $validated = $request->validate([
-            'status' => ['nullable', 'string', 'in:In Progress,Pending,Resolved,Pending Assignment,On Hold,Pending Evaluation,Closed,Open'],
-            'remarks' => ['nullable', 'string', 'max:250'],
-            'internal_note' => ['nullable', 'string'],
+            'status' => ['nullable', 'string', 'in:In Progress,Pending,Resolved,Pending Assignment,Pending Evaluation,Closed,Open'],
+            'remarks' => ['nullable', 'string', 'max:250', new \App\Rules\NoMarkup()],
+            'internal_note' => ['nullable', 'string', new \App\Rules\NoMarkup()],
             'attachments' => ['nullable', 'array'],
             'attachments.*' => ['integer'],
             'is_proof' => ['nullable'],
@@ -111,7 +173,12 @@ class EmployeeAssignmentController extends Controller
         }
 
         $tickets = $this->assignmentService->getEmployeeTickets($employeeEmail);
-        return response()->json(['tickets' => $tickets]);
+        $departmentSummary = $this->assignmentService->getDepartmentSummaryForEmployee($employeeEmail);
+
+        return response()->json([
+            'tickets' => $tickets,
+            'department_summary' => $departmentSummary,
+        ]);
     }
 
     public function internalTickets(Request $request)

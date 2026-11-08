@@ -37,6 +37,14 @@ class EmployeeReassignmentService
         }
 
         DB::transaction(function () use ($ticketId, $empId, $reason) {
+            DB::table('reassignment_requests')
+                ->where('ticket_id', $ticketId)
+                ->where('status', 'pending')
+                ->update([
+                    'status' => 'superseded',
+                    'updated_at' => now(),
+                ]);
+
             DB::table('reassignment_requests')->insert([
                 'ticket_id' => $ticketId,
                 'employee_id' => $empId,
@@ -65,6 +73,13 @@ class EmployeeReassignmentService
             ]);
         });
 
+        $this->notificationService->broadcastTicketChange('reassign_requested', $ticketId, [
+            'employee_id' => $empId,
+            'reason' => $reason,
+        ]);
+
+        $this->cacheService->clearTicketCaches();
+
         $ticket = DB::table('tickets')->where('ticket_ID', $ticketId)->first();
         if ($ticket) {
             $customerId = $ticket->created_by;
@@ -82,12 +97,41 @@ class EmployeeReassignmentService
                 'type' => 'reassignment_request',
             ];
 
-            $this->notificationService->notifyCS(
-                'Reassignment Requested',
-                "Engineer " . $empName . " has requested reassignment for Ticket {$ticketRef}: \"" . $title . "\"." . ($reason !== '' ? " Reason: \"" . $reason . "\"." : ""),
-                $ticketId,
-                $csData
-            );
+            $csTitle = 'Reassignment Requested';
+            $csMessage = "Engineer " . $empName . " has requested reassignment for Ticket {$ticketRef}: \"" . $title . "\"." . ($reason !== '' ? " Reason: \"" . $reason . "\"." : "");
+
+            // Route the request to the CSR who delegated the ticket, not every CSR.
+            $delegatorId = (int) ($assignment->assigned_by ?? 0);
+            $delegator = $delegatorId > 0
+                ? DB::table('employees')->where('emp_id', $delegatorId)->where('role', 'customer service')->first()
+                : null;
+
+            if ($delegator) {
+                $this->notificationService->notifyRecipient(
+                    (int) $delegator->emp_id,
+                    'employee',
+                    $csTitle,
+                    $csMessage,
+                    $ticketId,
+                    $csData
+                );
+            } else {
+                // Delegator is unknown or no longer a CSR: fall back to CSRs in the engineer's branch.
+                $branchCsIds = $emp && !empty($emp->branch)
+                    ? DB::table('employees')
+                        ->where('role', 'customer service')
+                        ->where('branch', $emp->branch)
+                        ->pluck('emp_id')
+                    : collect();
+
+                if ($branchCsIds->isNotEmpty()) {
+                    foreach ($branchCsIds as $csEmpId) {
+                        $this->notificationService->notifyRecipient((int) $csEmpId, 'employee', $csTitle, $csMessage, $ticketId, $csData);
+                    }
+                } else {
+                    $this->notificationService->notifyCS($csTitle, $csMessage, $ticketId, $csData);
+                }
+            }
 
             $this->notificationService->notifyCustomer(
                 $customerId,
@@ -109,13 +153,6 @@ class EmployeeReassignmentService
             );
         }
 
-        $this->notificationService->broadcastTicketChange('reassign_requested', $ticketId, [
-            'employee_id' => $empId,
-            'reason' => $reason,
-        ]);
-
-        $this->cacheService->clearTicketCaches();
-
         return ['status' => 200, 'data' => ['message' => 'Reassignment request submitted successfully.']];
     }
 
@@ -136,6 +173,7 @@ class EmployeeReassignmentService
         $pendingRequest = DB::table('reassignment_requests')
             ->where('ticket_id', $ticketId)
             ->where('status', 'pending')
+            ->orderByDesc('request_id')
             ->first();
 
         if (!$pendingRequest) {
@@ -146,6 +184,24 @@ class EmployeeReassignmentService
         $newEmpId = $validated['new_employee_id'] ?? null;
         $rawDenyReason = trim($validated['reason'] ?? '');
         $denyReason = $rawDenyReason !== '' ? mb_strtoupper(mb_substr($rawDenyReason, 0, 1)) . mb_substr($rawDenyReason, 1) : '';
+
+        if ($validated['action'] === 'approve' && $newEmpId) {
+            $newEmp = DB::table('employees')->where('emp_id', $newEmpId)->first();
+            if ($newEmp) {
+                $track = \App\Http\Controllers\EmployeeDirectoryController::resolveCategoryTrack($ticket);
+                $eligibility = \App\Http\Controllers\EmployeeDirectoryController::checkEligibility($newEmp, $ticket, $track);
+                if (!$eligibility['eligible']) {
+                    return [
+                        'status' => 422,
+                        'data' => [
+                            'message' => 'The selected employee is not eligible for this ticket category.',
+                            'code' => 'INELIGIBLE_EMPLOYEE',
+                            'reason' => $eligibility['reason'],
+                        ],
+                    ];
+                }
+            }
+        }
 
         DB::transaction(function () use ($ticketId, $pendingRequest, $validated, $csEmpId, $targetEmpId, $newEmpId, $denyReason) {
             if ($validated['action'] === 'approve') {
@@ -169,8 +225,14 @@ class EmployeeReassignmentService
                         ->value('ticket_status_ID') ?? 2;
                     $updateData['assigned_to'] = $newEmpId;
                     $updateData['ticket_status_ID'] = $inProgressId;
+                    $updateData['in_progress_owner'] = 'employee';
                 } else {
+                    $inProgressId = DB::table('ticket_statuses')
+                        ->whereRaw('LOWER(status_name) = ?', ['in progress'])
+                        ->value('ticket_status_ID') ?? 2;
                     $updateData['assigned_to'] = null;
+                    $updateData['ticket_status_ID'] = $inProgressId;
+                    $updateData['in_progress_owner'] = 'cs';
                 }
 
                 DB::table('tickets')
@@ -206,6 +268,7 @@ class EmployeeReassignmentService
                     ->where('request_id', $pendingRequest->request_id)
                     ->update([
                         'status' => 'denied',
+                        'deny_reason' => $denyReason,
                         'reviewed_at' => now(),
                         'updated_at' => now(),
                     ]);
@@ -227,6 +290,7 @@ class EmployeeReassignmentService
                     ->update([
                         'assigned_to' => $targetEmpId,
                         'ticket_status_ID' => $inProgressId,
+                        'in_progress_owner' => 'employee',
                         'updated_at' => now(),
                     ]);
 
@@ -243,6 +307,24 @@ class EmployeeReassignmentService
                 ]);
             }
         });
+
+        $this->notificationService->broadcastTicketChange('reassigned_response', $ticketId, [
+            'ticket_id' => $ticketId,
+            'ticket_ID' => $ticketId,
+            'ticketId' => $ticketId,
+            'action' => $validated['action'],
+            'employee_id' => $targetEmpId,
+            'assigned_to' => $validated['action'] === 'approve' ? $newEmpId : $targetEmpId,
+            'employee_ids' => $validated['action'] === 'approve' ? ($newEmpId ? [$newEmpId] : []) : [$targetEmpId],
+            'removed_employee_ids' => $validated['action'] === 'approve' ? [$targetEmpId] : [],
+            'previous_employee_ids' => $validated['action'] === 'approve' ? [$targetEmpId] : [],
+            'disapproval_reason' => $validated['action'] === 'deny' ? $denyReason : null,
+            'reassignment_deny_reason' => $validated['action'] === 'deny' ? $denyReason : null,
+            'disapprovalReason' => $validated['action'] === 'deny' ? $denyReason : null,
+            'reassignmentDenyReason' => $validated['action'] === 'deny' ? $denyReason : null,
+        ]);
+
+        $this->cacheService->clearTicketCaches();
 
         $ticket = DB::table('tickets')->where('ticket_ID', $ticketId)->first();
         if ($ticket) {
@@ -293,6 +375,76 @@ class EmployeeReassignmentService
                         $categoryName,
                         $priorityName
                     );
+
+                    // If ticket is already breached, re-trigger immediate breach alert to newly assigned employee
+                    $isBreached = ($ticket->sla_status ?? '') === 'Breached' || ($ticket->resolution_due_at && \Carbon\Carbon::parse($ticket->resolution_due_at)->isPast());
+                    if ($isBreached) {
+                        $overdueMinutes = $ticket->resolution_due_at ? max(1, (int) \Carbon\Carbon::parse($ticket->resolution_due_at)->diffInMinutes(now())) : 0;
+                        $overdueDuration = $overdueMinutes >= 60
+                            ? round($overdueMinutes / 60, 1) . ' hours overdue'
+                            : "{$overdueMinutes} minutes overdue";
+
+                        $customerName = $customerId ? (DB::table('clients')->where('id', $customerId)->value('client_name') ?? 'Valued Customer') : 'Valued Customer';
+
+                        $breachData = [
+                            'type' => 'overdue_sla_breach',
+                            'ticket_id' => $ticketId,
+                            'ticket_ref' => $ticketRef,
+                            'title' => $title,
+                            'summary' => $title,
+                            'customer' => $customerName,
+                            'category' => $categoryName,
+                            'priority' => $priorityName,
+                            'overdue_duration' => $overdueDuration,
+                            'sla_status' => 'Breached',
+                            'due_at' => $ticket->resolution_due_at ? \Carbon\Carbon::parse($ticket->resolution_due_at)->toIso8601String() : null,
+                            'link' => "/ticketing/employee/machine",
+                            'deep_link' => "/ticketing/employee/machine",
+                            'is_reassignment' => true,
+                        ];
+
+                        $this->notificationService->notifyRecipient(
+                            $newEmpId,
+                            'employee',
+                            "SLA Alert: Reassigned Ticket {$ticketRef} Already Breached",
+                            "Urgent: You have been assigned Ticket {$ticketRef}: \"{$title}\" which has already breached its resolution SLA deadline ({$overdueDuration}). Immediate action required.",
+                            $ticketId,
+                            $breachData,
+                            'overdue_sla_breach'
+                        );
+
+                        $this->notificationService->sendTicketEmail(
+                            $newEmpId,
+                            "SLA Alert: Reassigned Ticket {$ticketRef} Already Breached",
+                            "Urgent: You have been assigned Ticket {$ticketRef}: \"{$title}\" which has already breached its resolution SLA deadline ({$overdueDuration}). Immediate action required.",
+                            $ticketId,
+                            $title,
+                            $categoryName,
+                            $priorityName,
+                            'overdue_sla_breach',
+                            [
+                                'customer_name' => $customerName,
+                                'sla_deadline' => $ticket->resolution_due_at,
+                                'overdue_duration' => $overdueDuration,
+                            ]
+                        );
+
+                        try {
+                            DB::table('ticket_audit_logs')->insert([
+                                'ticket_ID' => $ticketId,
+                                'action_type' => 'sla_breached_reassigned',
+                                'action_by_ID' => $csEmpId,
+                                'actor_type' => 'employee',
+                                'details' => json_encode([
+                                    'sla_status' => 'Breached',
+                                    'due_at' => $ticket->resolution_due_at,
+                                    'overdue_duration' => $overdueDuration,
+                                    'new_employee_id' => $newEmpId,
+                                ]),
+                                'created_at' => now(),
+                            ]);
+                        } catch (\Throwable $e) {}
+                    }
                 }
 
                 $this->notificationService->notifyCS(
@@ -353,13 +505,6 @@ class EmployeeReassignmentService
             );
         }
 
-        $this->notificationService->broadcastTicketChange('reassigned_response', $ticketId, [
-            'action' => $validated['action'],
-            'employee_id' => $targetEmpId,
-        ]);
-
-        $this->cacheService->clearTicketCaches();
-
         return ['status' => 200, 'data' => ['message' => 'Reassignment request responded to successfully.']];
     }
 
@@ -386,9 +531,41 @@ class EmployeeReassignmentService
             );
 
         $role = strtolower(trim((string) ($user->role ?? '')));
-        $isCS = in_array($role, ['customer service', 'customer support', 'cs', 'admin', 'superadmin', 'super admin']);
+        $isCS = in_array($role, ['customer service', 'customer support', 'cs', 'head of cs', 'head of customer service', 'admin', 'superadmin', 'super admin']);
         if (!$isCS) {
             $query->where('rr.employee_id', $user->emp_id);
+        } elseif (in_array($role, ['customer service', 'customer support', 'cs'], true)) {
+            // A CSR works pending requests for tickets they delegated, plus fallback requests when delegator is absent or not a CSR.
+            $csId = (int) $user->emp_id;
+            $csBranch = !empty($user->branch) ? trim((string) $user->branch) : null;
+            $query->where(function ($q) use ($csId, $csBranch) {
+                $q->where('rr.status', '!=', 'pending')
+                    ->orWhereExists(function ($sub) use ($csId) {
+                        $sub->select(DB::raw(1))
+                            ->from('ticket_assignments as ta')
+                            ->whereColumn('ta.ticket_ID', 'rr.ticket_id')
+                            ->whereColumn('ta.employee_ID', 'rr.employee_id')
+                            ->where('ta.assigned_by', $csId);
+                    })
+                    ->orWhere(function ($fallbackQ) use ($csBranch) {
+                        $fallbackQ->whereNotExists(function ($delegatorSub) {
+                            $delegatorSub->select(DB::raw(1))
+                                ->from('ticket_assignments as ta2')
+                                ->join('employees as del', 'del.emp_id', '=', 'ta2.assigned_by')
+                                ->whereColumn('ta2.ticket_ID', 'rr.ticket_id')
+                                ->whereColumn('ta2.employee_ID', 'rr.employee_id')
+                                ->whereIn('del.role', ['customer service', 'customer support', 'cs']);
+                        });
+
+                        if ($csBranch) {
+                            $fallbackQ->where(function ($bQ) use ($csBranch) {
+                                $bQ->where('e.branch', $csBranch)
+                                    ->orWhereNull('e.branch')
+                                    ->orWhere('e.branch', '');
+                            });
+                        }
+                    });
+            });
         }
 
         if ($status) {

@@ -39,6 +39,7 @@ services:
     container_name: capstone-reverb
     volumes:
       - ./services/customer-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - customer-service-vendor:/var/www/vendor
     restart: always
     environment:
@@ -61,6 +62,7 @@ services:
     container_name: customer-service
     volumes:
       - ./services/customer-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - customer-service-vendor:/var/www/vendor
     ports:
       - "8001:8000"
@@ -109,6 +111,7 @@ services:
     container_name: customer-service-queue
     volumes:
       - ./services/customer-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - customer-service-vendor:/var/www/vendor
     environment:
       DB_CONNECTION: mysql
@@ -153,7 +156,53 @@ services:
       - customer-service
       - ticket-service
       - employee-service
+      - configuration-service
 
+
+  # Runs the Laravel scheduler for ticket-service (audit log purge, forecasts, SLA checks).
+  # Without this container the jobs listed by `php artisan schedule:list` never execute.
+  ticket-scheduler:
+    # Shares the image already built for ticket-service, so no second build is needed.
+    image: ${COMPOSE_PROJECT_NAME:-enterprise-ticketing-system}-ticket-service
+    build:
+      context: ./services/ticket-service
+    container_name: ticket-scheduler
+    volumes:
+      - ./services/ticket-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
+      - ticket-service-vendor:/var/www/vendor
+    networks:
+      - default
+      - shared-capstone-network
+    environment:
+      DB_CONNECTION: mysql
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_DATABASE: ${MYSQL_DATABASE}
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      CACHE_DRIVER: redis
+      BROADCAST_DRIVER: reverb
+      QUEUE_CONNECTION: redis
+      SESSION_DRIVER: redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      REVERB_APP_ID: local
+      REVERB_APP_KEY: local
+      REVERB_APP_SECRET: local
+      REVERB_HOST: reverb
+      REVERB_PORT: 6001
+    command: >
+      sh -lc "while [ ! -f vendor/autoload.php ] || [ ! -f .env ]; do sleep 5; done && php artisan schedule:work"
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      ticket-service:
+        condition: service_started
 
   ticket-service:
     build:
@@ -161,6 +210,7 @@ services:
     container_name: ticket-service
     volumes:
       - ./services/ticket-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - ticket-service-vendor:/var/www/vendor
     ports:
       - "8002:8000"
@@ -180,13 +230,17 @@ services:
       SESSION_DRIVER: redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
       REVERB_APP_ID: local
       REVERB_APP_KEY: local
       REVERB_APP_SECRET: local
       REVERB_HOST: reverb
       REVERB_PORT: 6001
+      # artisan serve is single threaded by default. File views now wait on an access check
+      # here, so a slow dashboard request must not block it (same as analytics-service).
+      PHP_CLI_SERVER_WORKERS: 4
     command: >
-      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d upload_max_filesize=20M -d post_max_size=25M artisan serve --host=0.0.0.0 --port=8000"
+      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d variables_order=EGPCS -d upload_max_filesize=20M -d post_max_size=25M artisan serve --no-reload --host=0.0.0.0 --port=8000"
     depends_on:
       db:
         condition: service_healthy
@@ -203,6 +257,7 @@ services:
     container_name: ticket-service-queue
     volumes:
       - ./services/ticket-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - ticket-service-vendor:/var/www/vendor
     environment:
       DB_CONNECTION: mysql
@@ -238,6 +293,7 @@ services:
     container_name: employee-service
     volumes:
       - ./services/employee-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - employee-service-vendor:/var/www/vendor
     ports:
       - "8008:8000"
@@ -262,8 +318,10 @@ services:
       REVERB_APP_SECRET: local
       REVERB_HOST: reverb
       REVERB_PORT: 6001
+      # Shared service to service token (same value as ticket-service).
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
     command: >
-      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && rm -f bootstrap/cache/*.php && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d upload_max_filesize=20M -d post_max_size=25M artisan serve --host=0.0.0.0 --port=8000"
+      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && rm -f bootstrap/cache/*.php && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d variables_order=EGPCS -d upload_max_filesize=20M -d post_max_size=25M artisan serve --no-reload --host=0.0.0.0 --port=8000"
     depends_on:
       db:
         condition: service_healthy
@@ -278,6 +336,9 @@ services:
     container_name: notification-service
     volumes:
       - ./services/notification-service:/var/www
+      # Keep vendor/ off the Windows bind mount (as every other service does). Without it,
+      # each request read hundreds of library files over the host share: 15 to 28 seconds per request.
+      - notification-service-vendor:/var/www/vendor
     ports:
       - "8003:8000"
     environment:
@@ -287,6 +348,9 @@ services:
       DB_DATABASE: ${MYSQL_DATABASE}
       DB_USERNAME: root
       DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    # The image ships vendor/ without dev packages, but the bind mounted bootstrap cache expects them,
+    # so install them once into the volume. opcache for the CLI server keeps compiled files between requests.
+    command: sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ ! -d vendor/nunomaduro/collision ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$$' .env; then php artisan key:generate --force; fi && echo opcache.enable_cli=1 > /usr/local/etc/php/conf.d/zz-opcache-cli.ini && php artisan serve --host=0.0.0.0 --port=8000"
     depends_on:
       db:
         condition: service_healthy
@@ -295,11 +359,30 @@ services:
     build:
       context: ./services/analytics-service
     container_name: analytics-service
+    restart: always
     volumes:
       - ./services/analytics-service:/var/www
+      # Shared token verification package used by AuthenticateSubsystem (spec 0034).
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
+      # Keep vendor/ off the Windows bind mount. Without this every request booted Laravel over the host
+      # filesystem (about 24 s), so /api/csat-stats never answered within any timeout (spec 0031 AC-16).
+      - analytics-service-vendor:/var/www/vendor
+    # The image ships vendor/ without dev packages, but the bind mounted bootstrap cache expects them,
+    # so install the full set into the volume on first start. OPcache is turned on for the CLI because
+    # artisan serve runs the built in server under the CLI, where it is off by default.
+    command: sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ ! -d vendor/nunomaduro/collision ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && echo opcache.enable_cli=1 > /usr/local/etc/php/conf.d/zz-opcache-cli.ini && php -d variables_order=EGPCS artisan serve --no-reload --host=0.0.0.0 --port=8000"
     ports:
       - "8004:8000"
+    networks:
+      - default
+      - shared-capstone-network
     environment:
+      # artisan serve is single threaded by default; let a slow request not block the next one.
+      PHP_CLI_SERVER_WORKERS: 4
+      # The api throttle middleware touches the cache on every request; Redis keeps that off the bind mount.
+      CACHE_DRIVER: redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
       DB_CONNECTION: mysql
       DB_HOST: db
       DB_PORT: 3306
@@ -310,6 +393,41 @@ services:
       db:
         condition: service_healthy
 
+  configuration-service:
+    build:
+      context: ./services/configuration-service
+    container_name: configuration-service
+    restart: always
+    volumes:
+      - ./services/configuration-service:/var/www
+      - configuration-service-vendor:/var/www/vendor
+      # Shared token verification package used by AuthenticateSubsystem (spec 0034).
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
+    ports:
+      - "8009:8000"
+    networks:
+      - default
+      - shared-capstone-network
+    environment:
+      DB_CONNECTION: mysql
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_DATABASE: ${MYSQL_DATABASE}
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      CACHE_DRIVER: redis
+      SESSION_DRIVER: redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+    command: >
+      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php artisan migrate --force && php -d variables_order=EGPCS artisan serve --no-reload --host=0.0.0.0 --port=8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
   ai-service:
     build:
       context: ./services/AI-service
@@ -317,6 +435,8 @@ services:
     volumes:
       - ./services/AI-service:/var/www
       - ai-service-vendor:/var/www/vendor
+      # Shared token verification package used by AuthenticateSubsystem (spec 0034).
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
     ports:
       - "8005:8000"
     environment:
@@ -327,15 +447,30 @@ services:
       DB_USERNAME: root
       DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+      # Spec 0036: chat timeout (max 15s) and Knowledge Base embedding settings.
+      GEMINI_TIMEOUT_SECONDS: ${GEMINI_TIMEOUT_SECONDS:-15}
+      KB_EMBEDDING_MODEL: ${KB_EMBEDDING_MODEL:-gemini-embedding-001}
+      KB_EMBEDDING_DIMS: ${KB_EMBEDDING_DIMS:-768}
+      KB_MIN_SCORE: ${KB_MIN_SCORE:-0.55}
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
+      # Staff JWT verification (VerifyEmployeeJwt): token revocation lookup and branch lookup from auth-service.
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      AUTH_SERVICE_URL: http://auth-service:8000
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
     networks:
       - default
       - shared-capstone-network
     command: >
-      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=8000"
+      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ -f uploads.ini ]; then cp uploads.ini /usr/local/etc/php/conf.d/uploads.ini; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=8000"
     depends_on:
       db:
         condition: service_healthy
+      clamav:
+        condition: service_started
 
 
   clamav:
@@ -380,8 +515,11 @@ services:
       REVERB_PORT: 6001
       CLAMAV_HOST: clamav
       CLAMAV_PORT: 3310
+      # Spec 0037: file access is checked against ticket-service's internal endpoint.
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      TICKET_SERVICE_URL: http://ticket-service:8000
     command: >
-      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ -f uploads.ini ]; then cp uploads.ini /usr/local/etc/php/conf.d/uploads.ini; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && php artisan storage:link --force && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d upload_max_filesize=50M -d post_max_size=50M artisan serve --host=0.0.0.0 --port=8000"
+      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ -f uploads.ini ]; then cp uploads.ini /usr/local/etc/php/conf.d/uploads.ini; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d variables_order=EGPCS -d upload_max_filesize=50M -d post_max_size=50M artisan serve --no-reload --host=0.0.0.0 --port=8000"
     depends_on:
       db:
         condition: service_healthy
@@ -416,6 +554,7 @@ services:
     container_name: capstone-messaging-reverb
     volumes:
       - ./services/messaging-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - messaging-service-vendor:/var/www/vendor
     restart: always
     environment:
@@ -441,6 +580,7 @@ services:
     container_name: messaging-service
     volumes:
       - ./services/messaging-service:/var/www
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       - messaging-service-vendor:/var/www/vendor
     ports:
       - "8007:8000"
@@ -468,8 +608,10 @@ services:
       REVERB_APP_SECRET: messaging-local-secret
       REVERB_HOST: messaging-reverb
       REVERB_PORT: 6002
+      # Shared service to service token (same value as ticket-service).
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
     command: >
-      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php artisan serve --host=0.0.0.0 --port=8000"
+      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ -f uploads.ini ]; then cp uploads.ini /usr/local/etc/php/conf.d/uploads.ini; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d variables_order=EGPCS artisan serve --no-reload --host=0.0.0.0 --port=8000"
     depends_on:
       mongodb:
         condition: service_healthy
@@ -487,7 +629,10 @@ services:
     volumes:
       - ./frontend/web:/app
       - /app/node_modules
+    ports:
+      - "5005:5005"
     networks:
+      - default
       - shared-capstone-network
     environment:
       VITE_BASE_PATH: "/ticketing/"
@@ -499,6 +644,7 @@ services:
       VITE_MESSAGING_SERVICE_URL: "http://messaging-service:8000"
       VITE_AI_SERVICE_URL: "http://ai-service:8000"
       VITE_ANALYTICS_SERVICE_URL: "http://analytics-service:8000"
+      VITE_CONFIGURATION_SERVICE_URL: "http://configuration-service:8000"
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5005"
     restart: always
 
@@ -526,6 +672,7 @@ services:
       VITE_MESSAGING_SERVICE_URL: "http://messaging-service:8000"
       VITE_AI_SERVICE_URL: "http://ai-service:8000"
       VITE_ANALYTICS_SERVICE_URL: "http://analytics-service:8000"
+      VITE_CONFIGURATION_SERVICE_URL: "http://configuration-service:8000"
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5006"
     restart: always
 
@@ -540,6 +687,9 @@ volumes:
   messaging-service-vendor:
   employee-service-vendor:
   ai-service-vendor:
+  configuration-service-vendor:
+  analytics-service-vendor:
+  notification-service-vendor:
 
 networks:
   default:

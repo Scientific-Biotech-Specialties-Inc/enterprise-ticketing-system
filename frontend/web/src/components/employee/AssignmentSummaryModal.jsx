@@ -44,27 +44,27 @@ export default function AssignmentSummaryModal({ ticket, onClose }) {
 
           <div className="rounded-xl border border-gray-100 bg-gray-50/80 p-4 space-y-3 text-sm">
             <div>
-              <p className="text-field-label uppercase text-gray-400 mb-0.5">Title</p>
-              <p className="text-field-value text-gray-900">{ticket.title}</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-dark mb-0.5">Ticket Title</p>
+              <p className="text-sm font-normal text-slate-600">{ticket.title}</p>
             </div>
             <div>
-              <p className="text-field-label uppercase text-gray-400 mb-0.5">Requestor</p>
-              <p className="text-field-value text-gray-900">{ticket.customer}</p>
-              {ticket.facility && <p className="text-timestamp text-gray-500 mt-0.5">{ticket.facility}</p>}
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-dark mb-0.5">Requestor</p>
+              <p className="text-sm font-normal text-slate-600">{ticket.customer}</p>
+              {ticket.facility && <p className="text-xs font-normal text-slate-400 mt-0.5">{ticket.facility}</p>}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <p className="text-field-label uppercase text-gray-400 mb-0.5">Equipment</p>
-                <p className="text-field-value text-gray-800">{ticket.equipment}</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-dark mb-0.5">Equipment/Machine</p>
+                <p className="text-sm font-normal text-slate-600">{ticket.equipment}</p>
               </div>
               <div>
-                <p className="text-field-label uppercase text-gray-400 mb-0.5">Category</p>
-                <p className="text-field-value text-gray-800">{ticket.category}</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-dark mb-0.5">Category</p>
+                <p className="text-sm font-normal text-slate-600">{ticket.category}</p>
               </div>
             </div>
             <div>
-              <p className="text-field-label uppercase text-gray-400 mb-0.5">Date filed</p>
-              <p className="text-field-value text-gray-800">{formatDisplayDate(ticket.date)}</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-dark mb-0.5">Date Filed</p>
+              <p className="text-sm font-normal text-slate-600">{formatDisplayDate(ticket.date)}</p>
             </div>
           </div>
         </div>

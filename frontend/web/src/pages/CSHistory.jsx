@@ -1,19 +1,83 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Filter } from 'lucide-react';
+import { Search } from 'lucide-react';
 import Pagination from '@/components/Pagination';
-import SkeletonLoader from '@/components/SkeletonLoader';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import {
   getCSIncomingTickets,
   getDepartments,
 } from '@/services/ticketService';
-import { formatDisplayDate } from '@/utils/dateUtils';
+import { formatDisplayDate, parseUTCDate } from '@/utils/dateUtils';
+import { PageHeader } from '@/components/ui/page-header';
+import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
+import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
+import { DataTableSkeleton, DataTableEmptyState } from '@/components/ui/data-table';
 const HISTORY_STATUSES = ['Closed', 'Resolved'];
 
 const getDisplayStatus = (ticket) => ticket.status;
 
-export default function CSHistory() {
+const buildTicketSearchString = (t) => {
+  if (!t) return '';
+  const id = String(t.id || t.ticket_ID || t.ticket_number || '');
+  const customer = String(
+    t.customer ||
+    t.customer_name ||
+    t.requestor ||
+    t.created_by_name ||
+    (typeof t.customer === 'object' ? t.customer?.name : '') ||
+    ''
+  );
+  const isInternal = Boolean(
+    t.title?.startsWith('[Internal]') ||
+    t.is_internal ||
+    t.ticket_type === 'Internal' ||
+    t.type === 'Internal'
+  );
+  const typeStr = isInternal ? 'internal' : 'external';
+  const title = String(t.title || '');
+  const category = String(t.category || '');
+  const rawStatus = String(t.status || '');
+  const displayStatus = String(
+    getDisplayStatus(t) === 'Reopen' ? 'Reopened' : (getDisplayStatus(t) || '')
+  );
+  const statusStr = `${rawStatus} ${displayStatus}`;
+  const dept = String(t.department || '');
+  const equip = String(t.equipment || t.machine_name || '');
+
+  const dateValue = t.date || t.created_at || t.submitted_at || t.updated_at || '';
+  const rawDate = String(dateValue);
+  const formattedDate = formatDisplayDate(dateValue);
+  let extraDates = '';
+  try {
+    const parsed = parseUTCDate(dateValue);
+    if (parsed && !isNaN(parsed.getTime())) {
+      extraDates = [
+        parsed.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+        parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+        parsed.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }),
+        parsed.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' }),
+      ].join(' ');
+    }
+  } catch (e) {}
+
+  return [
+    id,
+    customer,
+    typeStr,
+    title,
+    category,
+    statusStr,
+    dept,
+    equip,
+    rawDate,
+    formattedDate,
+    extraDates,
+  ]
+    .join(' ')
+    .toLowerCase();
+};
+
+export default function CSHistory({ roleContext = 'cs' }) {
   const navigate = useNavigate();
 
   const [tickets, setTickets] = useState([]);
@@ -48,7 +112,7 @@ export default function CSHistory() {
         HISTORY_STATUSES.includes(ticket.status)
       );
       setTickets(list);
-    } catch (err) {
+    } catch {
       setError('Unable to load history tickets from ticket-service.');
     } finally {
       if (source !== 'websocket' && source !== 'poll') {
@@ -62,17 +126,14 @@ export default function CSHistory() {
       const payload = context.payload;
       if (!payload) return;
 
-      // Handle ticket updates
       if (payload.action) {
         const { action, ticket } = payload;
         if (!ticket) return;
 
         if (action === 'created') {
-          // New tickets are not history tickets, skip
           return;
         }
 
-        // If updated to a history status, add or update in the list
         const isHistoryTicket = HISTORY_STATUSES.includes(ticket.status);
 
         setTickets((prev) => {
@@ -83,12 +144,10 @@ export default function CSHistory() {
               next[index] = { ...next[index], ...ticket };
               return next;
             } else {
-              // Removed from history status
               return prev.filter((t) => t.id !== ticket.id && t.ticket_ID !== ticket.ticket_ID);
             }
           } else {
             if (isHistoryTicket) {
-              // Prepend newly resolved/closed ticket
               return [ticket, ...prev];
             }
             return prev;
@@ -136,12 +195,11 @@ export default function CSHistory() {
       }
 
       if (!q) return true;
-      return (
-        t.id.toLowerCase().includes(q) ||
-        t.customer.toLowerCase().includes(q) ||
-        t.title.toLowerCase().includes(q) ||
-        (t.equipment && t.equipment.toLowerCase().includes(q))
-      );
+      const cleanQ = q.trim().toLowerCase();
+      const searchBlob = buildTicketSearchString(t);
+      if (searchBlob.includes(cleanQ)) return true;
+      const tokens = cleanQ.replace(/,/g, ' ').split(/\s+/).filter(Boolean);
+      return tokens.length > 0 && tokens.every((token) => searchBlob.includes(token));
     });
   }, [tickets, search, category, statusFilter, typeFilter]);
 
@@ -160,132 +218,162 @@ export default function CSHistory() {
 
   const handleRowAction = (t) => {
     const ticketId = t.ticket_ID || Number(String(t.id).replace(/\D/g, ''));
-    navigate(`/cs/history/${ticketId}`, { state: { ticket: t, backPath: '/cs/history' } });
+    const basePath = roleContext === 'it_manager' ? '/it-manager' : roleContext === 'service_manager' ? '/service-manager' : roleContext === 'cs_manager' ? '/cs-manager' : '/cs';
+    navigate(`${basePath}/history/${ticketId}`, { state: { ticket: t, backPath: `${basePath}/history` } });
   };
 
   return (
-    <div className="p-6 flex flex-col gap-6">
-      <div className="flex flex-col gap-2">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <h1 className="text-3xl font-bold text-[#252578]">Ticket History</h1>
-          <div className="flex border border-gray-200 rounded-xl overflow-hidden shadow-sm bg-white shrink-0">
+    <div className="space-y-6">
+      <PageHeader
+        title="Ticket History"
+        subtitle="View resolved, closed, and completed tickets"
+        actions={
+          <div className="flex border border-border rounded-lg overflow-hidden bg-card shrink-0">
             {['all', 'external', 'internal'].map((type) => (
               <button
                 key={type}
                 type="button"
                 onClick={() => setTypeFilter(type)}
-                className={`px-4 py-2 text-xs font-semibold uppercase tracking-wider transition-colors ${
+                className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
                   typeFilter === type
-                    ? 'bg-[#252578] text-white'
-                    : 'bg-white hover:bg-gray-55 text-gray-600'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-card hover:bg-muted text-muted-foreground'
                 }`}
               >
                 {type}
               </button>
             ))}
           </div>
-        </div>
-        <p className="text-gray-500 mt-1">View resolved, closed, and completed tickets</p>
-      </div>
+        }
+      />
 
       {error && (
-        <div className="rounded-xl bg-red-50 text-red-700 px-4 py-2 text-sm">{error}</div>
-      )}
-
-      {loading ? (
-        <div className="rounded-2xl border border-gray-100 bg-white shadow-sm p-8">
-          <table className="w-full">
-            <tbody>
-              <SkeletonLoader variant="table-row" />
-              <SkeletonLoader variant="table-row" />
-              <SkeletonLoader variant="table-row" />
-              <SkeletonLoader variant="table-row" />
-              <SkeletonLoader variant="table-row" />
-            </tbody>
-          </table>
+        <div className="rounded-lg bg-destructive/10 text-destructive border border-destructive/20 px-4 py-3 text-sm font-medium">
+          {error}
         </div>
-      ) : (
-        <>
-          <div className="flex flex-wrap lg:flex-nowrap items-center gap-3 rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-sm w-full shrink-0">
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search history by ID, customer, title..." className="flex-1 min-w-[260px] max-w-[630px] w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#252578] shrink" />
-            <div className="flex flex-wrap lg:flex-nowrap items-center gap-3 shrink-0 lg:ml-auto">
-              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-full sm:w-[150px] md:w-[160px] shrink-0 rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#252578]">
-                <option value="All Status">All Statuses</option>
-                <option value="Resolved">Resolved</option>
-                <option value="Closed">Closed</option>
-              </select>
-              <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full sm:w-[150px] md:w-[160px] shrink-0 rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#252578]">
-                {categories.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
-            <div className="flex items-center justify-between px-4 py-4 border-b border-gray-100">
-              <h2 className="text-xl font-semibold text-[#252578]">Completed Logs</h2>
-              <div className="text-sm text-gray-500">{filtered.length} tickets</div>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm text-left">
-                <thead className="border-b border-gray-100 bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  <tr>
-                    <th className="px-5 py-4">Ticket ID</th>
-                    <th className="px-5 py-4">Customer</th>
-                    <th className="px-5 py-4">Type</th>
-                    <th className="px-5 py-4">Title</th>
-                    <th className="px-5 py-4">Category</th>
-                    <th className="px-5 py-4">Status</th>
-                    <th className="px-5 py-4">Date Submitted</th>
-                  </tr>
-                </thead>
-
-                <tbody className="divide-y divide-gray-100 text-gray-700">
-                  {paginated.map((t) => (
-                    <tr key={t.id} className="hover:bg-gray-50 transition-all cursor-pointer" onClick={() => handleRowAction(t)}>
-                      <td className="py-4 px-4 font-medium">{t.id}</td>
-                      <td className="py-4 px-4 text-gray-600">{t.customer}</td>
-                      <td className="py-4 px-4">
-                        <span className={`inline-flex whitespace-nowrap px-2.5 py-1 rounded-full text-xs font-semibold ${(t.title?.startsWith('[Internal]') || t.is_internal || t.ticket_type === 'Internal' || t.type === 'Internal') ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
-                          {(t.title?.startsWith('[Internal]') || t.is_internal || t.ticket_type === 'Internal' || t.type === 'Internal') ? 'Internal' : 'External'}
-                        </span>
-                      </td>
-                      <td className="py-4 px-4 text-gray-700 font-semibold">{t.title}</td>
-                      <td className="py-4 px-4">
-                        <span className="inline-flex whitespace-nowrap px-3 py-1 bg-gray-100 rounded-full text-xs">{t.category}</span>
-                      </td>
-                      <td className="py-4 px-4">
-                        <span className={`inline-flex whitespace-nowrap px-3 py-1 rounded-full text-xs font-semibold ${
-                           getDisplayStatus(t) === 'Resolved' ? 'bg-green-100 text-green-700' :
-                           getDisplayStatus(t) === 'Closed' ? 'bg-gray-100 text-gray-700' :
-                           'bg-gray-100 text-gray-700'
-                        }`}>{getDisplayStatus(t)}</span>
-                      </td>
-                      <td className="py-4 px-4 text-gray-500">{formatDisplayDate(t.date)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Pagination */}
-            <div className="mt-6 flex items-center justify-between">
-              <div className="text-sm text-gray-500">
-                Showing {filtered.length === 0 ? 0 : (page - 1) * ITEMS_PER_PAGE + 1} - {Math.min(page * ITEMS_PER_PAGE, filtered.length)} of {filtered.length}
-              </div>
-              <Pagination
-                totalItems={filtered.length}
-                itemsPerPage={ITEMS_PER_PAGE}
-                currentPage={page}
-                onPageChange={(p) => setPage(p)}
-              />
-            </div>
-          </div>
-        </>
       )}
 
+      {/* Filter toolbar */}
+      <div className="w-full space-y-3 shrink-0">
+        <div className="relative w-full">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search history by ID, customer, title..."
+            className="w-full rounded-lg border border-border bg-card pl-9 pr-4 py-2.5 text-sm text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+          />
+        </div>
+        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="flex-1 min-w-[140px] rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+          >
+            <option value="All Status">All Statuses</option>
+            <option value="Resolved">Resolved</option>
+            <option value="Closed">Closed</option>
+          </select>
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className="flex-1 min-w-[140px] rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+          >
+            {categories.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Table Card */}
+      <div className="overflow-hidden rounded-xl border border-border bg-card shadow-xs">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <h2 className="text-base font-bold text-foreground">Completed Logs</h2>
+          <div className="text-xs text-muted-foreground">{filtered.length} tickets</div>
+        </div>
+
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[140px]">Ticket ID</TableHead>
+              <TableHead>Customer</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead>Title</TableHead>
+              <TableHead>Category</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="w-[150px]">Date Submitted</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {loading ? (
+              <DataTableSkeleton columns={7} rows={6} />
+            ) : filtered.length === 0 ? (
+              <DataTableEmptyState
+                colSpan={7}
+                message="No tickets found in the history queue."
+              />
+            ) : (
+              paginated.map((t) => {
+                const isInternalTicket =
+                  t.title?.startsWith('[Internal]') ||
+                  t.is_internal ||
+                  t.ticket_type === 'Internal' ||
+                  t.type === 'Internal';
+
+                return (
+                  <TableRow
+                    key={t.id}
+                    onClick={() => handleRowAction(t)}
+                    className="cursor-pointer hover:bg-muted/50 transition-colors"
+                  >
+                    <TableCell className="font-semibold text-primary whitespace-nowrap">
+                      {t.id}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground truncate max-w-[12rem]">
+                      {t.customer}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={isInternalTicket ? 'secondary' : 'outline'}>
+                        {isInternalTicket ? 'Internal' : 'External'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="font-medium text-foreground max-w-[18rem] truncate">
+                      {t.title}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {t.category}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={getStatusBadgeVariant(getDisplayStatus(t))}>
+                        {getDisplayStatus(t)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                      {formatDisplayDate(t.date || t.created_at)}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
+
+        {!loading && filtered.length > 0 && (
+          <div className="px-4 py-3 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="text-xs text-muted-foreground">
+              Showing {(page - 1) * ITEMS_PER_PAGE + 1} -{' '}
+              {Math.min(page * ITEMS_PER_PAGE, filtered.length)} of {filtered.length}
+            </div>
+            <Pagination
+              totalItems={filtered.length}
+              itemsPerPage={ITEMS_PER_PAGE}
+              currentPage={page}
+              onPageChange={(p) => setPage(p)}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

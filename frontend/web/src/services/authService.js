@@ -179,3 +179,30 @@ export const updateUserProfile = async (profileData) => {
     throw error.response?.data || error;
   }
 };
+
+export const getUserProfile = async () => {
+  try {
+    const response = await axiosInstance.get('/profile');
+    return response.data;
+  } catch (error) {
+    throw error.response?.data || error;
+  }
+};
+
+export const resendFirstLoginOtp = async () => {
+  try {
+    const response = await axiosInstance.post('/first-login/resend-otp');
+    return response.data;
+  } catch (error) {
+    throw error.response?.data || error;
+  }
+};
+
+export const verifyFirstLoginOtp = async (otp) => {
+  try {
+    const response = await axiosInstance.post('/first-login/verify-otp', { otp });
+    return response.data;
+  } catch (error) {
+    throw error.response?.data || error;
+  }
+};

@@ -184,7 +184,7 @@
             $employee->locked_until = null;
             $employee->last_login_at = Carbon::now();
             $employee->last_seen_at = Carbon::now();
-            $employee->is_active = $employee->role !== 'customer service';
+            $employee->is_active = !in_array($employee->role, ['customer service', 'head of cs', 'head of customer service', 'cs']);
             $employee->save();
 
             // OTP on first login is disabled — users go straight to the change-password screen.
@@ -215,7 +215,7 @@
 
         public function logoutEmployee(Employee $employee): void
         {
-            if ($employee->role === 'customer service') {
+            if (in_array($employee->role, ['customer service', 'head of cs', 'head of customer service', 'cs'])) {
                 return;
             }
 
@@ -288,7 +288,7 @@
 
         private function syncEmployeePresence(Employee $employee): void
         {
-            if ($employee->role === 'customer service') {
+            if (in_array($employee->role, ['customer service', 'head of cs', 'head of customer service', 'cs'])) {
                 return;
             }
 

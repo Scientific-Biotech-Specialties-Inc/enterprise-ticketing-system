@@ -28,8 +28,10 @@ export const statusColors = {
   New: 'bg-blue-100 text-blue-700',
   Ongoing: 'bg-indigo-100 text-indigo-700',
   Discarded: 'bg-red-100 text-red-700',
-  'Discarded by Customer': 'bg-red-100 text-red-700',
-  'On Hold': 'bg-gray-100 text-gray-600',
+  'On Hold': 'bg-amber-100 text-amber-800 border border-amber-300 font-semibold',
+  'Pending Reassignment': 'bg-amber-100 text-amber-800 border-amber-200',
+  'Reassignment Failed': 'bg-rose-100 text-rose-800 border-rose-200',
+  'Reassignment Disapproved': 'bg-rose-100 text-rose-800 border-rose-200',
 };
 
 export const slaStatusColors = {

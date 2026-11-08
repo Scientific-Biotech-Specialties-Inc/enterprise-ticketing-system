@@ -1,12 +1,12 @@
 import axios from 'axios';
 import axiosInstance from '@/api/axiosInstance';
-import { TICKET_API_URL, EMPLOYEE_API_URL, AUTH_ENDPOINTS } from '@/config/api.config';
+import { TICKET_API_URL, EMPLOYEE_API_URL, AUTH_ENDPOINTS, AI_API_URL } from '@/config/api.config';
 import tokenStore from '@/auth/tokenStore';
 import { refreshAccessToken } from '@/auth/refreshSession';
 
 const ticketClient = axios.create({
   baseURL: TICKET_API_URL,
-  withCredentials: false,
+  withCredentials: true,
   headers: {
     'X-Requested-With': 'XMLHttpRequest',
     'Accept': 'application/json',
@@ -19,7 +19,7 @@ ticketClient.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
-
+  // Spec 0034: identity comes only from the verified token. No X-Client-Id or X-User-Id headers.
   return config;
 });
 
@@ -41,7 +41,7 @@ ticketClient.interceptors.response.use(
       }
 
       tokenStore.clearToken();
-      localStorage.removeItem('user');
+      sessionStorage.removeItem('user');
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('auth:unauthorized'));
       }
@@ -53,7 +53,7 @@ ticketClient.interceptors.response.use(
 
 const employeeClient = axios.create({
   baseURL: EMPLOYEE_API_URL || '/api/ticketing/employee',
-  withCredentials: false,
+  withCredentials: true,
   headers: {
     'X-Requested-With': 'XMLHttpRequest',
     'Accept': 'application/json',
@@ -87,7 +87,7 @@ employeeClient.interceptors.response.use(
       }
 
       tokenStore.clearToken();
-      localStorage.removeItem('user');
+      sessionStorage.removeItem('user');
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('auth:unauthorized'));
       }
@@ -99,7 +99,7 @@ employeeClient.interceptors.response.use(
 
 const attachmentClient = axios.create({
   baseURL: '/api/ticketing/attachment',
-  withCredentials: false,
+  withCredentials: true,
   headers: {
     'X-Requested-With': 'XMLHttpRequest',
     'Accept': 'application/json',
@@ -132,43 +132,75 @@ export const uploadAttachments = async (files, isProof = false) => {
   return response.data?.attachments ?? [];
 };
 
+export const getTicketAttachments = async (ticketId) => {
+  const numericId = Number(String(ticketId).replace(/\D/g, ''));
+  if (!numericId) return [];
+  try {
+    const res = await attachmentClient.get(`/attachments?ticket_id=${numericId}`);
+    return res.data?.attachments || [];
+  } catch (err) {
+    console.warn(`Failed to fetch attachments for ticket ${ticketId}:`, err);
+    return [];
+  }
+};
+
 const processPayloadAndUpload = async (payload, isProof = false) => {
   let files = [];
+  let existingAttachmentIds = [];
   let fields = {};
 
   if (payload instanceof FormData) {
     for (const [key, value] of payload.entries()) {
       if (key === 'attachments[]' || key === 'attachments') {
-        files.push(value);
+        if (value instanceof File || value instanceof Blob) {
+          files.push(value);
+        } else if (value !== null && value !== undefined && value !== '') {
+          const num = Number(value);
+          if (!isNaN(num) && num > 0) existingAttachmentIds.push(num);
+        }
       } else if (key === 'file' && value) {
-        files.push(value);
+        if (value instanceof File || value instanceof Blob) {
+          files.push(value);
+        }
       } else {
         fields[key] = value;
       }
     }
   } else if (payload && typeof payload === 'object') {
     fields = { ...payload };
-    if (Array.isArray(payload.attachments)) {
-      files = payload.attachments;
-      delete fields.attachments;
-    } else if (payload.attachments) {
-      files = [payload.attachments];
-      delete fields.attachments;
-    }
+    const rawAttachments = Array.isArray(payload.attachments)
+      ? payload.attachments
+      : payload.attachments !== undefined && payload.attachments !== null
+      ? [payload.attachments]
+      : [];
+
+    rawAttachments.forEach((item) => {
+      if (item instanceof File || item instanceof Blob) {
+        files.push(item);
+      } else if (item !== null && item !== undefined && item !== '') {
+        const num = Number(item);
+        if (!isNaN(num) && num > 0) existingAttachmentIds.push(num);
+      }
+    });
+    delete fields.attachments;
+
     if (payload.file) {
-      files.push(payload.file);
+      if (payload.file instanceof File || payload.file instanceof Blob) {
+        files.push(payload.file);
+      }
       delete fields.file;
     }
   } else {
     return payload;
   }
 
+  let uploadedIds = [];
   if (files.length > 0) {
     const uploaded = await uploadAttachments(files, isProof);
-    fields.attachments = uploaded.map((a) => a.id);
-  } else {
-    fields.attachments = [];
+    uploadedIds = (uploaded || []).map((a) => a.id || a.attachment_ID).filter(Boolean);
   }
+
+  fields.attachments = [...existingAttachmentIds, ...uploadedIds];
 
   return fields;
 };
@@ -224,6 +256,7 @@ export const clearEmployeeTicketsCache = () => {
   employeeTicketsCache = {};
   employeeTicketsCacheAt = {};
   employeeTicketsInFlight = {};
+  clearTicketDetailsCache();
 };
 
 const isCacheFresh = () => optionsCache && (Date.now() - optionsCacheAt) < OPTIONS_CACHE_TTL_MS;
@@ -255,13 +288,21 @@ const normalizeCustomerTicket = (ticket = {}) => {
   const assigned_to = ticket.assigned_to || details.assigned_to || null;
 
   const equipment_type = ticket.equipment_type || ticket.equipmentType || details.equipment_type || details.equipmentType || null;
-  const assigned_employee = ticket.assigned_employee || ticket.assigned_employee_name || ticket.assigned_to_name || details.assigned_employee || null;
+  const assigned_employee =
+    ticket.assigned_employee ||
+    ticket.assigned_employee_name ||
+    ticket.assigned_to_name ||
+    (Array.isArray(ticket.assigned_employees) && ticket.assigned_employees[0]?.name ? ticket.assigned_employees[0].name : null) ||
+    details.assigned_employee ||
+    (typeof assigned_to === 'string' && assigned_to.trim() && assigned_to.trim().toLowerCase() !== 'unassigned' ? assigned_to : null);
 
   return {
+    ...ticket,
     ticket_ID: ticket.ticket_ID || details.ticket_ID || Number(String(ticket.id || '').replace(/\D/g, '')) || null,
     id: ticket.id,
     title: ticket.title || details.title || 'Untitled ticket',
     category: ticket.category || details.category || 'General',
+    priority: ticket.priority || details.priority || 'Medium',
     status,
     machine_ID: ticket.machine_ID || details.machine_ID || null,
     machine_name: ticket.machine_name || details.machine_name || null,
@@ -275,6 +316,7 @@ const normalizeCustomerTicket = (ticket = {}) => {
     assigned_to,
     assigned_employee,
     assigned_employee_name: assigned_employee,
+    assigned_to_name: ticket.assigned_to_name || assigned_employee,
     resolved_at: ticket.resolved_at || details.resolved_at || null,
     closed_at: ticket.closed_at || details.closed_at || null,
     remarks: ticket.remarks || details.remarks || [],
@@ -338,38 +380,114 @@ export const clearTicketFormOptionsCache = () => {
   optionsInFlight = null;
 };
 
-const fetchCustomerDashboard = async ({ createdBy = 1, limit = 5 } = {}) => {
-  const response = await ticketClient.get('/customer-dashboard', {
-    params: {
-      created_by: createdBy,
-      limit,
-    },
-  });
+const fetchCustomerDashboard = async ({ createdBy = 1, limit = 5, ...filters } = {}) => {
+  const params = {
+    created_by: createdBy,
+    limit,
+    ...filters,
+  };
+  const response = await ticketClient.get('/customer-dashboard', { params });
 
-  dashboardCache = response.data;
-  dashboardCacheAt = Date.now();
+  const hasFilters = Object.values(filters).some((v) => v !== undefined && v !== '' && v !== null);
+  if (!hasFilters) {
+    dashboardCache = response.data;
+    dashboardCacheAt = Date.now();
+  }
   return response.data;
 };
 
-export const getCustomerDashboard = async ({ createdBy = 1, limit = 5, forceRefresh = false } = {}) => {
-  if (!forceRefresh && isDashboardCacheFresh()) {
+export const getCustomerDashboard = async ({ createdBy = 1, limit = 5, forceRefresh = false, ...filters } = {}) => {
+  const hasFilters = Object.values(filters).some((v) => v !== undefined && v !== '' && v !== null);
+  if (!hasFilters && !forceRefresh && isDashboardCacheFresh()) {
     return dashboardCache;
   }
 
-  if (!forceRefresh && dashboardInFlight) {
+  if (!hasFilters && !forceRefresh && dashboardInFlight) {
     return dashboardInFlight;
   }
 
-  dashboardInFlight = fetchCustomerDashboard({ createdBy, limit }).finally(() => {
-    dashboardInFlight = null;
+  const promise = fetchCustomerDashboard({ createdBy, limit, ...filters }).finally(() => {
+    if (!hasFilters) dashboardInFlight = null;
   });
 
-  return dashboardInFlight;
+  if (!hasFilters) dashboardInFlight = promise;
+  return promise;
 };
 
-export const getCustomerTickets = async ({ createdBy = 1, limit = 20, forceRefresh = false } = {}) => {
-  const data = await getCustomerDashboard({ createdBy, limit, forceRefresh });
+export const getCustomerTickets = async ({ createdBy = 1, limit = 20, forceRefresh = false, ...filters } = {}) => {
+  const data = await getCustomerDashboard({ createdBy, limit, forceRefresh, ...filters });
   return (data?.recent_tickets || []).map(normalizeCustomerTicket);
+};
+
+export const getCustomerFilterOptions = async (createdBy = 1) => {
+  const response = await ticketClient.get('/customer/filter-options', {
+    params: { created_by: createdBy },
+  });
+  return response.data;
+};
+
+export const getCSFilterOptions = async () => {
+  const response = await ticketClient.get('/cs/filter-options');
+  return response.data;
+};
+
+export const saveTicketDraft = async (data) => {
+  let uploadedAttachments = [];
+  if (data.attachments && data.attachments.length > 0) {
+    const rawFiles = data.attachments.filter((f) => typeof File !== 'undefined' && f instanceof File);
+    const existing = data.attachments.filter((f) => !(typeof File !== 'undefined' && f instanceof File));
+    if (rawFiles.length > 0) {
+      const uploaded = await uploadAttachments(rawFiles);
+      uploadedAttachments = [...existing, ...uploaded];
+    } else {
+      uploadedAttachments = existing;
+    }
+  }
+
+  const payload = {
+    draft_id: data.id || data.draft_id || undefined,
+    title: data.title ?? '',
+    description: data.description ?? '',
+    machine_ID: data.machine_ID || undefined,
+    problem_category_ID: data.problem_category_ID || undefined,
+    priority_ID: data.priority_ID || 1,
+    attachments: uploadedAttachments,
+  };
+
+  const response = await ticketClient.post('/tickets/draft', payload);
+  return response.data;
+};
+
+export const getTicketDrafts = async () => {
+  try {
+    const response = await ticketClient.get('/tickets/drafts');
+    return response.data?.drafts ?? [];
+  } catch (error) {
+    if (error.response?.status === 401) {
+      return [];
+    }
+    throw error;
+  }
+};
+
+export const getTicketDraft = async (id) => {
+  const response = await ticketClient.get(`/tickets/drafts/${id}`);
+  return response.data?.draft ?? response.data;
+};
+
+export const deleteTicketDraft = async (id) => {
+  const response = await ticketClient.delete(`/tickets/drafts/${id}`);
+  return response.data;
+};
+
+export const getNotificationPreferences = async () => {
+  const response = await axiosInstance.get('/notification-preferences');
+  return response.data;
+};
+
+export const updateNotificationPreferences = async (preferences) => {
+  const response = await axiosInstance.put('/notification-preferences', preferences);
+  return response.data;
 };
 
 export const clearCustomerDashboardCache = () => {
@@ -388,29 +506,38 @@ const fetchCSDashboard = async ({ limit = 10 } = {}) => {
   return response.data;
 };
 
-const fetchIncomingTickets = async ({ limit = 50, page = 1 } = {}) => {
-  const response = await ticketClient.get('/cs-incoming', {
-    params: { limit, page },
-  });
+const fetchIncomingTickets = async ({ limit = 50, page = 1, forceRefresh = false, ...filters } = {}) => {
+  const params = { limit, page, ...filters };
+  if (forceRefresh) {
+    params.forceRefresh = true;
+  }
+  const response = await ticketClient.get('/cs-incoming', { params });
   const data = response.data?.incoming_tickets ?? [];
   const pagination = response.data?.pagination ?? null;
-  incomingTicketsCache = { list: data, pagination };
-  incomingTicketsCacheAt = Date.now();
-  return { list: data, pagination };
+  const slaSummary = response.data?.sla_summary ?? null;
+
+  const hasFilters = Object.values(filters).some((v) => v !== undefined && v !== '' && v !== null);
+  if (!hasFilters) {
+    incomingTicketsCache = { list: data, pagination, slaSummary };
+    incomingTicketsCacheAt = Date.now();
+  }
+  return { list: data, pagination, slaSummary };
 };
 
-export const getCSIncomingTickets = async ({ limit = 50, page = 1, paginate = false, forceRefresh = false } = {}) => {
-  let result = { list: [], pagination: null };
+export const getCSIncomingTickets = async ({ limit = 50, page = 1, paginate = false, forceRefresh = false, ...filters } = {}) => {
+  const hasFilters = Object.values(filters).some((v) => v !== undefined && v !== '' && v !== null);
+  let result = { list: [], pagination: null, slaSummary: null };
   try {
-    if (!forceRefresh && incomingTicketsCache && (Date.now() - incomingTicketsCacheAt) < INCOMING_TICKETS_CACHE_TTL_MS) {
+    if (!hasFilters && !forceRefresh && incomingTicketsCache && (Date.now() - incomingTicketsCacheAt) < INCOMING_TICKETS_CACHE_TTL_MS) {
       result = incomingTicketsCache;
-    } else if (!forceRefresh && incomingTicketsInFlight) {
+    } else if (!hasFilters && !forceRefresh && incomingTicketsInFlight) {
       result = await incomingTicketsInFlight;
     } else {
-      incomingTicketsInFlight = fetchIncomingTickets({ limit, page }).finally(() => {
-        incomingTicketsInFlight = null;
+      const promise = fetchIncomingTickets({ limit, page, forceRefresh, ...filters }).finally(() => {
+        if (!hasFilters) incomingTicketsInFlight = null;
       });
-      result = await incomingTicketsInFlight;
+      if (!hasFilters) incomingTicketsInFlight = promise;
+      result = await promise;
     }
   } catch (e) {
     console.warn("Failed to fetch incoming tickets from service:", e);
@@ -419,21 +546,83 @@ export const getCSIncomingTickets = async ({ limit = 50, page = 1, paginate = fa
 
   const rawList = Array.isArray(result) ? result : (result?.list ?? []);
   const pagination = Array.isArray(result) ? null : (result?.pagination ?? null);
+  const slaSummary = Array.isArray(result) ? null : (result?.slaSummary ?? null);
 
-  const overrides = getEmployeeOverrides();
-  const list = rawList.map((t) => {
-    const { status: _overrideStatus, ...overrideFields } = overrides[t.id] || {};
-
-    return {
-      ...t,
-      ...overrideFields,
-    };
-  });
+  const list = [...rawList];
+  if (slaSummary) {
+    list.slaSummary = slaSummary;
+  }
 
   if (paginate) {
-    return { tickets: list, pagination };
+    return { tickets: list, pagination, sla_summary: slaSummary };
   }
   return list;
+};
+
+
+/** Spec 0037: dropdown label to the server's SLA filter key. */
+export const SLA_FILTER_KEYS = {
+  Breached: 'breached',
+  'At Risk': 'at_risk',
+  'On Track': 'on_track',
+  Paused: 'paused',
+  Compliant: 'compliant',
+  'No SLA': 'no_sla',
+  'No SLA Configured': 'no_sla',
+  'SLA Unavailable': 'unavailable',
+};
+
+/**
+ * Spec 0037: one page of the CS Incoming or Assigned queue. The server applies the tab,
+ * every filter, the SLA filter, sorting, and pagination, and counts the tab badges and
+ * SLA summary cards, so the cards always match the rows across every page.
+ * (getCSIncomingTickets stays as it was for the pages that need every ticket.)
+ */
+export const getCSQueuePage = async ({
+  scope,
+  page = 1,
+  limit = 10,
+  tab,
+  search,
+  category,
+  customerName,
+  machine,
+  department,
+  type,
+  sla,
+  assignment,
+  sortBy,
+  sortDir,
+} = {}) => {
+  const params = { scope, page, limit, forceRefresh: true };
+  const optional = {
+    tab,
+    search: search?.trim(),
+    category,
+    customer_name: customerName,
+    machine,
+    department,
+    type: type && type !== 'all' ? type : undefined,
+    sla_status: sla ? (SLA_FILTER_KEYS[sla] || sla) : undefined,
+    assignment,
+    sort_by: sortBy,
+    sort_dir: sortDir,
+  };
+  Object.entries(optional).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') params[key] = value;
+  });
+
+  const response = await ticketClient.get('/cs-incoming', { params });
+  const d = response.data || {};
+  return {
+    tickets: d.data ?? d.incoming_tickets ?? [],
+    total: d.total ?? d.pagination?.total ?? 0,
+    page: d.page ?? d.pagination?.current_page ?? page,
+    perPage: d.per_page ?? d.pagination?.per_page ?? limit,
+    lastPage: Math.max(1, d.last_page ?? d.pagination?.last_page ?? 1),
+    slaSummary: d.slaSummary ?? d.sla_summary ?? null,
+    tabCounts: d.tab_counts ?? null,
+  };
 };
 
 export const clearIncomingTicketsCache = () => {
@@ -450,11 +639,11 @@ const fetchAssignableEmployees = async ({ department } = {}) => {
     params: department ? { department } : {},
   });
   const rawData = response.data?.employees ?? [];
-  // Filter to allowed departments and exclude superadmin and system administrator
-  const allowedDepts = ['Customer Service', 'IT', 'Service'];
+  // Filter to operational departments and exclude superadmin and system administrators
+  const excludedDepts = ['super admin', 'superadmin', 'admin'];
   const filtered = rawData.filter(emp => {
-    const dept = emp.department?.trim();
-    if (!allowedDepts.includes(dept)) return false;
+    const dept = (emp.department || '').trim().toLowerCase();
+    if (excludedDepts.includes(dept)) return false;
     const nameLower = (emp.name || '').toLowerCase();
     const emailLower = (emp.email || '').toLowerCase();
     const roleLower = (emp.role || '').toLowerCase();
@@ -472,9 +661,17 @@ const fetchAssignableEmployees = async ({ department } = {}) => {
     }
     return true;
   });
-  employeesCache[key] = filtered;
+  // The backend now returns is_active as the account flag and a derived `presence`
+  // (online | offline | inactive, spec 0035). Existing consumers read is_active as "available now",
+  // so keep that contract by deriving it from presence and preserve the account flag separately.
+  const normalized = filtered.map((emp) => (
+    emp.presence
+      ? { ...emp, account_active: emp.is_active, is_active: emp.presence === 'online' }
+      : emp
+  ));
+  employeesCache[key] = normalized;
   employeesCacheAt[key] = Date.now();
-  return filtered;
+  return normalized;
 };
 
 export const getAssignableEmployees = async ({ department, forceRefresh = false } = {}) => {
@@ -501,13 +698,26 @@ export const clearAssignableEmployeesCache = () => {
   employeesInFlight = {};
 };
 
-const fetchDepartments = async () => {
+export const getEligibleEmployees = async (ticketId, { track } = {}) => {
+  const normalizedId = typeof ticketId === 'object' ? (ticketId.ticket_ID || ticketId.id) : ticketId;
+  const cleanId = Number(String(normalizedId || 0).replace(/\D/g, ''));
+  const resolvedTrack = track || (typeof ticketId === 'object' ? (ticketId.track || ticketId.category) : undefined);
+  const params = {};
+  if (resolvedTrack) params.track = resolvedTrack;
+  if (typeof ticketId === 'object' && ticketId.branch_id) params.branch_id = ticketId.branch_id;
+  if (typeof ticketId === 'object' && ticketId.problem_category_ID) params.category_id = ticketId.problem_category_ID;
+
   let response;
   try {
-    response = await employeeClient.get('/departments');
-  } catch {
-    response = await ticketClient.get('/departments');
+    response = await employeeClient.get(`/tickets/${cleanId}/eligible-employees`, { params });
+  } catch (err) {
+    throw err;
   }
+  return response.data;
+};
+
+const fetchDepartments = async () => {
+  const response = await employeeClient.get('/departments');
   const data = response.data?.departments ?? [];
   departmentsCache = data;
   departmentsCacheAt = Date.now();
@@ -543,12 +753,7 @@ export const assignTicketToEmployees = async ({ ticketId, employeeIds, assignedB
     assigned_by_email: assignedByEmail,
     priority_ID: priorityId,
   };
-  let response;
-  try {
-    response = await employeeClient.post(`/tickets/${normalizedId}/assign`, payload);
-  } catch (err) {
-    response = await ticketClient.post(`/tickets/${normalizedId}/assign`, payload);
-  }
+  const response = await employeeClient.post(`/tickets/${normalizedId}/assign`, payload);
   clearCSDashboardCache();
   notifyCsTicketRefresh();
   return response.data;
@@ -561,13 +766,7 @@ export const acceptTicket = async ({ ticketId, employeeIds, assignedByEmail, pri
   if (assignedByEmail !== undefined && assignedByEmail !== null) payload.assigned_by_email = assignedByEmail;
   if (priorityId !== undefined && priorityId !== null) payload.priority_ID = priorityId;
 
-  let response;
-  try {
-    response = await employeeClient.patch(`/tickets/${normalizedId}/accept`, payload);
-  } catch (err) {
-    response = await ticketClient.patch(`/tickets/${normalizedId}/accept`, payload);
-  }
-  // The save changes the ticket row, assignment rows, and audit log entries.
+  const response = await employeeClient.patch(`/tickets/${normalizedId}/accept`, payload);
   clearIncomingTicketsCache();
   clearCSDashboardCache();
   clearEmployeeTicketsCache();
@@ -597,9 +796,80 @@ export const updateTicket = async ({ ticketId, statusId, priorityId, assignedByE
   return response.data;
 };
 
+export const reopenTicket = async (ticketId, reason) => {
+  const numericId = Number(String(ticketId).replace(/\D/g, ''));
+  const response = await ticketClient.post(`/tickets/${numericId}/reopen`, {
+    reason: String(reason || '').trim(),
+  });
+  // Clear caches since ticket updates affect customer and CS dashboards
+  clearCustomerDashboardCache();
+  clearIncomingTicketsCache();
+  clearCSDashboardCache();
+  clearEmployeeTicketsCache();
+  notifyCsTicketRefresh();
+  return response.data;
+};
+
+/**
+ * Close a ticket through the state machine (allowed only if the superadmin
+ * Transition Matrix permits the current state -> Closed).
+ */
+export const closeTicket = async (ticketId) => {
+  const numericId = Number(String(ticketId).replace(/\D/g, ''));
+  const response = await ticketClient.post(`/tickets/${numericId}/close`);
+  clearCustomerDashboardCache();
+  clearIncomingTicketsCache();
+  clearCSDashboardCache();
+  clearEmployeeTicketsCache();
+  notifyCsTicketRefresh();
+  return response.data;
+};
+
+export const holdTicket = async (ticketId, reason) => {
+  const numericId = Number(String(ticketId).replace(/\D/g, ''));
+  const response = await ticketClient.post(`/tickets/${numericId}/hold`, {
+    reason: String(reason || '').trim(),
+  });
+  clearCustomerDashboardCache();
+  clearIncomingTicketsCache();
+  clearCSDashboardCache();
+  clearEmployeeTicketsCache();
+  notifyCsTicketRefresh();
+  return response.data;
+};
+
+export const resumeTicket = async (ticketId) => {
+  const numericId = Number(String(ticketId).replace(/\D/g, ''));
+  const response = await ticketClient.post(`/tickets/${numericId}/resume`);
+  clearCustomerDashboardCache();
+  clearIncomingTicketsCache();
+  clearCSDashboardCache();
+  clearEmployeeTicketsCache();
+  notifyCsTicketRefresh();
+  return response.data;
+};
+
+export const reclassifyTicket = async ({ ticketId, problem_category_ID, priority_ID }) => {
+  const numericId = Number(String(ticketId).replace(/\D/g, ''));
+  const payload = {};
+  if (problem_category_ID !== undefined && problem_category_ID !== null) {
+    payload.problem_category_ID = Number(problem_category_ID);
+  }
+  if (priority_ID !== undefined && priority_ID !== null) {
+    payload.priority_ID = Number(priority_ID);
+  }
+  const response = await ticketClient.patch(`/tickets/${numericId}/classification`, payload);
+  clearCustomerDashboardCache();
+  clearIncomingTicketsCache();
+  clearCSDashboardCache();
+  clearEmployeeTicketsCache();
+  notifyCsTicketRefresh();
+  return response.data;
+};
+
 const fetchEmployeeAssignedTickets = async ({ employeeEmail }) => {
   try {
-    const response = await ticketClient.get('/employee-tickets', {
+    const response = await employeeClient.get('/employee-tickets', {
       params: {
         employee_email: employeeEmail,
       },
@@ -623,6 +893,12 @@ const fetchEmployeeAssignedTickets = async ({ employeeEmail }) => {
 
 export const getEmployeeAssignedTickets = async ({ employeeEmail, forceRefresh = false } = {}) => {
   const emailKey = employeeEmail || 'default';
+
+  if (forceRefresh) {
+    delete employeeTicketsCache[emailKey];
+    delete employeeTicketsCacheAt[emailKey];
+    delete employeeTicketsInFlight[emailKey];
+  }
 
   if (!forceRefresh && employeeTicketsCache[emailKey] && (Date.now() - employeeTicketsCacheAt[emailKey]) < EMPLOYEE_TICKETS_CACHE_TTL_MS) {
     return employeeTicketsCache[emailKey];
@@ -657,6 +933,11 @@ export const getCSDashboard = async ({ limit = 10, forceRefresh = false } = {}) 
   });
 
   return csDashboardInFlight;
+};
+
+export const getCSDashboardSummary = async ({ limit = 10 } = {}) => {
+  const response = await ticketClient.get('/cs-dashboard-summary', { params: { limit } });
+  return response.data;
 };
 
 export const clearCSDashboardCache = () => {
@@ -697,7 +978,7 @@ export const createInternalTicket = async (payload) => {
  * Route: GET /employee/tickets/internal  (auth.subsystem required)
  */
 export const getEmployeeInternalTickets = async () => {
-  const response = await ticketClient.get('/employee/tickets/internal');
+  const response = await employeeClient.get('/employee/tickets/internal');
   return response.data; // { tickets: [...] }
 };
 
@@ -745,10 +1026,70 @@ export const updateEmployeeTicketOverride = (ticketId, override) => {
   }
 };
 
+export const cleanupCorruptedOverrides = () => {
+  if (typeof window === 'undefined') return;
+  try {
+    const all = getEmployeeOverrides();
+    let modified = false;
+    Object.keys(all).forEach((key) => {
+      if (all[key] && (all[key].reassignmentRequested !== undefined || all[key].reassignmentStatus !== undefined)) {
+        delete all[key].reassignmentRequested;
+        delete all[key].reassignmentStatus;
+        delete all[key].reassignmentDenyReason;
+        delete all[key].reassignmentReason;
+        modified = true;
+      }
+    });
+    if (modified) {
+      window.localStorage.setItem(EMPLOYEE_OVERRIDE_KEY, JSON.stringify(all));
+    }
+  } catch {
+    // Ignore
+  }
+};
+cleanupCorruptedOverrides();
+
 export const requestReassignment = async ({ ticketId, reason }) => {
-  const response = await ticketClient.post(`/tickets/${ticketId}/reassign-request`, {
+  const response = await employeeClient.post(`/tickets/${ticketId}/reassign-request`, {
     reason,
   });
+
+  try {
+    const all = getEmployeeOverrides();
+    const numericId = Number(ticketId);
+    const keys = [
+      `TKT-${String(numericId).padStart(4, '0')}`,
+      `TKT-${String(numericId).padStart(5, '0')}`,
+      String(numericId),
+      Number(ticketId),
+      ...(response.data?.ticket?.id ? [response.data.ticket.id] : []),
+    ];
+    Object.keys(all).forEach((k) => {
+      const matchNum = Number(String(k).replace(/\D/g, ''));
+      if (matchNum === numericId && !keys.includes(k)) {
+        keys.push(k);
+      }
+    });
+
+    keys.forEach((k) => {
+      if (all[k]) {
+        delete all[k].deniedReassignment;
+        delete all[k].reassignmentDenied;
+        delete all[k].disapprovalReason;
+        delete all[k].reassignmentDenyReason;
+        all[k].reassignmentRequested = true;
+        all[k].reassignmentStatus = 'Pending';
+        all[k].reassignmentReason = reason;
+        all[k].status = 'Pending Reassignment';
+      }
+    });
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(EMPLOYEE_OVERRIDE_KEY, JSON.stringify(all));
+    }
+  } catch {
+    // Ignore storage errors
+  }
+
   clearEmployeeTicketsCache();
   clearIncomingTicketsCache();
   clearCSDashboardCache();
@@ -760,7 +1101,39 @@ export const respondReassignment = async ({ ticketId, action, newEmployeeId, rea
   const body = { action };
   if (newEmployeeId !== undefined) body.new_employee_id = newEmployeeId;
   if (reason !== undefined) body.reason = reason;
-  const response = await ticketClient.post(`/tickets/${ticketId}/reassign-respond`, body);
+  const response = await employeeClient.post(`/tickets/${ticketId}/reassign-respond`, body);
+
+  try {
+    const all = getEmployeeOverrides();
+    const numericId = Number(ticketId);
+    const keys = [
+      `TKT-${String(numericId).padStart(4, '0')}`,
+      `TKT-${String(numericId).padStart(5, '0')}`,
+      String(numericId),
+      Number(ticketId),
+    ];
+    Object.keys(all).forEach((k) => {
+      const matchNum = Number(String(k).replace(/\D/g, ''));
+      if (matchNum === numericId && !keys.includes(k)) {
+        keys.push(k);
+      }
+    });
+
+    keys.forEach((k) => {
+      if (all[k]) {
+        delete all[k].reassignmentRequested;
+        delete all[k].reassignmentStatus;
+        delete all[k].reassignmentReason;
+        delete all[k].reassignmentDenyReason;
+      }
+    });
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(EMPLOYEE_OVERRIDE_KEY, JSON.stringify(all));
+    }
+  } catch {
+    // Ignore storage errors
+  }
+
   clearEmployeeTicketsCache();
   clearIncomingTicketsCache();
   clearCSDashboardCache();
@@ -769,14 +1142,59 @@ export const respondReassignment = async ({ ticketId, action, newEmployeeId, rea
 };
 
 export const getReassignmentRequests = async (params = {}) => {
-  const response = await ticketClient.get('/reassignment-requests', {
+  const response = await employeeClient.get('/reassignment-requests', {
     params,
   });
   return response.data?.requests ?? [];
 };
 
-export const getTicketDetails = async (ticketId) => {
-  const response = await ticketClient.get(`/tickets/${ticketId}`);
+const ticketDetailsCache = {};
+const ticketDetailsCacheAt = {};
+const ticketDetailsInFlight = {};
+const TICKET_DETAILS_CACHE_TTL_MS = 30000;
+
+export const clearTicketDetailsCache = (ticketId) => {
+  if (ticketId) {
+    const key = String(ticketId);
+    delete ticketDetailsCache[key];
+    delete ticketDetailsCacheAt[key];
+    delete ticketDetailsInFlight[key];
+  } else {
+    Object.keys(ticketDetailsCache).forEach((k) => delete ticketDetailsCache[k]);
+    Object.keys(ticketDetailsCacheAt).forEach((k) => delete ticketDetailsCacheAt[k]);
+    Object.keys(ticketDetailsInFlight).forEach((k) => delete ticketDetailsInFlight[k]);
+  }
+};
+
+export const getTicketDetails = async (ticketId, { forceRefresh = false } = {}) => {
+  const key = String(ticketId);
+  if (forceRefresh) {
+    clearTicketDetailsCache(key);
+  }
+
+  if (!forceRefresh && ticketDetailsCache[key] && (Date.now() - (ticketDetailsCacheAt[key] || 0)) < TICKET_DETAILS_CACHE_TTL_MS) {
+    return ticketDetailsCache[key];
+  }
+
+  if (!forceRefresh && ticketDetailsInFlight[key]) {
+    return ticketDetailsInFlight[key];
+  }
+
+  ticketDetailsInFlight[key] = ticketClient.get(`/tickets/${ticketId}`)
+    .then((response) => {
+      ticketDetailsCache[key] = response.data;
+      ticketDetailsCacheAt[key] = Date.now();
+      return response.data;
+    })
+    .finally(() => {
+      delete ticketDetailsInFlight[key];
+    });
+
+  return ticketDetailsInFlight[key];
+};
+
+export const getCustomerTicketContext = async (ticketId) => {
+  const response = await ticketClient.get(`/tickets/${ticketId}/customer-context`);
   return response.data;
 };
 
@@ -790,6 +1208,9 @@ export const updateEmployeeTicket = async (ticketId, formData) => {
   try {
     response = await employeeClient.post(`/tickets/${ticketId}/employee-update`, processedPayload);
   } catch (err) {
+    // Only retry when employee-service could not be reached. A real response (e.g. a 422 blocked
+    // by the Transition Matrix) must reach the caller instead of being replaced by the retry's error.
+    if (err?.response) throw err;
     response = await ticketClient.post(`/tickets/${ticketId}/employee-update`, processedPayload);
   }
   clearEmployeeTicketsCache();
@@ -802,12 +1223,12 @@ export const updateEmployeeTicket = async (ticketId, formData) => {
 
 
 export const getInternalTickets = async () => {
-  const response = await ticketClient.get('/employee/tickets/internal');
+  const response = await employeeClient.get('/employee/tickets/internal');
   return response.data?.tickets ?? [];
 };
 
 export const getEmployeeProfile = async () => {
-  const response = await ticketClient.get('/employee/profile');
+  const response = await employeeClient.get('/employee/profile');
   return response.data;
 };
 
@@ -816,7 +1237,7 @@ export const getWorklogs = async (params = {}) => {
     const response = await employeeClient.get('/employee/worklogs', { params });
     return response.data;
   } catch (err) {
-    const response = await ticketClient.get('/employee/worklogs', { params });
+    const response = await employeeClient.get('/employee/worklogs', { params });
     return response.data;
   }
 };
@@ -826,7 +1247,7 @@ export const saveWorkLog = async (payload) => {
     const response = await employeeClient.post('/employee/worklogs', payload);
     return response.data;
   } catch (err) {
-    const response = await ticketClient.post('/employee/worklogs', payload);
+    const response = await employeeClient.post('/employee/worklogs', payload);
     return response.data;
   }
 };
@@ -851,6 +1272,36 @@ export const getSuperAdminConfig = async () => {
   return response.data;
 };
 
+export const getTicketLimitConfig = async () => {
+  const response = await ticketClient.get('/superadmin/ticket-limit');
+  return response.data?.value || response.data;
+};
+
+export const updateTicketLimitConfig = async (payload) => {
+  const response = await ticketClient.put('/superadmin/ticket-limit', payload);
+  return response.data?.value || response.data;
+};
+
+export const resetTicketLimitConfig = async () => {
+  const response = await ticketClient.post('/superadmin/ticket-limit/reset');
+  return response.data?.value || response.data;
+};
+
+export const getTicketNumberFormatConfig = async () => {
+  const response = await ticketClient.get('/superadmin/number-format');
+  return response.data?.value || response.data;
+};
+
+export const updateTicketNumberFormatConfig = async (payload) => {
+  const response = await ticketClient.put('/superadmin/number-format', payload);
+  return response.data?.value || response.data;
+};
+
+export const resetTicketNumberFormatConfig = async () => {
+  const response = await ticketClient.post('/superadmin/number-format/reset');
+  return response.data?.value || response.data;
+};
+
 export const createSuperAdminEquipment = async (payload) => {
   const response = await ticketClient.post('/superadmin/equipment', payload);
   return response.data;
@@ -863,6 +1314,21 @@ export const updateSuperAdminEquipment = async (id, payload) => {
 
 export const deleteSuperAdminEquipment = async (id) => {
   const response = await ticketClient.delete(`/superadmin/equipment/${id}`);
+  return response.data;
+};
+
+export const createSuperAdminTicketCategory = async (payload) => {
+  const response = await ticketClient.post('/superadmin/ticket-categories', payload);
+  return response.data;
+};
+
+export const updateSuperAdminTicketCategory = async (id, payload) => {
+  const response = await ticketClient.put(`/superadmin/ticket-categories/${id}`, payload);
+  return response.data;
+};
+
+export const deleteSuperAdminTicketCategory = async (id) => {
+  const response = await ticketClient.delete(`/superadmin/ticket-categories/${id}`);
   return response.data;
 };
 
@@ -881,8 +1347,35 @@ export const deleteSuperAdminPriority = async (id) => {
   return response.data;
 };
 
-export const getSuperAdminAuditLogs = async () => {
-  const response = await ticketClient.get('/superadmin/audit-logs');
+export const getSuperAdminAuditLogs = async (params = {}) => {
+  const response = await ticketClient.get('/superadmin/audit-logs', { params });
+  return response.data;
+};
+
+export const getAuditLogFilterOptions = async () => {
+  const response = await ticketClient.get('/superadmin/audit-logs/filters');
+  return response.data;
+};
+
+export const getAuditLogRetentionImpact = async (previewDays) => {
+  const response = await ticketClient.get('/superadmin/audit-logs/retention/impact', {
+    params: previewDays ? { preview_days: previewDays } : {},
+  });
+  return response.data;
+};
+
+export const getAuditLogRetentionConfig = async () => {
+  const response = await ticketClient.get('/superadmin/audit-logs/retention');
+  return response.data;
+};
+
+export const updateAuditLogRetentionConfig = async (retentionDays) => {
+  const response = await ticketClient.post('/superadmin/audit-logs/retention', { retention_days: retentionDays });
+  return response.data;
+};
+
+export const purgeAuditLogs = async (retentionDays) => {
+  const response = await ticketClient.post('/superadmin/audit-logs/purge', { retention_days: retentionDays });
   return response.data;
 };
 
@@ -908,6 +1401,18 @@ export const updateSLARule = async (id, payload) => {
 
 export const deleteSLARule = async (id) => {
   const response = await ticketClient.delete(`/superadmin/sla-rules/${id}`);
+  return response.data;
+};
+
+/**
+ * Recalculate SLA deadlines of all open tickets with the current rules and business hours.
+ */
+export const recalculateOpenTicketSlas = async () => {
+  const response = await ticketClient.post('/superadmin/sla/recalculate-open-tickets');
+  clearIncomingTicketsCache();
+  clearCSDashboardCache();
+  clearEmployeeTicketsCache();
+  notifyCsTicketRefresh();
   return response.data;
 };
 
@@ -937,6 +1442,11 @@ export const deleteWorkflowStatus = async (id) => {
   return response.data;
 };
 
+export const resetWorkflowStatuses = async () => {
+  const response = await ticketClient.post('/superadmin/workflow-statuses/reset-defaults');
+  return response.data;
+};
+
 // Escalation Rules
 export const getEscalationRules = async () => {
   const response = await ticketClient.get('/superadmin/escalation-rules');
@@ -961,4 +1471,295 @@ export const toggleEscalationRule = async (id) => {
 export const deleteEscalationRule = async (id) => {
   const response = await ticketClient.delete(`/superadmin/escalation-rules/${id}`);
   return response.data;
+};
+
+export const getWindowConfig = async () => {
+  const response = await ticketClient.get('/superadmin/window-config');
+  return response.data?.value || response.data;
+};
+
+export const updateWindowConfig = async (payload) => {
+  const response = await ticketClient.put('/superadmin/window-config', payload);
+  return response.data?.value || response.data;
+};
+
+export const getTicketDefaultsConfig = async () => {
+  const response = await ticketClient.get('/superadmin/ticket-defaults');
+  return response.data?.value || response.data;
+};
+
+export const updateTicketDefaultsConfig = async (payload) => {
+  const response = await ticketClient.put('/superadmin/ticket-defaults', payload);
+  return response.data?.value || response.data;
+};
+
+export const resetTicketDefaultsConfig = async () => {
+  const response = await ticketClient.post('/superadmin/ticket-defaults/reset');
+  return response.data?.value || response.data;
+};
+
+// Branch listing & sync
+export const getBranches = async () => {
+  const response = await ticketClient.get('/superadmin/branches');
+  return response.data?.branches || response.data || [];
+};
+
+export const getPublicBranches = async () => {
+  const response = await ticketClient.get('/branches');
+  return response.data?.branches || response.data || [];
+};
+
+// Branch-specific priority levels & SLA overrides (scoped to a branch slug)
+const branchPriorityPath = (branchId) => `/superadmin/branches/${encodeURIComponent(branchId)}/priorities`;
+
+export const getBranchPriorities = async (branchId) => {
+  const response = await ticketClient.get(branchPriorityPath(branchId));
+  return response.data;
+};
+
+export const createBranchPriority = async (branchId, payload) => {
+  const response = await ticketClient.post(branchPriorityPath(branchId), payload);
+  return response.data;
+};
+
+export const updateBranchPriority = async (branchId, id, payload) => {
+  const response = await ticketClient.put(`${branchPriorityPath(branchId)}/${encodeURIComponent(id)}`, payload);
+  return response.data;
+};
+
+export const deleteBranchPriority = async (branchId, id) => {
+  const response = await ticketClient.delete(`${branchPriorityPath(branchId)}/${encodeURIComponent(id)}`);
+  return response.data;
+};
+
+// Branch-specific categories & SLA policies
+const branchCategoryPath = (branchId) => `/superadmin/branches/${encodeURIComponent(branchId)}/categories`;
+const branchSlaPolicyPath = (branchId) => `/superadmin/branches/${encodeURIComponent(branchId)}/sla-policies`;
+
+export const getBranchCategoriesAndSla = async (branchId) => {
+  const response = await ticketClient.get(branchCategoryPath(branchId));
+  return response.data;
+};
+
+export const createBranchCategory = async (branchId, payload) => {
+  const response = await ticketClient.post(branchCategoryPath(branchId), payload);
+  return response.data;
+};
+
+export const updateBranchCategory = async (branchId, id, payload) => {
+  const response = await ticketClient.put(`${branchCategoryPath(branchId)}/${encodeURIComponent(id)}`, payload);
+  return response.data;
+};
+
+export const deleteBranchCategory = async (branchId, id) => {
+  const response = await ticketClient.delete(`${branchCategoryPath(branchId)}/${encodeURIComponent(id)}`);
+  return response.data;
+};
+
+export const resetBranchCategoriesToDefaults = async (branchId) => {
+  const response = await ticketClient.post(`${branchCategoryPath(branchId)}/reset`);
+  return response.data;
+};
+
+export const saveBranchSlaPolicy = async (branchId, payload) => {
+  const response = await ticketClient.post(branchSlaPolicyPath(branchId), payload);
+  return response.data;
+};
+
+export const deleteBranchSlaPolicy = async (branchId, payload) => {
+  const response = await ticketClient.delete(branchSlaPolicyPath(branchId), { data: payload });
+  return response.data;
+};
+
+// Escalation Handoff (TS027)
+export const getEscalateHandoff = async (conversationId) => {
+  const response = await ticketClient.get(`/tickets/escalate-handoff/${conversationId}`);
+  return response.data;
+};
+
+// Internal Notes (TS028)
+export const getInternalNotes = async (ticketId) => {
+  const response = await ticketClient.get(`/tickets/${ticketId}/internal-notes`);
+  return response.data?.notes ?? response.data?.data ?? [];
+};
+
+export const addInternalNote = async (ticketId, note) => {
+  const response = await ticketClient.post(`/tickets/${ticketId}/internal-notes`, { note });
+  return response.data;
+};
+
+// Employee Profile Update (TS105)
+export const updateEmployeeProfile = async (payload) => {
+  const response = await employeeClient.put('/employee/profile', payload);
+  return response.data;
+};
+
+// Employee Directory & Search (TS107)
+export const searchEmployees = async (params = {}) => {
+  const response = await employeeClient.get('/employees/search', { params });
+  return response.data;
+};
+
+export const getEmployeeFilterOptions = async () => {
+  const response = await employeeClient.get('/employees/filter-options');
+  return response.data;
+};
+
+// Ticket SLA Reminder (TS-REMINDER)
+export const sendTicketReminder = async (ticketId, customMessage = '') => {
+  const numericId = typeof ticketId === 'number' ? ticketId : Number(String(ticketId).replace(/\D/g, ''));
+  const response = await ticketClient.post(`/tickets/${numericId}/reminders`, {
+    custom_message: customMessage,
+    message: customMessage,
+  });
+  return response.data;
+};
+
+// Customer Feedback Lifecycle (TS-FEEDBACK)
+export const getTicketFeedback = async (ticketId) => {
+  const response = await axiosInstance.get(`/api/ticketing/analytics/feedback/ticket/${ticketId}`);
+  return response.data?.feedback ?? response.data?.data ?? response.data;
+};
+
+export const submitTicketFeedback = async (ticketId, feedbackPayload) => {
+  const response = await axiosInstance.post('/api/ticketing/analytics/feedback', {
+    ticket_id: String(ticketId),
+    customer_id: feedbackPayload.customerId ? String(feedbackPayload.customerId) : null,
+    rating: feedbackPayload.rating,
+    comment: feedbackPayload.comment || '',
+    ratings: feedbackPayload.ratings || {},
+    comments: feedbackPayload.comments || {},
+    overall_comment: feedbackPayload.overallComment || feedbackPayload.comment || '',
+    question_answers: feedbackPayload.questionAnswers || {},
+    category_questions_snapshot: feedbackPayload.categoryQuestionsSnapshot || [],
+  });
+  return response.data;
+};
+
+export const updateTicketFeedback = async (ticketId, feedbackPayload) => {
+  const response = await axiosInstance.put(`/api/ticketing/analytics/feedback/ticket/${ticketId}`, {
+    rating: feedbackPayload.rating,
+    comment: feedbackPayload.comment || '',
+    ratings: feedbackPayload.ratings || {},
+    comments: feedbackPayload.comments || {},
+    overall_comment: feedbackPayload.overallComment || feedbackPayload.comment || '',
+    question_answers: feedbackPayload.questionAnswers || {},
+    category_questions_snapshot: feedbackPayload.categoryQuestionsSnapshot || [],
+  });
+  return response.data;
+};
+
+export const deleteTicketFeedback = async (ticketId) => {
+  const response = await axiosInstance.delete(`/api/ticketing/analytics/feedback/ticket/${ticketId}`);
+  return response.data;
+};
+
+export const getSecurityIncidents = async (params = {}) => {
+  const response = await ticketClient.get('/superadmin/security-incidents', { params });
+  return response.data;
+};
+
+export const getSecurityIncidentDetail = async (incidentId) => {
+  const response = await ticketClient.get(`/superadmin/security-incidents/${encodeURIComponent(incidentId)}`);
+  return response.data;
+};
+
+
+
+// Heavy report queries (2 to 6 seconds cold). Callers that ask for the same endpoint and filters while a request is
+// still running (React StrictMode in development, a quick double mount, repeated preset clicks) share that one
+// request instead of each hitting the server. The entry is dropped when the request ends, so nothing is cached.
+const reportRequestsInFlight = new Map();
+
+const getSharedReport = (path, params = {}) => {
+  const key = `${path}?${JSON.stringify(Object.keys(params).sort().map((k) => [k, params[k]]))}`;
+  if (reportRequestsInFlight.has(key)) {
+    return reportRequestsInFlight.get(key);
+  }
+
+  const request = ticketClient
+    .get(path, { params })
+    .then((response) => response.data)
+    .finally(() => reportRequestsInFlight.delete(key));
+
+  reportRequestsInFlight.set(key, request);
+  return request;
+};
+
+export const getAdminDashboard = (params = {}) => getSharedReport('/admin/dashboard', params);
+
+/**
+ * Live manager summary and breached queue (spec 0031 AC-7). Scope (department, branch) is decided by the
+ * server from the signed in manager, so the only option is forcing a fresh read past the 30 s cache.
+ */
+export const getManagerDashboard = ({ forceRefresh = false } = {}) =>
+  getSharedReport('/manager/dashboard', forceRefresh ? { forceRefresh: true } : {});
+
+export const getAdminReports = async (params = {}) => {
+  const response = await ticketClient.get('/admin/reports', { params });
+  return response.data;
+};
+
+/**
+ * Server side export of the exact report snapshot the preview shows (spec 0029 AC-16, AC-17).
+ * Resolves with the raw axios response so callers can read the blob and the Content-Disposition filename.
+ */
+export const exportAdminReport = async ({ reportType, format, filters = {} }) => {
+  return ticketClient.post(
+    '/admin/reports/export',
+    { report_type: reportType, format, filters },
+    { responseType: 'blob' }
+  );
+};
+
+export const getAdminEmployeePerformance = async (params = {}) => {
+  const response = await ticketClient.get('/admin-reports/employees', { params });
+  return response.data;
+};
+
+export const getAdminDepartmentPerformance = async (params = {}) => {
+  const response = await ticketClient.get('/admin-reports/departments', { params });
+  return response.data;
+};
+
+export const getAdminPredictiveInsights = (params = {}) => getSharedReport('/admin-reports/predictive-insights', params);
+
+export const getTicketTimeline = async (ticketId, params = {}) => {
+  const response = await ticketClient.get(`/tickets/${ticketId}/timeline`, { params });
+  return response.data;
+};
+
+export const getSystemDashboard = async (params = {}) => {
+  const response = await ticketClient.get('/superadmin/system-dashboard', { params });
+  return response.data;
+};
+
+export const triggerEtlSync = async (payload = {}) => {
+  const response = await ticketClient.post('/etl/trigger', payload);
+  return response.data;
+};
+
+export const classifyDepartment = async (title, description) => {
+  try {
+    const response = await axiosInstance.post(`${AI_API_URL || '/api/ticketing/ai'}/classify-department`, {
+      title,
+      description,
+    });
+    return response.data?.data || response.data;
+  } catch (err) {
+    console.warn('AI classification request error, falling back to local heuristic:', err);
+    const text = `${title} ${description}`.toLowerCase();
+    const isSoftware = /(software|app|login|password|account|portal|bug|glitch|crash|freeze|network|wifi|database|timeout|license)/i.test(text);
+    return {
+      department: isSoftware ? 'IT' : 'Service',
+      department_id: isSoftware ? 2 : 1,
+      is_software: isSoftware,
+      requires_equipment: !isSoftware,
+      confidence: 0.8,
+      reasoning: isSoftware
+        ? 'Your problem description indicates a software or account issue. Physical equipment is optional.'
+        : 'Your problem description indicates physical machinery or hardware maintenance. Equipment selection is required.',
+      source: 'client-fallback'
+    };
+  }
 };

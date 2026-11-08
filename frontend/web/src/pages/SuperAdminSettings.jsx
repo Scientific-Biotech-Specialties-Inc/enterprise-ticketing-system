@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Building2,
   Phone,
@@ -17,19 +17,27 @@ import {
   RotateCcw,
   ExternalLink,
   ChevronDown,
-  Eye,
-  EyeOff,
-  RefreshCw,
-  Send,
   ShieldCheck,
+  MapPin,
   Lock,
-  KeyRound,
-  Check
 } from 'lucide-react';
 import NotificationModal from '@/components/NotificationModal';
+import BranchSelector from '@/components/BranchSelector';
+import { useBranch } from '@/context/BranchContext';
+import { PageHeader } from '@/components/ui/page-header';
+import { Button } from '@/components/ui/button';
+import {
+  getCompanyInfo,
+  updateCompanyInfo,
+  resetCompanyInfo,
+  getSystemStatus,
+  updateSystemStatus,
+  getLogLevel,
+  updateLogLevel,
+} from '@/services/configurationService';
 
 // =========================================================================
-// TS097 Initial Baseline Data
+// TS097 Initial Baseline Data (Branch-Scoped Company Info & System Status)
 // =========================================================================
 const INITIAL_COMPANY_INFO = {
   address: 'SBSI Building, 28 East Capitol Drive, Kapitolyo, Pasig City, Metro Manila, Philippines 1603',
@@ -41,6 +49,17 @@ const INITIAL_COMPANY_INFO = {
     { id: 'soc-3', platform: 'Twitter / X', url: 'https://x.com/sbsi_ph' },
   ],
 };
+
+const INITIAL_BRANCH_COMPANY_INFO = {
+  main: {
+    ...INITIAL_COMPANY_INFO,
+  },
+};
+
+// Company info and system status are stored as single global keys in configuration-service
+// (company_info, system_status). They are not branch scoped, so local state uses one fixed key and
+// every save goes to the backend regardless of which branch is selected in the header.
+const CONFIG_SCOPE = 'main';
 
 const SOCIAL_PLATFORMS = ['LinkedIn', 'Facebook', 'Twitter / X', 'YouTube', 'Instagram', 'Other'];
 
@@ -67,125 +86,14 @@ const LOG_LEVELS = [
   },
 ];
 
-// =========================================================================
-// TS102 Initial Baseline Data (Email Templates + Account Settings)
-// =========================================================================
-const INITIAL_EMAIL_TEMPLATES = [
-  {
-    id: 'ticket_notification',
-    name: 'Ticket Notification',
-    category: 'Ticket Lifecycle',
-    description: 'Dispatched to assigned support engineers and customers upon ticket creation, updates, and SLA status changes.',
-    subject: '[Update] {{notification_title}} - {{ticket_ref}}',
-    body: `Hello,
-
-You have an update regarding ticket {{ticket_ref}}: {{ticket_title}}.
-
-Notification Details:
-{{notification_message}}
-
-Ticket Summary:
-- Category: {{category}}
-- Priority: {{priority}}
-
-View the full ticket history and updates online:
-{{ticket_link}}
-
-Regards,
-Enterprise Support Desk`,
-    placeholders: [
-      { tag: '{{notification_title}}', desc: 'Title/headline of the notification' },
-      { tag: '{{notification_message}}', desc: 'Detailed message body or event details' },
-      { tag: '{{ticket_ref}}', desc: 'Ticket reference ID (e.g. TKT-0042)' },
-      { tag: '{{ticket_title}}', desc: 'Subject line of the ticket' },
-      { tag: '{{category}}', desc: 'Assigned equipment or department category' },
-      { tag: '{{priority}}', desc: 'Ticket priority tier (e.g. High, Urgent)' },
-      { tag: '{{ticket_link}}', desc: 'Direct URL to view the ticket in portal' },
-    ],
-    requiredPlaceholders: [],
-  },
-  {
-    id: 'password_reset_otp',
-    name: 'Password Reset OTP',
-    category: 'Authentication',
-    description: 'Dispatched to customers or staff requesting a 6-digit one-time code to reset their account password.',
-    subject: 'Your Password Reset Verification Code',
-    body: `Hello {{client_name}},
-
-We received a request to reset the password for your Enterprise Support account.
-
-Use this 6-digit verification code to proceed:
-{{otp}}
-
-This code will expire in {{expires_minutes}} minutes. If you did not request this password reset, please disregard this email or contact support.`,
-    placeholders: [
-      { tag: '{{client_name}}', desc: 'Full name of customer or employee' },
-      { tag: '{{otp}}', desc: '6-digit one-time security passcode', isRequired: true },
-      { tag: '{{expires_minutes}}', desc: 'Code validity window in minutes' },
-    ],
-    requiredPlaceholders: ['{{otp}}'],
-  },
-  {
-    id: 'first_login_otp',
-    name: 'First Login OTP',
-    category: 'Account Activation',
-    description: 'Sent to new users upon their first login verification challenge before establishing permanent credentials.',
-    subject: 'Verify Your Account - First Login Code',
-    body: `Hello {{name}},
-
-Welcome to the Enterprise Ticketing Platform. Use this 6-digit verification code to complete your initial login and set your new password:
-
-{{otp}}
-
-This verification code expires in {{expires_minutes}} minutes.
-
-If you were not expecting this invitation, please contact your administrator.`,
-    placeholders: [
-      { tag: '{{name}}', desc: 'Display name of user' },
-      { tag: '{{otp}}', desc: '6-digit initial activation passcode', isRequired: true },
-      { tag: '{{expires_minutes}}', desc: 'Code validity window in minutes' },
-    ],
-    requiredPlaceholders: ['{{otp}}'],
-  },
-  {
-    id: 'customer_provisioned',
-    name: 'Customer Provisioned',
-    category: 'Onboarding',
-    description: 'Automated welcome message sent when an administrator provisions a new customer account with temporary credentials.',
-    subject: 'Your Enterprise Support Account Has Been Provisioned',
-    body: `Hello {{client_name}},
-
-Your account on the Enterprise Ticketing System has been successfully created. You can log in using the credentials below:
-
-Email / Username: {{email}}
-Temporary Password: {{temporary_password}}
-
-Note: You will be prompted to verify your account with an OTP code and change your password upon your first login.
-
-Thank you,
-Scientific Biotech Specialties, Inc.`,
-    placeholders: [
-      { tag: '{{client_name}}', desc: 'Customer company or contact name' },
-      { tag: '{{email}}', desc: 'Registered primary login email' },
-      { tag: '{{temporary_password}}', desc: 'System-generated temporary password', isRequired: true },
-    ],
-    requiredPlaceholders: ['{{temporary_password}}'],
-  },
-];
-
-const INITIAL_SMTP_CONFIG = {
-  host: 'smtp.mailgun.org',
-  port: '587',
-  senderAddress: 'support@sbsi.com.ph',
-  senderName: 'Scientific Biotech Specialties Support',
-  username: 'postmaster@mg.sbsi.com.ph',
-  password: 'sbsi_smtp_secret_token_123',
-  encryption: 'TLS',
-};
-
 // Validation helpers
+
+// Mirrors the backend rule (email:rfc,filter + TLD): no consecutive dots, no leading or trailing dot
+// in the local part, letters/digits/hyphens only in each domain label, and a 2+ letter TLD.
 const isValidEmail = (email) => {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
+  const value = email.trim();
+  if (value.includes('..')) return false;
+  return /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$/.test(value);
 };
 
 const isValidPhone = (phone) => {
@@ -202,35 +110,84 @@ const isValidUrl = (url) => {
 };
 
 export default function SuperAdminSettings() {
+  const { selectedBranch } = useBranch();
+
   // Navigation tabs (reusing group-pill styling pattern)
   const [activeTab, setActiveTab] = useState('all');
 
-  // 1. Company Information State
-  const [companyInfo, setCompanyInfo] = useState(INITIAL_COMPANY_INFO);
+  // 1. Company Information State (branch-scoped dictionary: { [branchId]: { address, contactNumber, contactEmail, socialLinks } })
+  const [branchCompanyInfo, setBranchCompanyInfo] = useState(INITIAL_BRANCH_COMPANY_INFO);
   const [companyErrors, setCompanyErrors] = useState({});
 
-  // 2. System Status State
-  const [systemStatus, setSystemStatus] = useState('Operational');
+  // Active branch company info (defaults to empty strings/array if unconfigured)
+  const currentCompanyInfo = branchCompanyInfo[CONFIG_SCOPE] || {
+    address: '',
+    contactNumber: '',
+    contactEmail: '',
+    socialLinks: [],
+  };
 
-  // 3. Log Level State
+  const hasCompanyInfoSet = Boolean(
+    currentCompanyInfo.address?.trim() ||
+    currentCompanyInfo.contactNumber?.trim() ||
+    currentCompanyInfo.contactEmail?.trim() ||
+    (currentCompanyInfo.socialLinks && currentCompanyInfo.socialLinks.length > 0)
+  );
+
+  // Clear branch-scoped company form errors when switching branches
+  useEffect(() => {
+    setCompanyErrors({});
+  }, [selectedBranch.id]);
+
+  // 2. System Status State (branch-scoped dictionary: { [branchId]: 'Operational' | 'Under Maintenance' })
+  const [branchSystemStatus, setBranchSystemStatus] = useState({});
+
+  // Active branch system status (defaults to 'Operational')
+  const currentBranchStatus = branchSystemStatus[CONFIG_SCOPE] || 'Operational';
+
+  // 3. Log Level State (global, untouched)
   const [logLevel, setLogLevel] = useState('Info');
 
-  // 4. TS102 Email Templates State
-  const [emailTemplates, setEmailTemplates] = useState(INITIAL_EMAIL_TEMPLATES);
-  const [selectedTemplateId, setSelectedTemplateId] = useState(INITIAL_EMAIL_TEMPLATES[0].id);
-  const [templateErrors, setTemplateErrors] = useState({});
-  const [isSendingTest, setIsSendingTest] = useState(false);
-  const bodyTextareaRef = useRef(null);
+  // Loading & Action States
+  const [isSavingCompany, setIsSavingCompany] = useState(false);
+  const [isSavingStatus, setIsSavingStatus] = useState(false);
+  const [isSavingLogLevel, setIsSavingLogLevel] = useState(false);
 
-  // 5. TS102 Email Account (SMTP) State
-  const [smtpConfig, setSmtpConfig] = useState(INITIAL_SMTP_CONFIG);
-  const [savedSmtpConfig, setSavedSmtpConfig] = useState(INITIAL_SMTP_CONFIG);
-  const [isAccountConfigured, setIsAccountConfigured] = useState(true); // Baseline account is already configured
-  const [isPasswordSaved, setIsPasswordSaved] = useState(true); // Saved credential is fully masked
-  const [showNewPassword, setShowNewPassword] = useState(false);
-  const [smtpErrors, setSmtpErrors] = useState({});
-  const [isTestingConnection, setIsTestingConnection] = useState(false);
-  const [demoFailureMode, setDemoFailureMode] = useState(false); // Allows demonstrating failure result for PM/demo
+  // Initial load from configuration-service
+  useEffect(() => {
+    let isMounted = true;
+    Promise.all([
+      getCompanyInfo().catch(() => null),
+      getSystemStatus().catch(() => null),
+      getLogLevel().catch(() => null),
+    ]).then(([comp, stat, log]) => {
+      if (!isMounted) return;
+      if (comp) {
+        setBranchCompanyInfo((prev) => ({
+          ...prev,
+          main: {
+            address: comp.address || INITIAL_COMPANY_INFO.address,
+            contactNumber: comp.contactNumber || INITIAL_COMPANY_INFO.contactNumber,
+            contactEmail: comp.contactEmail || INITIAL_COMPANY_INFO.contactEmail,
+            socialLinks: Array.isArray(comp.socialLinks) ? comp.socialLinks : INITIAL_COMPANY_INFO.socialLinks,
+          },
+        }));
+      }
+      if (stat) {
+        setBranchSystemStatus((prev) => ({
+          ...prev,
+          main: stat,
+        }));
+      }
+      if (log) {
+        const match = LOG_LEVELS.find((l) => l.level.toLowerCase() === (log || '').toLowerCase());
+        setLogLevel(match ? match.level : log);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Notification Modal State
   const [notification, setNotification] = useState(null);
@@ -240,12 +197,24 @@ export default function SuperAdminSettings() {
   const showConfirm = (title, message, onConfirm, opts = {}) =>
     setNotification({ type: 'confirm', title, message, onConfirm, onCancel: closeNotif, ...opts });
 
-  // Currently active email template
-  const currentTemplate = emailTemplates.find((t) => t.id === selectedTemplateId) || emailTemplates[0];
 
-  // ── Company Information Handlers ──────────────────────────────────────────
+  // ── Company Information Handlers (Branch-Scoped) ──────────────────────────
   const handleCompanyFieldChange = (field, value) => {
-    setCompanyInfo((prev) => ({ ...prev, [field]: value }));
+    setBranchCompanyInfo((prev) => {
+      const existing = prev[CONFIG_SCOPE] || {
+        address: '',
+        contactNumber: '',
+        contactEmail: '',
+        socialLinks: [],
+      };
+      return {
+        ...prev,
+        [CONFIG_SCOPE]: {
+          ...existing,
+          [field]: value,
+        },
+      };
+    });
     if (companyErrors[field]) {
       setCompanyErrors((prev) => {
         const next = { ...prev };
@@ -256,10 +225,23 @@ export default function SuperAdminSettings() {
   };
 
   const handleSocialLinkChange = (id, key, value) => {
-    setCompanyInfo((prev) => ({
-      ...prev,
-      socialLinks: prev.socialLinks.map((link) => (link.id === id ? { ...link, [key]: value } : link)),
-    }));
+    setBranchCompanyInfo((prev) => {
+      const existing = prev[CONFIG_SCOPE] || {
+        address: '',
+        contactNumber: '',
+        contactEmail: '',
+        socialLinks: [],
+      };
+      return {
+        ...prev,
+        [CONFIG_SCOPE]: {
+          ...existing,
+          socialLinks: (existing.socialLinks || []).map((link) =>
+            link.id === id ? { ...link, [key]: value } : link
+          ),
+        },
+      };
+    });
     const errKey = `social_${id}`;
     if (companyErrors[errKey]) {
       setCompanyErrors((prev) => {
@@ -272,17 +254,42 @@ export default function SuperAdminSettings() {
 
   const handleAddSocialLink = () => {
     const newId = `soc-${Date.now()}`;
-    setCompanyInfo((prev) => ({
-      ...prev,
-      socialLinks: [...prev.socialLinks, { id: newId, platform: 'LinkedIn', url: '' }],
-    }));
+    setBranchCompanyInfo((prev) => {
+      const existing = prev[CONFIG_SCOPE] || {
+        address: '',
+        contactNumber: '',
+        contactEmail: '',
+        socialLinks: [],
+      };
+      return {
+        ...prev,
+        [CONFIG_SCOPE]: {
+          ...existing,
+          socialLinks: [
+            ...(existing.socialLinks || []),
+            { id: newId, platform: 'LinkedIn', url: '' },
+          ],
+        },
+      };
+    });
   };
 
   const handleRemoveSocialLink = (id) => {
-    setCompanyInfo((prev) => ({
-      ...prev,
-      socialLinks: prev.socialLinks.filter((link) => link.id !== id),
-    }));
+    setBranchCompanyInfo((prev) => {
+      const existing = prev[CONFIG_SCOPE] || {
+        address: '',
+        contactNumber: '',
+        contactEmail: '',
+        socialLinks: [],
+      };
+      return {
+        ...prev,
+        [CONFIG_SCOPE]: {
+          ...existing,
+          socialLinks: (existing.socialLinks || []).filter((link) => link.id !== id),
+        },
+      };
+    });
     setCompanyErrors((prev) => {
       const next = { ...prev };
       delete next[`social_${id}`];
@@ -290,29 +297,29 @@ export default function SuperAdminSettings() {
     });
   };
 
-  const handleSaveCompanyInfo = (e) => {
+  const handleSaveCompanyInfo = async (e) => {
     if (e) e.preventDefault();
     const errors = {};
 
-    if (!companyInfo.address.trim()) {
-      errors.address = 'Headquarters address is required.';
-    } else if (companyInfo.address.trim().length < 5) {
+    if (!currentCompanyInfo.address.trim()) {
+      errors.address = `Address is required for ${selectedBranch.name}.`;
+    } else if (currentCompanyInfo.address.trim().length < 5) {
       errors.address = 'Please enter a complete address (minimum 5 characters).';
     }
 
-    if (!companyInfo.contactNumber.trim()) {
-      errors.contactNumber = 'Contact phone number is required.';
-    } else if (!isValidPhone(companyInfo.contactNumber)) {
+    if (!currentCompanyInfo.contactNumber.trim()) {
+      errors.contactNumber = `Contact phone number is required for ${selectedBranch.name}.`;
+    } else if (!isValidPhone(currentCompanyInfo.contactNumber)) {
       errors.contactNumber = 'Please provide a valid phone number (e.g. +63 2 8635 9999 or (02) 8123-4567).';
     }
 
-    if (!companyInfo.contactEmail.trim()) {
-      errors.contactEmail = 'Contact email is required.';
-    } else if (!isValidEmail(companyInfo.contactEmail)) {
+    if (!currentCompanyInfo.contactEmail.trim()) {
+      errors.contactEmail = `Contact email is required for ${selectedBranch.name}.`;
+    } else if (!isValidEmail(currentCompanyInfo.contactEmail)) {
       errors.contactEmail = 'Please provide a valid email address (e.g. support@sbsi.com.ph).';
     }
 
-    companyInfo.socialLinks.forEach((link) => {
+    (currentCompanyInfo.socialLinks || []).forEach((link) => {
       if (!link.url.trim()) {
         errors[`social_${link.id}`] = 'URL cannot be empty.';
       } else if (!isValidUrl(link.url)) {
@@ -326,33 +333,93 @@ export default function SuperAdminSettings() {
     }
 
     setCompanyErrors({});
-    showSuccess(
-      'Company Information Saved',
-      'Corporate profile, contact lines, and social links updated in local state.'
-    );
+    setIsSavingCompany(true);
+
+    try {
+      const res = await updateCompanyInfo(currentCompanyInfo);
+      if (res) {
+        const updated = {
+          address: res.address || currentCompanyInfo.address,
+          contactNumber: res.contactNumber || currentCompanyInfo.contactNumber,
+          contactEmail: res.contactEmail || currentCompanyInfo.contactEmail,
+          socialLinks: Array.isArray(res.socialLinks) ? res.socialLinks : currentCompanyInfo.socialLinks,
+        };
+        setBranchCompanyInfo((prev) => ({
+          ...prev,
+          [CONFIG_SCOPE]: updated,
+        }));
+      }
+      showSuccess(
+        'Company Information Saved',
+        `Company profile, contact lines, and social links updated for ${selectedBranch.name} successfully.`
+      );
+    } catch (err) {
+      const msg = err.response?.data?.message || 'Failed to update company information.';
+      const serverErrors = err.response?.data?.errors;
+      if (serverErrors && typeof serverErrors === 'object') {
+        setCompanyErrors(serverErrors);
+      }
+      showError('Save Failed', msg);
+    } finally {
+      setIsSavingCompany(false);
+    }
   };
 
   const handleResetCompanyInfo = () => {
-    setCompanyInfo(INITIAL_COMPANY_INFO);
-    setCompanyErrors({});
-    showSuccess('Company Information Reset', 'Values have been restored to default.');
+    showConfirm(
+      `Restore Default Company Information for ${selectedBranch.name}?`,
+      `This will reset contact lines and profile information for ${selectedBranch.name} back to default values.`,
+      async () => {
+        closeNotif();
+        setIsSavingCompany(true);
+        try {
+          await resetCompanyInfo();
+          const resetTarget = { ...INITIAL_COMPANY_INFO };
+          setBranchCompanyInfo((prev) => ({
+            ...prev,
+            [CONFIG_SCOPE]: resetTarget,
+          }));
+          setCompanyErrors({});
+          showSuccess(
+            'Company Information Reset',
+            'Company information has been restored to initial defaults.'
+          );
+        } catch (err) {
+          showError('Reset Failed', err.response?.data?.message || 'Failed to reset company information.');
+        } finally {
+          setIsSavingCompany(false);
+        }
+      }
+    );
   };
 
-  // ── System Status Handlers ───────────────────────────────────────────────
-  const handleSelectSystemStatus = (newStatus) => {
-    if (newStatus === systemStatus) return;
+  // ── System Status Handlers (Branch-Scoped) ────────────────────────────────
+  const handleSelectSystemStatus = async (newStatus) => {
+    if (newStatus === currentBranchStatus || isSavingStatus) return;
 
     if (newStatus === 'Under Maintenance') {
       showConfirm(
-        'Set System to Under Maintenance?',
-        'Setting status to Under Maintenance may restrict or affect access for other users. Are you sure?',
-        () => {
+        `Set ${selectedBranch.name} to Under Maintenance?`,
+        `Setting ${selectedBranch.name} to Under Maintenance may restrict or affect access for users at this location. Are you sure?`,
+        async () => {
           closeNotif();
-          setSystemStatus('Under Maintenance');
-          showSuccess(
-            'System Status Updated',
-            'Platform status set to "Under Maintenance". Advisory banners will be presented to non-admin users.'
-          );
+          setIsSavingStatus(true);
+          try {
+            await updateSystemStatus('Under Maintenance');
+            window.dispatchEvent(new CustomEvent('system:status-changed', { detail: { status: 'Under Maintenance' } }));
+            setBranchSystemStatus((prev) => ({
+              ...prev,
+              [CONFIG_SCOPE]: 'Under Maintenance',
+            }));
+            showSuccess(
+              'System Status Updated',
+              `Platform status for ${selectedBranch.name} set to "Under Maintenance". Advisory banners will be presented to non-admin users at this location.`
+            );
+          } catch (err) {
+            showError('Status Update Failed', err.response?.data?.message || 'Unable to change system status.');
+          } finally {
+            setIsSavingStatus(false);
+          }
         },
         {
           confirmText: 'Set to Maintenance',
@@ -360,230 +427,43 @@ export default function SuperAdminSettings() {
         }
       );
     } else {
-      setSystemStatus(newStatus);
-      showSuccess('System Status Restored', 'Platform status has been restored to "Operational".');
-    }
-  };
-
-  // ── Log Level Handlers ───────────────────────────────────────────────────
-  const handleSaveLogLevel = (newLevel) => {
-    const levelToSet = newLevel || logLevel;
-    setLogLevel(levelToSet);
-    showSuccess(
-      'Log Level Saved',
-      `Diagnostic log verbosity set to "${levelToSet}" in local state.`
-    );
-  };
-
-  // ── TS102 Email Templates Handlers ───────────────────────────────────────
-  const handleTemplateFieldChange = (field, value) => {
-    setEmailTemplates((prev) =>
-      prev.map((t) => (t.id === selectedTemplateId ? { ...t, [field]: value } : t))
-    );
-    if (templateErrors[selectedTemplateId]) {
-      setTemplateErrors((prev) => {
-        const next = { ...prev };
-        delete next[selectedTemplateId];
-        return next;
-      });
-    }
-  };
-
-  const handleInsertPlaceholder = (placeholderTag) => {
-    const textarea = bodyTextareaRef.current;
-    const currentBody = currentTemplate.body || '';
-
-    if (!textarea) {
-      handleTemplateFieldChange('body', currentBody + ' ' + placeholderTag);
-      return;
-    }
-
-    const start = textarea.selectionStart ?? currentBody.length;
-    const end = textarea.selectionEnd ?? currentBody.length;
-    const newBody = currentBody.substring(0, start) + placeholderTag + currentBody.substring(end);
-
-    handleTemplateFieldChange('body', newBody);
-
-    setTimeout(() => {
-      textarea.focus();
-      textarea.setSelectionRange(start + placeholderTag.length, start + placeholderTag.length);
-    }, 0);
-  };
-
-  const handleSaveTemplate = () => {
-    if (!currentTemplate.subject.trim()) {
-      setTemplateErrors((prev) => ({
-        ...prev,
-        [currentTemplate.id]: 'Template subject line cannot be empty.',
-      }));
-      return;
-    }
-
-    // Required placeholder validation: check body contains every placeholder marked "required"
-    const missingRequired = (currentTemplate.requiredPlaceholders || []).filter(
-      (ph) => !currentTemplate.body.includes(ph)
-    );
-
-    if (missingRequired.length > 0) {
-      const missingTag = missingRequired[0];
-      let contextualNote = 'Password reset emails cannot function without it.';
-      if (currentTemplate.id === 'first_login_otp') {
-        contextualNote = 'First login verification emails cannot function without it.';
-      } else if (currentTemplate.id === 'customer_provisioned') {
-        contextualNote = 'Account provisioning emails cannot function without it.';
-      }
-
-      setTemplateErrors((prev) => ({
-        ...prev,
-        [currentTemplate.id]: `This template is missing a required placeholder: ${missingTag}. ${contextualNote}`,
-      }));
-      return;
-    }
-
-    setTemplateErrors((prev) => {
-      const next = { ...prev };
-      delete next[currentTemplate.id];
-      return next;
-    });
-
-    // Non-disruptive save per spec: no confirmation modal required
-    showSuccess(
-      'Template Saved',
-      `"${currentTemplate.name}" template configuration updated in local state.`
-    );
-  };
-
-  const handleResetCurrentTemplate = () => {
-    const initialTmpl = INITIAL_EMAIL_TEMPLATES.find((t) => t.id === selectedTemplateId);
-    if (!initialTmpl) return;
-
-    setEmailTemplates((prev) =>
-      prev.map((t) => (t.id === selectedTemplateId ? { ...initialTmpl } : t))
-    );
-    setTemplateErrors((prev) => {
-      const next = { ...prev };
-      delete next[selectedTemplateId];
-      return next;
-    });
-    showSuccess('Template Reset', `"${initialTmpl.name}" has been restored to default template copy.`);
-  };
-
-  // SIMULATED: no real backend endpoint exists yet to send test emails. This must be wired to a real API before production.
-  const handleSendTestEmail = () => {
-    setIsSendingTest(true);
-    setTimeout(() => {
-      setIsSendingTest(false);
-      showSuccess(
-        'Test Email Dispatched',
-        `Test email dispatched - a sample using the "${currentTemplate.name}" template was sent to your account email.`
-      );
-    }, 1000);
-  };
-
-  // ── TS102 Email Account Settings (SMTP) Handlers ─────────────────────────
-  const handleSmtpFieldChange = (field, value) => {
-    setSmtpConfig((prev) => ({ ...prev, [field]: value }));
-    if (smtpErrors[field]) {
-      setSmtpErrors((prev) => {
-        const next = { ...prev };
-        delete next[field];
-        return next;
-      });
-    }
-  };
-
-  const handleStartEditingPassword = () => {
-    setIsPasswordSaved(false);
-    setSmtpConfig((prev) => ({ ...prev, password: '' }));
-    setShowNewPassword(false);
-  };
-
-  const handleCancelEditingPassword = () => {
-    setIsPasswordSaved(true);
-    setSmtpConfig((prev) => ({ ...prev, password: savedSmtpConfig.password }));
-    setShowNewPassword(false);
-  };
-
-  const handleSaveSmtpAccount = (e) => {
-    if (e) e.preventDefault();
-    const errors = {};
-
-    if (!smtpConfig.host.trim()) errors.host = 'SMTP host/server is required.';
-    if (!smtpConfig.port.trim()) errors.port = 'SMTP port is required.';
-    if (!smtpConfig.senderAddress.trim()) {
-      errors.senderAddress = 'Sender address is required.';
-    } else if (!isValidEmail(smtpConfig.senderAddress)) {
-      errors.senderAddress = 'Please provide a valid sender email address.';
-    }
-    if (!smtpConfig.username.trim()) errors.username = 'SMTP username is required.';
-    if (!isPasswordSaved && !smtpConfig.password.trim()) {
-      errors.password = 'Password cannot be empty when updating credentials.';
-    }
-
-    if (Object.keys(errors).length > 0) {
-      setSmtpErrors(errors);
-      return;
-    }
-
-    setSmtpErrors({});
-
-    // Confirmation modal when changing an already-configured email account setup
-    if (isAccountConfigured) {
-      showConfirm(
-        'Change Email Account Settings?',
-        'This affects all outbound system emails going forward across the system.',
-        () => {
-          closeNotif();
-          setSavedSmtpConfig({ ...smtpConfig });
-          setIsPasswordSaved(true);
-          setShowNewPassword(false);
-          showSuccess(
-            'Email Account Settings Saved',
-            'SMTP delivery account updated in local state.'
-          );
-        },
-        {
-          confirmText: 'Apply SMTP Settings',
-          confirmClassName: 'bg-[#252578] hover:bg-[#1a1a5e]',
-          onCancel: () => {
-            closeNotif();
-            // Revert to prior values if cancelled
-            setSmtpConfig({ ...savedSmtpConfig });
-            setIsPasswordSaved(true);
-            setShowNewPassword(false);
-          },
-        }
-      );
-    } else {
-      // First-time configuration doesn't need a modal
-      setSavedSmtpConfig({ ...smtpConfig });
-      setIsAccountConfigured(true);
-      setIsPasswordSaved(true);
-      setShowNewPassword(false);
-      showSuccess(
-        'Email Account Configured',
-        'SMTP delivery account configured in local state.'
-      );
-    }
-  };
-
-  // SIMULATED: no real backend endpoint exists yet to test SMTP connectivity. This must be wired to a real API before production.
-  const handleTestConnection = () => {
-    setIsTestingConnection(true);
-    setTimeout(() => {
-      setIsTestingConnection(false);
-      if (demoFailureMode) {
-        showError(
-          'SMTP Connection Failed',
-          `Connection timed out or authentication failed when communicating with ${smtpConfig.host}:${smtpConfig.port}. Please verify credentials and network firewall settings.`
-        );
-      } else {
+      setIsSavingStatus(true);
+      try {
+        await updateSystemStatus('Operational');
+        window.dispatchEvent(new CustomEvent('system:status-changed', { detail: { status: 'Operational' } }));
+        setBranchSystemStatus((prev) => ({
+          ...prev,
+          [CONFIG_SCOPE]: newStatus,
+        }));
         showSuccess(
-          'SMTP Connection Succeeded',
-          `Connected to mail server on port ${smtpConfig.port} using ${smtpConfig.encryption}.`
+          'System Status Restored',
+          `Platform status for ${selectedBranch.name} has been restored to "Operational".`
         );
+      } catch (err) {
+        showError('Status Update Failed', err.response?.data?.message || 'Unable to restore operational status.');
+      } finally {
+        setIsSavingStatus(false);
       }
-    }, 1000);
+    }
+  };
+
+  // ── Log Level Handlers (Global Infrastructure) ────────────────────────────
+  const handleSaveLogLevel = async (newLevel) => {
+    const levelToSet = newLevel || logLevel;
+    setIsSavingLogLevel(true);
+    try {
+      const updated = await updateLogLevel(levelToSet);
+      const match = LOG_LEVELS.find((l) => l.level.toLowerCase() === (updated || '').toLowerCase());
+      setLogLevel(match ? match.level : levelToSet);
+      showSuccess(
+        'Log Level Saved',
+        `Diagnostic log verbosity set to "${levelToSet}". Changes apply immediately to runtime requests via dynamic Redis cache wiring.`
+      );
+    } catch (err) {
+      showError('Save Failed', err.response?.data?.message || 'Failed to update diagnostic log level.');
+    } finally {
+      setIsSavingLogLevel(false);
+    }
   };
 
   const TABS = [
@@ -591,55 +471,52 @@ export default function SuperAdminSettings() {
     { id: 'company', label: 'Company Information', icon: <Building2 size={14} /> },
     { id: 'status', label: 'System Status', icon: <Activity size={14} /> },
     { id: 'logs', label: 'Log Level', icon: <Terminal size={14} /> },
-    { id: 'email', label: 'Email & SMTP', icon: <Mail size={14} /> },
   ];
+
 
   return (
     <div className="flex flex-col gap-6">
       {/* Interactive Breadcrumb */}
-      <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-gray-500">
-        <span className="text-gray-400">Super Admin</span>
-        <span className="text-gray-300">/</span>
-        <span className="text-[#252578] font-semibold">System Settings</span>
+      <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-slate-muted">
+        <span className="text-slate-400">Super Admin</span>
+        <span className="text-slate-300">/</span>
+        <span className="text-primary font-semibold">System Settings</span>
       </nav>
 
       {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
+      <PageHeader
+        pattern="B"
+        title="System Settings"
+        subtitle="Configure global corporate information, system operational state, and diagnostic logging."
+        actions={
           <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl sm:text-3xl font-bold text-[#252578]">System Settings</h1>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700 border border-amber-200 shadow-2xs">
-              <AlertCircle size={13} className="shrink-0" />
-              <span>Changes are not yet saved - persistence coming soon</span>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 border border-emerald-200">
+              <CheckCircle2 size={13} className="shrink-0" />
+              <span>Persisted & Synchronized</span>
             </span>
+            <div className="flex items-center gap-2 self-start sm:self-auto rounded-xl border border-border bg-card px-3.5 py-2 shadow-2xs">
+              <span className="text-xs text-slate-muted font-medium">Platform:</span>
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold border ${
+                  currentBranchStatus === 'Operational'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}
+              >
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    currentBranchStatus === 'Operational' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                  }`}
+                />
+                {currentBranchStatus} ({selectedBranch.name})
+              </span>
+            </div>
           </div>
-          <p className="mt-1 text-sm text-gray-500">
-            Configure global corporate information, system operational state, diagnostic logging, and transactional email infrastructure.
-          </p>
-        </div>
+        }
+      />
 
-        {/* Global System State Pill */}
-        <div className="flex items-center gap-2 self-start sm:self-auto rounded-xl border border-gray-200 bg-white px-3.5 py-2 shadow-2xs">
-          <span className="text-xs text-gray-400 font-medium">Platform:</span>
-          <span
-            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold border ${
-              systemStatus === 'Operational'
-                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                : 'bg-amber-50 text-amber-700 border-amber-200'
-            }`}
-          >
-            <span
-              className={`h-2 w-2 rounded-full ${
-                systemStatus === 'Operational' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
-              }`}
-            />
-            {systemStatus}
-          </span>
-        </div>
-      </div>
-
-      {/* Navigation Pills (reusing SuperAdmin group-pill pattern) */}
-      <div className="flex gap-1 rounded-xl bg-gray-100 p-1 w-fit flex-wrap shadow-xs">
+      {/* Navigation Pills */}
+      <div className="flex gap-1 rounded-xl bg-slate-100 p-1 w-fit flex-wrap shadow-xs">
         {TABS.map((tab) => {
           const isActive = activeTab === tab.id;
           return (
@@ -648,7 +525,7 @@ export default function SuperAdminSettings() {
               type="button"
               onClick={() => setActiveTab(tab.id)}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all cursor-pointer ${
-                isActive ? 'bg-white text-[#252578] shadow-sm' : 'text-gray-600 hover:text-gray-800'
+                isActive ? 'bg-card text-primary shadow-xs' : 'text-slate-muted hover:text-slate-dark'
               }`}
             >
               {tab.icon}
@@ -660,22 +537,33 @@ export default function SuperAdminSettings() {
 
       {/* Main Content Layout */}
       <div className="flex flex-col gap-6">
+        {/* Single Branch Selector Banner governing both branch-scoped sections (Company Info & System Status) */}
+        {(activeTab === 'all' || activeTab === 'company' || activeTab === 'status') && (
+          <BranchSelector variant="banner" />
+        )}
+
         {/* =================================================================== */}
-        {/* SECTION 1: Company Information (TS097)                              */}
+        {/* SECTION 1: Company Information (TS097 - Branch-Scoped)              */}
         {/* =================================================================== */}
         {(activeTab === 'all' || activeTab === 'company') && (
           <section aria-labelledby="section-company-heading" className="rounded-2xl border border-gray-200 bg-white p-6 sm:p-7 shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-gray-100 gap-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-border gap-3">
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#252578]/10 text-[#252578]">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
                   <Building2 size={20} />
                 </div>
                 <div>
-                  <h2 id="section-company-heading" className="text-base sm:text-lg font-bold text-gray-900">
-                    Company Information
-                  </h2>
-                  <p className="text-xs text-gray-500">
-                    Global company headquarters address, primary contact lines, and official social media presences.
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 id="section-company-heading" className="text-base sm:text-lg font-bold text-gray-900">
+                      Company Information
+                    </h2>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-700 border border-indigo-200">
+                      <MapPin size={11} className="shrink-0" />
+                      Branch-Scoped ({selectedBranch.name})
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Physical location address, primary contact lines, and official social media presences for {selectedBranch.name}.
                   </p>
                 </div>
               </div>
@@ -685,21 +573,48 @@ export default function SuperAdminSettings() {
             </div>
 
             <form onSubmit={handleSaveCompanyInfo} className="mt-6 space-y-6">
+              {/* Informational placeholder banner when no info has been configured for this branch */}
+              {!hasCompanyInfoSet && (
+                <div className="rounded-xl border border-dashed border-amber-300 bg-amber-50/70 p-4 text-xs text-amber-900 flex items-start gap-2.5 shadow-2xs animate-fade-slide-in">
+                  <AlertCircle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold text-amber-900">No company information set for this branch yet.</p>
+                    <p className="mt-0.5 text-amber-700 leading-relaxed">
+                      The address, phone, and email for <strong>{selectedBranch.name}</strong> come from the Auth Module. Set them there first.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Branch contact details are owned by the Auth Module, so they are read only here. */}
+              <div role="note" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900 flex items-start gap-2">
+                <Lock size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">Branch address, phone number, and email address are read only.</p>
+                  <p className="mt-1 text-amber-700 leading-relaxed">
+                    These details are managed centrally for all branches. If they must be changed, update them in the Auth Module.
+                  </p>
+                </div>
+              </div>
+
               {/* Address Field */}
               <div className="space-y-1.5">
                 <label htmlFor="company-address" className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                  Headquarters Address <span className="text-red-500">*</span>
+                  {selectedBranch.id === 'main' ? 'Headquarters Address' : `${selectedBranch.name} Address`} <Lock size={11} className="inline text-gray-400" aria-label="Read only" />
                 </label>
                 <textarea
                   id="company-address"
                   rows={3}
-                  value={companyInfo.address}
-                  onChange={(e) => handleCompanyFieldChange('address', e.target.value)}
-                  placeholder="e.g. SBSI Building, 28 East Capitol Drive, Pasig City..."
-                  className={`w-full rounded-xl border px-4 py-3 text-sm font-medium outline-none transition-all resize-y ${
-                    companyErrors.address
-                      ? 'border-red-300 bg-red-50/40 text-red-900 focus:ring-2 focus:ring-red-400'
-                      : 'border-gray-200 bg-white text-gray-900 focus:ring-2 focus:ring-[#252578]'
+                  value={currentCompanyInfo.address}
+                  readOnly
+                  aria-readonly="true"
+                  placeholder={
+                    selectedBranch.id === 'main'
+                      ? 'e.g. SBSI Building, 28 East Capitol Drive, Pasig City...'
+                      : `Enter physical facility address for ${selectedBranch.name}...`
+                  }
+                  className={`w-full rounded-xl border px-4 py-3 text-sm font-medium outline-none transition-all resize-none ${
+                    companyErrors.address ? 'border-red-300 bg-red-50/40 text-red-900' : 'border-gray-200 bg-gray-50 text-gray-600 cursor-not-allowed'
                   }`}
                 />
                 {companyErrors.address && (
@@ -715,7 +630,7 @@ export default function SuperAdminSettings() {
                 {/* Contact Phone */}
                 <div className="space-y-1.5">
                   <label htmlFor="company-phone" className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                    Contact Phone Number <span className="text-red-500">*</span>
+                    Contact Phone Number <Lock size={11} className="inline text-gray-400" aria-label="Read only" />
                   </label>
                   <div className="relative">
                     <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
@@ -724,13 +639,12 @@ export default function SuperAdminSettings() {
                     <input
                       id="company-phone"
                       type="text"
-                      value={companyInfo.contactNumber}
-                      onChange={(e) => handleCompanyFieldChange('contactNumber', e.target.value)}
+                      value={currentCompanyInfo.contactNumber}
+                      readOnly
+                      aria-readonly="true"
                       placeholder="e.g. +63 2 8635 9999"
                       className={`w-full rounded-xl border pl-10 pr-4 py-3 text-sm font-semibold outline-none transition-all ${
-                        companyErrors.contactNumber
-                          ? 'border-red-300 bg-red-50/40 text-red-900 focus:ring-2 focus:ring-red-400'
-                          : 'border-gray-200 bg-white text-gray-900 focus:ring-2 focus:ring-[#252578]'
+                        companyErrors.contactNumber ? 'border-red-300 bg-red-50/40 text-red-900' : 'border-gray-200 bg-gray-50 text-gray-600 cursor-not-allowed'
                       }`}
                     />
                   </div>
@@ -745,7 +659,7 @@ export default function SuperAdminSettings() {
                 {/* Contact Email */}
                 <div className="space-y-1.5">
                   <label htmlFor="company-email" className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                    Contact Email Address <span className="text-red-500">*</span>
+                    Contact Email Address <Lock size={11} className="inline text-gray-400" aria-label="Read only" />
                   </label>
                   <div className="relative">
                     <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
@@ -754,13 +668,12 @@ export default function SuperAdminSettings() {
                     <input
                       id="company-email"
                       type="email"
-                      value={companyInfo.contactEmail}
-                      onChange={(e) => handleCompanyFieldChange('contactEmail', e.target.value)}
+                      value={currentCompanyInfo.contactEmail}
+                      readOnly
+                      aria-readonly="true"
                       placeholder="e.g. support@sbsi.com.ph"
                       className={`w-full rounded-xl border pl-10 pr-4 py-3 text-sm font-semibold outline-none transition-all ${
-                        companyErrors.contactEmail
-                          ? 'border-red-300 bg-red-50/40 text-red-900 focus:ring-2 focus:ring-red-400'
-                          : 'border-gray-200 bg-white text-gray-900 focus:ring-2 focus:ring-[#252578]'
+                        companyErrors.contactEmail ? 'border-red-300 bg-red-50/40 text-red-900' : 'border-gray-200 bg-gray-50 text-gray-600 cursor-not-allowed'
                       }`}
                     />
                   </div>
@@ -778,7 +691,7 @@ export default function SuperAdminSettings() {
                 <div className="flex items-center justify-between mb-3">
                   <div>
                     <h3 className="text-sm font-bold text-gray-800">Official Social Media Profiles</h3>
-                    <p className="text-xs text-gray-400">External brand links displayed across public customer portals and footers.</p>
+                    <p className="text-xs text-gray-400">External brand links displayed across public customer portals and footers for this branch.</p>
                   </div>
                   <button
                     type="button"
@@ -791,12 +704,12 @@ export default function SuperAdminSettings() {
                 </div>
 
                 <div className="space-y-3">
-                  {companyInfo.socialLinks.length === 0 ? (
+                  {currentCompanyInfo.socialLinks.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-gray-200 p-6 text-center text-xs text-gray-500">
-                      No social links configured. Click "Add Link" to register external profiles.
+                      No social links configured for {selectedBranch.name}. Click "Add Link" to register external profiles.
                     </div>
                   ) : (
-                    companyInfo.socialLinks.map((link) => {
+                    currentCompanyInfo.socialLinks.map((link) => {
                       const linkError = companyErrors[`social_${link.id}`];
                       return (
                         <div key={link.id} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 p-3 rounded-xl border border-gray-200/80 bg-gray-50/50">
@@ -871,30 +784,33 @@ export default function SuperAdminSettings() {
               </div>
 
               {/* Form Action Bar */}
-              <div className="flex items-center justify-between pt-4 border-t border-gray-100 flex-wrap gap-3">
-                <button
+              <div className="flex items-center justify-between pt-4 border-t border-border flex-wrap gap-3">
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   onClick={handleResetCompanyInfo}
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-800 transition-colors cursor-pointer"
+                  className="text-xs text-slate-muted hover:text-slate-dark"
                 >
                   <RotateCcw size={13} />
-                  Restore Defaults
-                </button>
+                  Restore Defaults ({selectedBranch.name})
+                </Button>
 
-                <button
+                <Button
                   type="submit"
-                  className="inline-flex items-center gap-2 rounded-xl bg-[#252578] px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#1a1a5e] hover:shadow-md cursor-pointer ml-auto"
+                  disabled={isSavingCompany}
+                  className="ml-auto"
                 >
                   <Save size={16} />
                   Save Company Info
-                </button>
+                </Button>
               </div>
             </form>
           </section>
         )}
 
         {/* =================================================================== */}
-        {/* SECTION 2: System Status (TS097)                                    */}
+        {/* SECTION 2: System Status (TS097 - Branch-Scoped)                    */}
         {/* =================================================================== */}
         {(activeTab === 'all' || activeTab === 'status') && (
           <section aria-labelledby="section-status-heading" className="rounded-2xl border border-gray-200 bg-white p-6 sm:p-7 shadow-xs">
@@ -904,11 +820,17 @@ export default function SuperAdminSettings() {
                   <Activity size={20} />
                 </div>
                 <div>
-                  <h2 id="section-status-heading" className="text-base sm:text-lg font-bold text-gray-900">
-                    System Status
-                  </h2>
-                  <p className="text-xs text-gray-500">
-                    Control the global operating state of the platform. Maintenance mode notifies users and may restrict interactions.
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 id="section-status-heading" className="text-base sm:text-lg font-bold text-gray-900">
+                      System Status
+                    </h2>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-700 border border-indigo-200">
+                      <MapPin size={11} className="shrink-0" />
+                      Branch-Scoped ({selectedBranch.name})
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Control the operational state for {selectedBranch.name}. Maintenance mode notifies users at this location and may restrict interactions.
                   </p>
                 </div>
               </div>
@@ -923,7 +845,7 @@ export default function SuperAdminSettings() {
               <div
                 onClick={() => handleSelectSystemStatus('Operational')}
                 className={`rounded-2xl border p-5 transition-all cursor-pointer select-none flex flex-col justify-between ${
-                  systemStatus === 'Operational'
+                  currentBranchStatus === 'Operational'
                     ? 'border-[#252578] bg-[#252578]/5 shadow-sm ring-1 ring-[#252578]'
                     : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50/50'
                 }`}
@@ -934,7 +856,7 @@ export default function SuperAdminSettings() {
                       <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
                       Live Status
                     </span>
-                    {systemStatus === 'Operational' && (
+                    {currentBranchStatus === 'Operational' && (
                       <span className="inline-flex items-center gap-1 text-xs font-bold text-[#252578]">
                         <CheckCircle2 size={16} className="text-[#252578]" />
                         Active
@@ -945,7 +867,7 @@ export default function SuperAdminSettings() {
                     Operational
                   </h3>
                   <p className="text-xs text-gray-500 mt-1.5 leading-relaxed">
-                    All microservices, customer portals, agent assignment queues, and email alerts are active and running normally.
+                    All services, agent queues, and operations for {selectedBranch.name} are active and running normally.
                   </p>
                 </div>
 
@@ -959,7 +881,7 @@ export default function SuperAdminSettings() {
               <div
                 onClick={() => handleSelectSystemStatus('Under Maintenance')}
                 className={`rounded-2xl border p-5 transition-all cursor-pointer select-none flex flex-col justify-between ${
-                  systemStatus === 'Under Maintenance'
+                  currentBranchStatus === 'Under Maintenance'
                     ? 'border-amber-400 bg-amber-50/30 shadow-sm ring-1 ring-amber-400'
                     : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50/50'
                 }`}
@@ -982,12 +904,12 @@ export default function SuperAdminSettings() {
                           <Info size={16} />
                         </button>
                         <div className="pointer-events-none absolute bottom-full right-0 mb-2 hidden w-72 rounded-xl bg-gray-900 p-3 text-center text-xs text-white shadow-xl group-hover:block z-50 leading-relaxed">
-                          This may restrict login access or show a maintenance banner to users - confirm the intended behavior with your team before enabling.
+                          Setting {selectedBranch.name} to Under Maintenance may restrict or affect access for users at this location.
                           <div className="absolute top-full right-4 border-4 border-transparent border-t-gray-900" />
                         </div>
                       </div>
 
-                      {systemStatus === 'Under Maintenance' && (
+                      {currentBranchStatus === 'Under Maintenance' && (
                         <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-700">
                           <CheckCircle2 size={16} className="text-amber-600" />
                           Active
@@ -1001,7 +923,7 @@ export default function SuperAdminSettings() {
                     <AlertTriangle size={16} className="text-amber-600 shrink-0" />
                   </h3>
                   <p className="text-xs text-gray-500 mt-1.5 leading-relaxed">
-                    Platform maintenance window is active. Non-admin users will be presented with advisory notifications or restricted access.
+                    Maintenance window is active for {selectedBranch.name}. Non-admin users at this facility will be presented with advisory notifications or restricted access.
                   </p>
                 </div>
 
@@ -1015,25 +937,25 @@ export default function SuperAdminSettings() {
             {/* Status Information Box */}
             <div
               className={`mt-5 rounded-xl border p-4 flex items-start gap-3 transition-colors ${
-                systemStatus === 'Operational'
+                currentBranchStatus === 'Operational'
                   ? 'border-emerald-200 bg-emerald-50/40 text-emerald-900'
                   : 'border-amber-200 bg-amber-50/50 text-amber-900'
               }`}
             >
               <div
                 className={`flex h-7 w-7 items-center justify-center rounded-lg shrink-0 mt-0.5 ${
-                  systemStatus === 'Operational' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                  currentBranchStatus === 'Operational' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
                 }`}
               >
-                {systemStatus === 'Operational' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+                {currentBranchStatus === 'Operational' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
               </div>
               <div className="text-xs leading-relaxed">
                 <span className="font-bold">Current System Condition: </span>
-                {systemStatus === 'Operational' ? (
-                  <span>Platform is fully healthy and operating as expected. Customer intake forms and employee queues are unobstructed.</span>
+                {currentBranchStatus === 'Operational' ? (
+                  <span><strong>{selectedBranch.name}</strong> is fully healthy and operating as expected. Customer intake forms and queues are unobstructed.</span>
                 ) : (
                   <span>
-                    Platform is running in maintenance mode. Switching back to <strong>Operational</strong> takes effect immediately without requiring a confirmation dialog.
+                    <strong>{selectedBranch.name}</strong> is running in maintenance mode. Switching back to <strong>Operational</strong> takes effect immediately without requiring a confirmation dialog.
                   </span>
                 )}
               </div>
@@ -1042,7 +964,7 @@ export default function SuperAdminSettings() {
         )}
 
         {/* =================================================================== */}
-        {/* SECTION 3: Log Level (TS097)                                        */}
+        {/* SECTION 3: Log Level (TS097 - Global Infrastructure Setting)        */}
         {/* =================================================================== */}
         {(activeTab === 'all' || activeTab === 'logs') && (
           <section aria-labelledby="section-logs-heading" className="rounded-2xl border border-gray-200 bg-white p-6 sm:p-7 shadow-xs">
@@ -1052,10 +974,14 @@ export default function SuperAdminSettings() {
                   <Terminal size={20} />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <h2 id="section-logs-heading" className="text-base sm:text-lg font-bold text-gray-900">
                       Log Level Configuration
                     </h2>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2.5 py-0.5 text-xs font-semibold text-purple-700 border border-purple-200">
+                      <Globe size={11} className="shrink-0" />
+                      System-Wide / Infrastructure
+                    </span>
                     <div className="relative group inline-flex items-center">
                       <button
                         type="button"
@@ -1070,8 +996,8 @@ export default function SuperAdminSettings() {
                       </div>
                     </div>
                   </div>
-                  <p className="text-xs text-gray-500">
-                    Set the minimum severity threshold for microservice and gateway log streams.
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Set the minimum severity threshold for microservice and gateway log streams across all facilities.
                   </p>
                 </div>
               </div>
@@ -1081,6 +1007,14 @@ export default function SuperAdminSettings() {
             </div>
 
             <div className="mt-6 space-y-6">
+              {/* Infrastructure-Wide Scope Callout */}
+              <div className="rounded-xl border border-purple-100 bg-purple-50/70 p-3.5 text-xs text-purple-900 flex items-start gap-2.5">
+                <Info size={16} className="text-purple-600 shrink-0 mt-0.5" />
+                <div className="leading-relaxed">
+                  <span className="font-bold">System-Wide Infrastructure Setting:</span>{' '}
+                  Log verbosity is an infrastructure-wide setting and applies system-wide, not per branch.
+                </div>
+              </div>
               {/* Select Dropdown & Current Level */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-center">
                 <div className="space-y-1.5">
@@ -1130,8 +1064,8 @@ export default function SuperAdminSettings() {
                       onClick={() => setLogLevel(item.level)}
                       className={`rounded-xl border p-4 transition-all cursor-pointer select-none flex flex-col justify-between ${
                         isSelected
-                          ? 'border-[#252578] bg-[#252578]/5 shadow-xs ring-1 ring-[#252578]'
-                          : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50/40 opacity-80'
+                          ? 'border-primary bg-primary/5 shadow-xs ring-1 ring-primary'
+                          : 'border-border bg-card hover:border-slate-300 hover:bg-slate-50/40 opacity-80'
                       }`}
                     >
                       <div>
@@ -1139,9 +1073,9 @@ export default function SuperAdminSettings() {
                           <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-bold border ${item.badgeClass}`}>
                             {item.level}
                           </span>
-                          {isSelected && <CheckCircle2 size={14} className="text-[#252578]" />}
+                          {isSelected && <CheckCircle2 size={14} className="text-primary" />}
                         </div>
-                        <p className="text-xs text-gray-600 mt-2.5 leading-relaxed">{item.description}</p>
+                        <p className="text-xs text-slate-muted mt-2.5 leading-relaxed">{item.description}</p>
                       </div>
                     </div>
                   );
@@ -1149,490 +1083,21 @@ export default function SuperAdminSettings() {
               </div>
 
               {/* Action Bar */}
-              <div className="flex items-center justify-end pt-4 border-t border-gray-100">
-                <button
+              <div className="flex items-center justify-end pt-4 border-t border-border">
+                <Button
                   type="button"
+                  disabled={isSavingLogLevel}
                   onClick={() => handleSaveLogLevel(logLevel)}
-                  className="inline-flex items-center gap-2 rounded-xl bg-[#252578] px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#1a1a5e] hover:shadow-md cursor-pointer"
                 >
                   <Save size={16} />
                   Save Log Level
-                </button>
+                </Button>
               </div>
             </div>
           </section>
         )}
 
-        {/* =================================================================== */}
-        {/* SECTION 4: TS102 Email Templates & Account Configuration            */}
-        {/* =================================================================== */}
-        {(activeTab === 'all' || activeTab === 'email') && (
-          <div className="flex flex-col gap-6">
-            {/* SUB-SECTION 4A: Email Templates Editor */}
-            <section aria-labelledby="section-templates-heading" className="rounded-2xl border border-gray-200 bg-white p-6 sm:p-7 shadow-xs">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-gray-100 gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#252578]/10 text-[#252578]">
-                    <Mail size={20} />
-                  </div>
-                  <div>
-                    <h2 id="section-templates-heading" className="text-base sm:text-lg font-bold text-gray-900">
-                      System Email Templates
-                    </h2>
-                    <p className="text-xs text-gray-500">
-                      Customize subjects and body messages for transactional notifications, OTP codes, and welcome credentials.
-                    </p>
-                  </div>
-                </div>
-                <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 border border-blue-200 self-start sm:self-auto">
-                  Independent Save
-                </span>
-              </div>
 
-              {/* Template Switcher Tabs */}
-              <div className="mt-6 flex flex-wrap gap-2 border-b border-gray-200 pb-3">
-                {emailTemplates.map((tmpl) => {
-                  const isSelected = tmpl.id === selectedTemplateId;
-                  return (
-                    <button
-                      key={tmpl.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedTemplateId(tmpl.id);
-                        setTemplateErrors({});
-                      }}
-                      className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition-all cursor-pointer ${
-                        isSelected
-                          ? 'bg-[#252578] text-white shadow-xs'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200/80 hover:text-gray-900'
-                      }`}
-                    >
-                      <span>{tmpl.name}</span>
-                      <span
-                        className={`rounded-full px-1.5 py-0.2 text-[10px] font-bold ${
-                          isSelected ? 'bg-white/20 text-white' : 'bg-gray-200 text-gray-600'
-                        }`}
-                      >
-                        {tmpl.category}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Active Template Editor Box */}
-              <div className="mt-5 space-y-5">
-                {/* Header Description & Send Test Email */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-gray-50 border border-gray-200/80">
-                  <div className="text-xs text-gray-600 leading-relaxed">
-                    <span className="font-bold text-gray-900">{currentTemplate.name}: </span>
-                    {currentTemplate.description}
-                  </div>
-                  {/* SIMULATED: no real backend endpoint exists yet to send test emails. This must be wired to a real API before production. */}
-                  <button
-                    type="button"
-                    onClick={handleSendTestEmail}
-                    disabled={isSendingTest}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-100/80 hover:text-[#252578] transition-all shadow-2xs shrink-0 cursor-pointer disabled:opacity-50"
-                  >
-                    {isSendingTest ? (
-                      <RefreshCw size={13} className="animate-spin text-[#252578]" />
-                    ) : (
-                      <Send size={13} className="text-[#252578]" />
-                    )}
-                    <span>{isSendingTest ? 'Sending Test...' : 'Send Test Email'}</span>
-                  </button>
-                </div>
-
-                {/* Subject Field */}
-                <div className="space-y-1.5">
-                  <label htmlFor="template-subject-input" className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                    Email Subject Line <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    id="template-subject-input"
-                    type="text"
-                    value={currentTemplate.subject}
-                    onChange={(e) => handleTemplateFieldChange('subject', e.target.value)}
-                    placeholder="Enter email subject..."
-                    className="w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-900 outline-none focus:ring-2 focus:ring-[#252578]"
-                  />
-                </div>
-
-                {/* Available Variables / Placeholder Chip Bar */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                      Available Placeholders <span className="text-[11px] font-normal text-gray-400 lowercase">(click to insert at cursor)</span>
-                    </label>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 p-3 rounded-xl border border-gray-100 bg-gray-50/70">
-                    {currentTemplate.placeholders.map((ph) => (
-                      <button
-                        key={ph.tag}
-                        type="button"
-                        onClick={() => handleInsertPlaceholder(ph.tag)}
-                        title={`${ph.desc}${ph.isRequired ? ' (Required)' : ''}`}
-                        className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-mono font-medium transition-all shadow-2xs cursor-pointer select-none ${
-                          ph.isRequired
-                            ? 'bg-amber-100/80 text-amber-900 border border-amber-300 hover:bg-amber-200/80'
-                            : 'bg-white text-gray-700 border border-gray-200 hover:border-[#252578] hover:text-[#252578]'
-                        }`}
-                      >
-                        <span>{ph.tag}</span>
-                        {ph.isRequired && (
-                          <span className="rounded bg-amber-600 px-1 py-0.2 text-[9px] font-sans font-bold text-white uppercase tracking-wider">
-                            Required
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Body Textarea */}
-                <div className="space-y-1.5">
-                  <label htmlFor="template-body-textarea" className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                    Message Body Template <span className="text-red-500">*</span>
-                  </label>
-                  <textarea
-                    id="template-body-textarea"
-                    ref={bodyTextareaRef}
-                    rows={9}
-                    value={currentTemplate.body}
-                    onChange={(e) => handleTemplateFieldChange('body', e.target.value)}
-                    className={`w-full rounded-xl border px-4 py-3 text-xs sm:text-sm font-mono leading-relaxed outline-none transition-all resize-y ${
-                      templateErrors[currentTemplate.id]
-                        ? 'border-red-300 bg-red-50/40 text-red-900 focus:ring-2 focus:ring-red-400'
-                        : 'border-gray-200 bg-white text-gray-900 focus:ring-2 focus:ring-[#252578]'
-                    }`}
-                  />
-                  {templateErrors[currentTemplate.id] && (
-                    <p className="text-xs text-red-600 font-semibold flex items-center gap-1 mt-1">
-                      <AlertCircle size={13} className="shrink-0" />
-                      {templateErrors[currentTemplate.id]}
-                    </p>
-                  )}
-                </div>
-
-                {/* Template Action Bar */}
-                <div className="flex items-center justify-between pt-3 border-t border-gray-100 flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={handleResetCurrentTemplate}
-                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-800 transition-colors cursor-pointer"
-                  >
-                    <RotateCcw size={13} />
-                    Restore Default Template
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleSaveTemplate}
-                    className="inline-flex items-center gap-2 rounded-xl bg-[#252578] px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#1a1a5e] hover:shadow-md cursor-pointer ml-auto"
-                  >
-                    <Save size={16} />
-                    Save Template
-                  </button>
-                </div>
-              </div>
-            </section>
-
-            {/* SUB-SECTION 4B: Email Account Settings (SMTP) */}
-            <section aria-labelledby="section-smtp-heading" className="rounded-2xl border border-gray-200 bg-white p-6 sm:p-7 shadow-xs">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-gray-100 gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#252578]/10 text-[#252578]">
-                    <KeyRound size={20} />
-                  </div>
-                  <div>
-                    <h2 id="section-smtp-heading" className="text-base sm:text-lg font-bold text-gray-900">
-                      Email Account Settings (SMTP)
-                    </h2>
-                    <p className="text-xs text-gray-500">
-                      Outbound SMTP mailer host, port, authentication credentials, and default sender identity.
-                    </p>
-                  </div>
-                </div>
-                <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 border border-blue-200 self-start sm:self-auto">
-                  Independent Save
-                </span>
-              </div>
-
-              {/* Informational Security Notice */}
-              <div className="mt-5 rounded-xl border border-blue-200 bg-blue-50/70 p-4 flex items-start gap-3 text-blue-900 shadow-2xs">
-                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600/10 text-blue-600 shrink-0 mt-0.5">
-                  <ShieldCheck size={18} />
-                </div>
-                <div className="text-xs leading-relaxed">
-                  <span className="font-bold">Security & Encryption Notice: </span>
-                  All credentials will be encrypted at rest and all SMTP communication encrypted in transit once backend persistence is implemented.
-                </div>
-              </div>
-
-              {/* SMTP Form */}
-              <form onSubmit={handleSaveSmtpAccount} className="mt-6 space-y-5">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                  {/* SMTP Server / Host */}
-                  <div className="space-y-1.5">
-                    <label htmlFor="smtp-host-input" className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                      SMTP Server / Host <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      id="smtp-host-input"
-                      type="text"
-                      value={smtpConfig.host}
-                      onChange={(e) => handleSmtpFieldChange('host', e.target.value)}
-                      placeholder="e.g. smtp.mailgun.org"
-                      className={`w-full rounded-xl border px-4 py-2.5 text-sm font-semibold outline-none transition-all ${
-                        smtpErrors.host
-                          ? 'border-red-300 bg-red-50/40 text-red-900 focus:ring-2 focus:ring-red-400'
-                          : 'border-gray-200 bg-white text-gray-900 focus:ring-2 focus:ring-[#252578]'
-                      }`}
-                    />
-                    {smtpErrors.host && (
-                      <p className="text-xs text-red-600 font-semibold flex items-center gap-1 mt-1">
-                        <AlertCircle size={12} className="shrink-0" />
-                        {smtpErrors.host}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Port */}
-                  <div className="space-y-1.5">
-                    <label htmlFor="smtp-port-input" className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                      Port <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      id="smtp-port-input"
-                      type="text"
-                      value={smtpConfig.port}
-                      onChange={(e) => handleSmtpFieldChange('port', e.target.value)}
-                      placeholder="e.g. 587 or 465"
-                      className={`w-full rounded-xl border px-4 py-2.5 text-sm font-semibold outline-none transition-all ${
-                        smtpErrors.port
-                          ? 'border-red-300 bg-red-50/40 text-red-900 focus:ring-2 focus:ring-red-400'
-                          : 'border-gray-200 bg-white text-gray-900 focus:ring-2 focus:ring-[#252578]'
-                      }`}
-                    />
-                    {smtpErrors.port && (
-                      <p className="text-xs text-red-600 font-semibold flex items-center gap-1 mt-1">
-                        <AlertCircle size={12} className="shrink-0" />
-                        {smtpErrors.port}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Encryption */}
-                  <div className="space-y-1.5">
-                    <label htmlFor="smtp-encryption-select" className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                      Encryption Protocol
-                    </label>
-                    <select
-                      id="smtp-encryption-select"
-                      value={smtpConfig.encryption}
-                      onChange={(e) => handleSmtpFieldChange('encryption', e.target.value)}
-                      className="w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-800 outline-none focus:ring-2 focus:ring-[#252578] cursor-pointer"
-                    >
-                      <option value="TLS">TLS (Recommended - Port 587)</option>
-                      <option value="SSL">SSL (Port 465)</option>
-                      <option value="None">None (Unencrypted)</option>
-                    </select>
-                  </div>
-
-                  {/* Sender Email Address */}
-                  <div className="space-y-1.5">
-                    <label htmlFor="smtp-sender-email" className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                      Default Sender Email <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      id="smtp-sender-email"
-                      type="email"
-                      value={smtpConfig.senderAddress}
-                      onChange={(e) => handleSmtpFieldChange('senderAddress', e.target.value)}
-                      placeholder="support@sbsi.com.ph"
-                      className={`w-full rounded-xl border px-4 py-2.5 text-sm font-semibold outline-none transition-all ${
-                        smtpErrors.senderAddress
-                          ? 'border-red-300 bg-red-50/40 text-red-900 focus:ring-2 focus:ring-red-400'
-                          : 'border-gray-200 bg-white text-gray-900 focus:ring-2 focus:ring-[#252578]'
-                      }`}
-                    />
-                    {smtpErrors.senderAddress && (
-                      <p className="text-xs text-red-600 font-semibold flex items-center gap-1 mt-1">
-                        <AlertCircle size={12} className="shrink-0" />
-                        {smtpErrors.senderAddress}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* SMTP Username */}
-                  <div className="space-y-1.5">
-                    <label htmlFor="smtp-username-input" className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                      SMTP Username <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      id="smtp-username-input"
-                      type="text"
-                      value={smtpConfig.username}
-                      onChange={(e) => handleSmtpFieldChange('username', e.target.value)}
-                      placeholder="postmaster@mg.sbsi.com.ph"
-                      className={`w-full rounded-xl border px-4 py-2.5 text-sm font-semibold outline-none transition-all ${
-                        smtpErrors.username
-                          ? 'border-red-300 bg-red-50/40 text-red-900 focus:ring-2 focus:ring-red-400'
-                          : 'border-gray-200 bg-white text-gray-900 focus:ring-2 focus:ring-[#252578]'
-                      }`}
-                    />
-                    {smtpErrors.username && (
-                      <p className="text-xs text-red-600 font-semibold flex items-center gap-1 mt-1">
-                        <AlertCircle size={12} className="shrink-0" />
-                        {smtpErrors.username}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* SMTP Password with Masking Adjustment */}
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <label htmlFor="smtp-password-input" className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                        SMTP Password / Token <span className="text-red-500">*</span>
-                      </label>
-                      {isPasswordSaved ? (
-                        <button
-                          type="button"
-                          onClick={handleStartEditingPassword}
-                          className="text-xs font-semibold text-[#252578] hover:underline cursor-pointer"
-                        >
-                          Change Secret
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={handleCancelEditingPassword}
-                          className="text-xs font-semibold text-gray-500 hover:text-gray-800 cursor-pointer"
-                        >
-                          Cancel
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="relative">
-                      {isPasswordSaved ? (
-                        // Saved state: fully masked dots with NO reveal toggle
-                        <div className="flex items-center">
-                          <input
-                            id="smtp-password-input"
-                            type="password"
-                            value="••••••••••••••••"
-                            readOnly
-                            disabled
-                            className="w-full rounded-xl border border-gray-200 bg-gray-100/70 px-4 py-2.5 text-sm font-mono tracking-widest text-gray-500 cursor-not-allowed select-none"
-                          />
-                          <Lock size={15} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                        </div>
-                      ) : (
-                        // Active editing state: eye-icon reveal toggle applies
-                        <div className="relative">
-                          <input
-                            id="smtp-password-input"
-                            type={showNewPassword ? 'text' : 'password'}
-                            value={smtpConfig.password}
-                            onChange={(e) => handleSmtpFieldChange('password', e.target.value)}
-                            placeholder="Enter new password or API token..."
-                            autoFocus
-                            className={`w-full rounded-xl border pr-10 pl-4 py-2.5 text-sm font-semibold outline-none transition-all ${
-                              smtpErrors.password
-                                ? 'border-red-300 bg-red-50/40 text-red-900 focus:ring-2 focus:ring-red-400'
-                                : 'border-gray-200 bg-white text-gray-900 focus:ring-2 focus:ring-[#252578]'
-                            }`}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowNewPassword(!showNewPassword)}
-                            className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
-                            aria-label={showNewPassword ? 'Hide password' : 'Show password'}
-                          >
-                            {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                    {isPasswordSaved ? (
-                      <p className="text-[11px] text-gray-500 italic mt-1 leading-normal">
-                        For security, saved credentials cannot be viewed - re-enter to change.
-                      </p>
-                    ) : (
-                      smtpErrors.password && (
-                        <p className="text-xs text-red-600 font-semibold flex items-center gap-1 mt-1">
-                          <AlertCircle size={12} className="shrink-0" />
-                          {smtpErrors.password}
-                        </p>
-                      )
-                    )}
-                  </div>
-                </div>
-
-                {/* SMTP Action Bar */}
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between pt-4 border-t border-gray-100 gap-3">
-                  {/* Left: Test Connection action & failure mode toggle */}
-                  <div className="flex items-center gap-3 flex-wrap">
-                    {/* SIMULATED: no real backend endpoint exists yet to test SMTP connectivity. This must be wired to a real API before production. */}
-                    <button
-                      type="button"
-                      onClick={handleTestConnection}
-                      disabled={isTestingConnection}
-                      className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 hover:text-[#252578] transition-all shadow-2xs cursor-pointer disabled:opacity-50"
-                    >
-                      {isTestingConnection ? (
-                        <RefreshCw size={15} className="animate-spin text-[#252578]" />
-                      ) : (
-                        <Check size={15} className="text-green-600" />
-                      )}
-                      <span>{isTestingConnection ? 'Testing...' : 'Test Connection'}</span>
-                    </button>
-
-                    {/* Simulation toggle for evaluators / demo testing */}
-                    <label className="inline-flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={demoFailureMode}
-                        onChange={(e) => setDemoFailureMode(e.target.checked)}
-                        className="rounded border-gray-300 text-[#252578] focus:ring-[#252578]"
-                      />
-                      <span>Simulate connection failure for demo</span>
-                    </label>
-                  </div>
-
-                  {/* Right: Reset & Save Account Settings */}
-                  <div className="flex items-center gap-3 self-end sm:self-auto">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSmtpConfig(INITIAL_SMTP_CONFIG);
-                        setSavedSmtpConfig(INITIAL_SMTP_CONFIG);
-                        setIsPasswordSaved(true);
-                        setSmtpErrors({});
-                        showSuccess('SMTP Reset', 'Account settings restored to baseline.');
-                      }}
-                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-800 transition-colors cursor-pointer"
-                    >
-                      <RotateCcw size={13} />
-                      Restore Defaults
-                    </button>
-
-                    <button
-                      type="submit"
-                      className="inline-flex items-center gap-2 rounded-xl bg-[#252578] px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#1a1a5e] hover:shadow-md cursor-pointer"
-                    >
-                      <Save size={16} />
-                      Save Account Settings
-                    </button>
-                  </div>
-                </div>
-              </form>
-            </section>
-          </div>
-        )}
       </div>
 
       {/* Global Notification Modal */}

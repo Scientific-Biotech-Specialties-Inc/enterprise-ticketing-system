@@ -124,37 +124,13 @@ class AuthController extends Controller
     {
         $user = $request->user();
 
-        if (!$user instanceof Employee || $user->role !== 'customer service') {
+        if (!$user instanceof Employee || !in_array($user->role, ['customer service', 'head of cs', 'head of customer service', 'cs'])) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        // Cleanup stale active DB statuses before mapping
-        $activeDbEmployees = Employee::where('is_active', true)->where('role', '!=', 'customer service')->get();
-        $staleEmpIds = [];
-        
-        if ($activeDbEmployees->isNotEmpty()) {
-            $activePresenceKeys = $activeDbEmployees->map(fn($emp) => 'employee:presence:' . $emp->emp_id)->all();
-            $activePresences = Cache::store('redis')->many($activePresenceKeys);
-            
-            foreach ($activeDbEmployees as $emp) {
-                $key = 'employee:presence:' . $emp->emp_id;
-                $hasPresence = isset($activePresences[$key]) && $activePresences[$key] !== null;
-                if (!$hasPresence) {
-                    $staleEmpIds[] = $emp->emp_id;
-                }
-            }
-        }
-
-        if (!empty($staleEmpIds)) {
-            Employee::whereIn('emp_id', $staleEmpIds)->update(['is_active' => false]);
-            $updatedEmps = Employee::whereIn('emp_id', $staleEmpIds)->get();
-            foreach ($updatedEmps as $emp) {
-                \App\Events\EmployeeStatusChanged::dispatch($emp);
-            }
-        }
-
         $query = Employee::query()
-            ->where('role', '!=', 'customer service')
+            ->where('is_active', true)
+            ->whereNotIn('role', ['customer service', 'head of cs', 'head of customer service', 'cs'])
             ->whereRaw('LOWER(COALESCE(role, "")) NOT IN (?, ?, ?, ?, ?)', ['superadmin', 'super admin', 'admin', 'system administrator', 'system admin'])
             ->whereRaw('LOWER(COALESCE(department, "")) NOT IN (?, ?)', ['admin', 'super admin'])
             ->whereRaw('LOWER(COALESCE(email, "")) NOT LIKE ?', ['%admin%'])
@@ -184,8 +160,9 @@ class AuthController extends Controller
                 'last_name' => $employee->last_name,
                 'role' => $employee->role,
                 'department' => $employee->department,
-                'is_active' => (bool) data_get($presence, 'is_active', false),
-                'last_seen_at' => data_get($presence, 'last_seen_at', optional($employee->last_seen_at)->toISOString()),
+                'is_active' => (bool) $employee->is_active,
+                'presence' => \App\Support\Presence::state((bool) $employee->is_active, $employee->last_seen_at ?: data_get($presence, 'last_seen_at')),
+                'last_seen_at' => ($employee->last_seen_at ?: data_get($presence, 'last_seen_at')) ? \Carbon\Carbon::parse($employee->last_seen_at ?: data_get($presence, 'last_seen_at'))->toISOString() : null,
             ];
         });
 
@@ -407,18 +384,20 @@ class AuthController extends Controller
 
         Cache::store('redis')->put($redisKey, $presence, 60);
 
-        $wasInactive = !$user->is_active;
+        // Only dispatch when the employee was not already Online, so a steady heartbeat does not spam the channel.
+        $wasOffline = !\App\Support\Presence::isOnline($user->last_seen_at);
 
+        // Heartbeat records presence only; it never changes the is_active account flag.
         $user->last_seen_at = now();
-        $user->is_active = true;
         $user->save();
 
-        if ($wasInactive) {
+        if ($wasOffline) {
             \App\Events\EmployeeStatusChanged::dispatch($user->refresh());
         }
 
         return response()->json([
-            'is_active' => true,
+            'is_active' => (bool) $user->is_active,
+            'presence' => \App\Support\Presence::ONLINE,
             'last_seen_at' => $user->last_seen_at->toISOString(),
         ]);
     }

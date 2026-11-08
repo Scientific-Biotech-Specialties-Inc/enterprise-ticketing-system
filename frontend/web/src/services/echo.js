@@ -1,7 +1,8 @@
 import Echo from 'laravel-echo'
 import Pusher from 'pusher-js'
 
-window.Pusher = Pusher
+const PusherClient = Pusher?.default || Pusher
+window.Pusher = PusherClient
 
 const appKey =
   import.meta.env.VITE_REVERB_APP_KEY ||
@@ -21,6 +22,8 @@ const isHttps = window.location.protocol === 'https:'
 
 const echo = new Echo({
   broadcaster: 'pusher',
+  // Pass the constructor via `Pusher`; `client` expects a ready Pusher instance.
+  Pusher: PusherClient,
   key: appKey,
   wsHost,
   wsPort,

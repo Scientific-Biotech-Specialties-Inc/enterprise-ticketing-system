@@ -44,7 +44,6 @@ const ROUTE_MAP = [
 
   // Admin Routes
   { pattern: /^\/admin\/dashboard\/?$/, title: 'Admin Dashboard' },
-  { pattern: /^\/admin\/employees\/?$/, title: 'Employee Management' },
   { pattern: /^\/admin\/reports\/?$/, title: 'Reports & Analytics' },
   { pattern: /^\/admin\/settings\/?$/, title: 'System Settings' },
   { pattern: /^\/admin\/profile\/?$/, title: 'Profile' },
@@ -52,7 +51,7 @@ const ROUTE_MAP = [
   { pattern: /^\/admin\/?$/, title: 'Admin Dashboard' },
 
   // SuperAdmin Routes
-  { pattern: /^\/superadmin\/ticket-config(\/.*)?$/, title: 'Ticket Configuration' },
+  { pattern: /^\/superadmin\/(ticket-config|config)(\/.*)?$/, title: 'Ticket Configuration' },
   { pattern: /^\/superadmin\/audit-logs\/?$/, title: 'Audit Logs' },
   { pattern: /^\/superadmin\/history\/?$/, title: 'System History' },
   { pattern: /^\/superadmin\/knowledge-base\/?$/, title: 'Knowledge Base' },

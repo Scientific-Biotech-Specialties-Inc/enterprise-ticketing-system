@@ -19,11 +19,15 @@ Route::get('/health', function () {
 // Employee Directory & Options
 Route::get('/departments', [EmployeeDirectoryController::class, 'getDepartments']);
 Route::get('/assignable-employees', [EmployeeDirectoryController::class, 'assignableEmployees']);
+Route::get('/employees/search', [EmployeeDirectoryController::class, 'searchEmployees']);
+Route::get('/employees/filter-options', [EmployeeDirectoryController::class, 'filterOptions']);
+Route::get('/tickets/{ticketId}/eligible-employees', [EmployeeDirectoryController::class, 'eligibleEmployees']);
 
 // Authenticated Routes
 Route::middleware(['auth.subsystem'])->group(function () {
     // Employee Profile & Workbenches
     Route::get('/employee/profile', [EmployeeDirectoryController::class, 'employeeProfile']);
+    Route::match(['put', 'patch'], '/employee/profile', [EmployeeDirectoryController::class, 'updateProfile']);
     Route::get('/employee-tickets', [EmployeeAssignmentController::class, 'employeeTickets']);
     Route::get('/employee/tickets/internal', [EmployeeAssignmentController::class, 'internalTickets']);
 
@@ -35,7 +39,7 @@ Route::middleware(['auth.subsystem'])->group(function () {
     // Reassignment Requests & Approvals
     Route::post('/tickets/{ticketId}/reassign-request', [EmployeeReassignmentController::class, 'reassignRequest']);
     Route::post('/tickets/{ticketId}/reassign-respond', [EmployeeReassignmentController::class, 'reassignRespond']);
-    Route::get('/reassignment-requests', [EmployeeReassignmentController::class, 'getReassignmentRequests']);
+    Route::get('/reassignment-requests', [EmployeeReassignmentController::class, 'reassignmentRequests']);
 
     // Work Logs
     Route::get('/employee/worklogs', [WorkLogController::class, 'index']);

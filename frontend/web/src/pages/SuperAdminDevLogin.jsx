@@ -24,10 +24,11 @@ export default function SuperAdminDevLogin() {
   const handleLogin = () => {
     setLoading(true);
     tokenStore.setToken(MOCK_TOKEN);
-    localStorage.setItem('user', JSON.stringify(mockSuperAdmin));
+    sessionStorage.setItem('user', JSON.stringify(mockSuperAdmin));
+    localStorage.removeItem('user');
     setUser(mockSuperAdmin);
     setIsAuthenticated(true);
-    navigate('/superadmin/ticket-config', { replace: true });
+    navigate('/superadmin/config', { replace: true });
   };
 
   return (

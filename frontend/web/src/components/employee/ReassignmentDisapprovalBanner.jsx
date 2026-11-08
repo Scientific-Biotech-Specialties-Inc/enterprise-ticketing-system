@@ -1,7 +1,7 @@
 import React from 'react';
 import { isReassignmentDenied, getReassignmentDisapprovalReason } from '@/utils/reassignmentUtils';
 
-export default function ReassignmentDisapprovalBanner({ ticket, className = '' }) {
+export default function ReassignmentDisapprovalBanner({ ticket, className = '', onRequestReassignAgain }) {
   if (!ticket || !isReassignmentDenied(ticket)) return null;
 
   const reason = getReassignmentDisapprovalReason(ticket);
@@ -41,9 +41,20 @@ export default function ReassignmentDisapprovalBanner({ ticket, className = '' }
             </p>
           </div>
 
-          <p className="mt-2 text-xs text-red-700/90 leading-normal">
-            Your request to reassign this ticket was disapproved. This ticket remains assigned to you for troubleshooting and resolution.
-          </p>
+          <div className="mt-3 flex items-center justify-between flex-wrap gap-2">
+            <p className="text-xs text-red-700/90 leading-normal">
+              Your request to reassign this ticket was disapproved. You may request reassignment again with updated details or proceed with troubleshooting.
+            </p>
+            {typeof onRequestReassignAgain === 'function' && (
+              <button
+                type="button"
+                onClick={onRequestReassignAgain}
+                className="px-3.5 py-1.5 text-xs font-bold rounded-xl border border-red-300 bg-white text-red-700 hover:bg-red-50 hover:border-red-400 transition-all shadow-2xs"
+              >
+                Request Reassignment Again
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

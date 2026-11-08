@@ -17,10 +17,14 @@ class CustomerFeedback extends Model
         'overall_rating',
         'overall_comment',
         'employee_ratings',
+        'question_answers',
+        'category_questions_snapshot',
     ];
 
     protected $casts = [
-        'overall_rating' => 'float',
-        'employee_ratings' => 'array',
+        'overall_rating'              => 'float',
+        'employee_ratings'            => 'array',
+        'question_answers'            => 'array',
+        'category_questions_snapshot' => 'array',
     ];
 }

@@ -1,13 +1,14 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { Bot, Send, Paperclip, ChevronDown, ChevronUp, X, CheckCircle, AlertTriangle, Plus, MessageSquare, Trash2, ArrowLeft, Clock } from 'lucide-react';
 import axiosInstance from '@/api/axiosInstance';
 import { AI_API_URL } from '@/config/api.config';
-import { getTicketFormOptions, createTicket, getCustomerTickets } from '@/services/ticketService';
+import { getTicketFormOptions, createTicket, getCustomerTickets, saveTicketDraft } from '@/services/ticketService';
 import TitleCasingModal from '@/components/TitleCasingModal';
 import DuplicateTicketModal from '@/components/DuplicateTicketModal';
 import { formatProperTitleCase, needsProperCasing } from '@/utils/titleCaseUtils';
+import SkeletonLoader from '@/components/SkeletonLoader.jsx';
 
 const formatTime = (iso) => {
   if (!iso) return '';
@@ -39,6 +40,36 @@ function FormattedText({ text }) {
         const trimmed = line.trim();
         const isBullet = trimmed.startsWith('- ') || trimmed.startsWith('* ');
         const cleanLine = isBullet ? trimmed.substring(2) : line;
+
+        // Structured step detection: "Step 1: ...", "1. ...", "2) ..."
+        const stepMatch = cleanLine.match(/^(?:step\s*(\d+)[:\.]|(\d+)[\.\)])\s*(.*)$/i);
+        if (stepMatch && !isBullet) {
+          const stepNum = stepMatch[1] || stepMatch[2];
+          const stepBody = stepMatch[3];
+          const stepParts = stepBody.split(/(\*\*.*?\*\*|\*.*?\*|`.*?`)/g).map((part, idx) => {
+            if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
+              return <strong key={idx} className="font-bold text-gray-900">{part.slice(2, -2)}</strong>;
+            }
+            if (part.startsWith('*') && part.endsWith('*') && part.length >= 2) {
+              return <em key={idx} className="italic">{part.slice(1, -1)}</em>;
+            }
+            if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
+              return <code key={idx} className="bg-white border border-gray-200 px-1 py-0.5 rounded text-xs font-mono">{part.slice(1, -1)}</code>;
+            }
+            return part;
+          });
+
+          return (
+            <div key={lineIdx} className="my-2 p-3 bg-blue-50/70 border border-blue-200/80 rounded-xl flex items-start gap-2.5 text-left shadow-xs">
+              <span className="bg-[#252578] text-white text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 mt-0.5 shadow-xs">
+                Step {stepNum}
+              </span>
+              <div className="flex-1 text-gray-800 text-xs font-medium leading-relaxed">
+                {stepParts}
+              </div>
+            </div>
+          );
+        }
 
         // Match **bold**, *italic*, and `code`
         const parts = cleanLine.split(/(\*\*.*?\*\*|\*.*?\*|`.*?`)/g);
@@ -73,6 +104,46 @@ function FormattedText({ text }) {
     </div>
   );
 }
+
+const isTroubleshootingResponse = (content) => {
+  if (typeof content !== 'string' || !content.trim()) return false;
+  const lower = content.toLowerCase();
+
+  // If it's a pure greeting, acknowledgment, or informational request without troubleshooting steps, do NOT prompt
+  const isGreetingOrClarification =
+    lower.startsWith('hello') ||
+    lower.startsWith('hi') ||
+    lower.startsWith('hey') ||
+    lower.startsWith('greetings') ||
+    lower.includes('describe the machine') ||
+    lower.includes('what machine are you having') ||
+    lower.includes('what is the brand') ||
+    lower.includes('how can i assist you today') ||
+    lower.includes('how can i help you today');
+
+  // Check for troubleshooting steps or actionable directives
+  const hasStructuredSteps = /^(?:step\s*\d+|[1-9]\s*[\.\)]|\*|\-)\s+/im.test(content);
+  const hasTroubleshootingKeywords =
+    lower.includes('step 1') ||
+    lower.includes('troubleshoot') ||
+    lower.includes('try the following') ||
+    lower.includes('to resolve this') ||
+    lower.includes('check if') ||
+    lower.includes('power cycle') ||
+    lower.includes('restart the') ||
+    lower.includes('unplug') ||
+    lower.includes('disconnect') ||
+    lower.includes('clear the jam') ||
+    lower.includes('reinstall') ||
+    lower.includes('inspect the') ||
+    lower.includes('replace the');
+
+  if (isGreetingOrClarification && !hasStructuredSteps) {
+    return false;
+  }
+
+  return hasStructuredSteps || hasTroubleshootingKeywords;
+};
 
 const suggestionChips = [
   'Printer won\'t start',
@@ -160,6 +231,9 @@ function AISourceList({ sources }) {
   );
 }
 
+// AI conversation statuses (ai-service) meaning the chat already ended in a ticket.
+const FINISHED_CONVERSATION_STATUSES = ['ticket_created', 'escalated'];
+
 function TicketRecommendationCard({ onCreateTicket, onContinue }) {
   return (
     <div className="flex justify-start">
@@ -174,12 +248,14 @@ function TicketRecommendationCard({ onCreateTicket, onContinue }) {
               </p>
               <div className="flex gap-2 mt-3">
                 <button
+                  type="button"
                   onClick={onCreateTicket}
                   className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-xl transition-all cursor-pointer"
                 >
                   Create Ticket
                 </button>
                 <button
+                  type="button"
                   onClick={onContinue}
                   className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-semibold rounded-xl transition-all cursor-pointer"
                 >
@@ -194,27 +270,45 @@ function TicketRecommendationCard({ onCreateTicket, onContinue }) {
   );
 }
 
-function TicketReviewModal({ isOpen, data, machines = [], onClose, onSubmit }) {
+function TicketReviewModal({ isOpen, data, machines = [], onClose, onSubmit, onSaveDraft }) {
+  const navigate = useNavigate();
   const [form, setForm] = useState(data || {});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
   const [titleCasingData, setTitleCasingData] = useState(null);
   const [showTitleCasingModal, setShowTitleCasingModal] = useState(false);
   const [isTitleManuallyEdited, setIsTitleManuallyEdited] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
 
   useEffect(() => {
     if (data) {
       setForm(data);
       setIsSubmitting(false);
+      setIsSavingDraft(false);
       setTitleCasingData(null);
       setShowTitleCasingModal(false);
       setIsTitleManuallyEdited(false);
+      setSubmitError(null);
     }
   }, [data, isOpen]);
 
   if (!isOpen) return null;
 
+  const handleSaveDraft = async () => {
+    if (isSubmitting || isSavingDraft || !onSaveDraft) return;
+    setIsSavingDraft(true);
+    setSubmitError(null);
+    try {
+      await onSaveDraft(form);
+    } catch (err) {
+      const msg = err?.response?.data?.message || err?.message || 'Failed to save draft.';
+      setSubmitError(msg);
+      setIsSavingDraft(false);
+    }
+  };
+
   const handleSubmit = async () => {
-    if (isSubmitting) return;
+    if (isSubmitting || isSavingDraft) return;
 
     const summaryTrimmed = (form.problemSummary || '').trim();
     // Only prompt for proper casing if the user manually edited the title
@@ -229,8 +323,12 @@ function TicketReviewModal({ isOpen, data, machines = [], onClose, onSubmit }) {
     }
 
     setIsSubmitting(true);
+    setSubmitError(null);
     try {
       await onSubmit(form);
+    } catch (err) {
+      const msg = err?.response?.data?.message || err?.message || 'Failed to submit ticket.';
+      setSubmitError(msg);
     } finally {
       setIsSubmitting(false);
     }
@@ -244,8 +342,12 @@ function TicketReviewModal({ isOpen, data, machines = [], onClose, onSubmit }) {
     setShowTitleCasingModal(false);
 
     setIsSubmitting(true);
+    setSubmitError(null);
     try {
       await onSubmit(updatedForm);
+    } catch (err) {
+      const msg = err?.response?.data?.message || err?.message || 'Failed to submit ticket.';
+      setSubmitError(msg);
     } finally {
       setIsSubmitting(false);
     }
@@ -260,6 +362,18 @@ function TicketReviewModal({ isOpen, data, machines = [], onClose, onSubmit }) {
             <X size={20} />
           </button>
         </div>
+        {submitError && (
+          <div className="mx-6 mt-4 p-3.5 bg-red-50 border border-red-200 rounded-xl flex items-start gap-3 flex-shrink-0">
+            <AlertTriangle size={18} className="text-red-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 text-xs text-red-700 font-medium leading-relaxed">
+              <strong className="block text-red-800 font-bold mb-0.5">Ticket Submission Error</strong>
+              {submitError}
+            </div>
+            <button onClick={() => setSubmitError(null)} className="text-red-400 hover:text-red-600 cursor-pointer">
+              <X size={16} />
+            </button>
+          </div>
+        )}
         <div className="overflow-y-auto px-6 py-4 space-y-4 flex-1">
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -379,30 +493,80 @@ function TicketReviewModal({ isOpen, data, machines = [], onClose, onSubmit }) {
             />
           </div>
         </div>
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-t border-gray-100 flex-shrink-0">
           <button
-            onClick={onClose}
-            disabled={isSubmitting}
-            className="px-4 py-2.5 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-100 transition-all cursor-pointer disabled:opacity-50"
+            type="button"
+            onClick={() => {
+              onClose();
+              navigate('/create-ticket', {
+                state: {
+                  conversationId: activeConversationId,
+                  conversation_id: activeConversationId,
+                  fromConversationId: activeConversationId,
+                  fromAiChat: true,
+                  prefillData: {
+                    title: form.problemSummary || form.title || '',
+                    problemSummary: form.problemSummary || form.title || '',
+                    machine_ID: form.machine_ID || '',
+                    machineModel: form.machineModel || '',
+                    machine_name: form.machineModel || '',
+                    problem_category_ID: form.problem_category_ID || '',
+                    category: form.category || '',
+                    category_name: form.category || '',
+                    description: form.conversationSummary || form.description || '',
+                    conversationSummary: form.conversationSummary || form.description || '',
+                  },
+                },
+              });
+            }}
+            className="text-xs text-[#252578] font-semibold hover:underline cursor-pointer"
           >
-            Cancel
+            Open in full ticket creation page →
           </button>
-          <button
-            onClick={handleSubmit}
-            disabled={isSubmitting}
-            className={`px-5 py-2.5 rounded-xl text-sm font-semibold text-white transition-all flex items-center gap-2 ${
-              isSubmitting ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#252578] hover:bg-[#1f1f66] cursor-pointer'
-            }`}
-          >
-            {isSubmitting ? (
-              <>
-                <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Submitting...
-              </>
-            ) : (
-              'Submit Ticket'
+          <div className="flex items-center gap-3 ml-auto">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isSubmitting || isSavingDraft}
+              className="px-4 py-2.5 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-100 transition-all cursor-pointer disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            {onSaveDraft && (
+              <button
+                type="button"
+                onClick={handleSaveDraft}
+                disabled={isSubmitting || isSavingDraft}
+                className="px-5 py-2.5 rounded-xl border border-[#252578] text-[#252578] hover:bg-[#252578]/5 text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-2"
+              >
+                {isSavingDraft ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-[#252578] border-t-transparent rounded-full animate-spin" />
+                    Saving Draft...
+                  </>
+                ) : (
+                  'Save as Draft'
+                )}
+              </button>
             )}
-          </button>
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={isSubmitting || isSavingDraft}
+              className={`px-5 py-2.5 rounded-xl text-sm font-semibold text-white transition-all flex items-center gap-2 ${
+                isSubmitting ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#252578] hover:bg-[#1f1f66] cursor-pointer'
+              }`}
+            >
+              {isSubmitting ? (
+                <>
+                  <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Submitting...
+                </>
+              ) : (
+                'Submit Ticket'
+              )}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -447,6 +611,47 @@ function SuccessDialog({ isOpen, ticketNumber, onViewTicket, onClose }) {
   );
 }
 
+function SubmissionErrorDialog({ isOpen, title, message, onViewTickets, onClose }) {
+  if (!isOpen) return null;
+  const isLimitError = typeof message === 'string' && message.toLowerCase().includes('limit');
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]" onClick={onClose}>
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl text-center" onClick={(e) => e.stopPropagation()}>
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-red-100 text-red-600">
+          <AlertTriangle size={28} />
+        </div>
+        <h2 className="mt-4 text-lg font-bold text-gray-900">{title || 'Ticket Submission Error'}</h2>
+        
+        <div className="mt-3 p-3.5 bg-red-50 border border-red-200/80 rounded-xl text-left">
+          <p className="text-xs font-bold text-red-800 uppercase tracking-wider mb-1">
+            {isLimitError ? 'Maximum Ticket Limit Reached' : 'Submission Details'}
+          </p>
+          <p className="text-sm text-red-700 leading-relaxed font-medium">
+            {message}
+          </p>
+        </div>
+
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl px-4 py-2.5 text-sm font-semibold text-gray-600 transition-colors hover:bg-gray-100 cursor-pointer"
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            onClick={onViewTickets}
+            className="rounded-xl bg-[#252578] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1f1f66] cursor-pointer shadow-sm"
+          >
+            View My Tickets
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const getStoredUser = () => {
   try {
     const raw = localStorage.getItem('user');
@@ -458,9 +663,13 @@ const getStoredUser = () => {
 
 function AISupportPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  // "Create Ticket" entry points ask for a fresh chat instead of reopening the last one.
+  // Captured once so later re-renders or a page refresh don't keep forcing new chats.
+  const startNewChatRef = useRef(Boolean(location.state?.startNewChat));
   const { user } = useAuth();
   const effectiveUser = user || getStoredUser();
-  const currentUserId = effectiveUser?.id;
+  const currentUserId = effectiveUser?.id ?? effectiveUser?.client_ID ?? effectiveUser?.client_id;
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -470,22 +679,46 @@ function AISupportPage() {
   const [activeConversationId, setActiveConversationId] = useState('');
   const [messages, setMessages] = useState([welcomeMessage, gatherDetailsMessage]);
   const [input, setInput] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
+  // Pending AI replies are tracked per conversation, so switching chats never shows another
+  // chat's typing indicator and a late reply never lands in the chat currently on screen.
+  const [pendingConvIds, setPendingConvIds] = useState(() => new Set());
+  const isTyping = pendingConvIds.has(activeConversationId);
+  const markPending = useCallback((convId) => {
+    setPendingConvIds((prev) => new Set(prev).add(convId));
+  }, []);
+  const clearPending = useCallback((convId) => {
+    setPendingConvIds((prev) => {
+      if (!prev.has(convId)) return prev;
+      const next = new Set(prev);
+      next.delete(convId);
+      return next;
+    });
+  }, []);
+  const activeConvIdRef = useRef(activeConversationId);
+  useEffect(() => {
+    activeConvIdRef.current = activeConversationId;
+  }, [activeConversationId]);
+  // Skeletons: the sidebar list on first load, and the message pane while a chat is fetched.
+  const [conversationsLoading, setConversationsLoading] = useState(true);
+  const [loadingConversationId, setLoadingConversationId] = useState(null);
   const [showSuggestionChips, setShowSuggestionChips] = useState(true);
   const [showTicketCard, setShowTicketCard] = useState(false);
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [reviewData, setReviewData] = useState(null);
   const [showSuccess, setShowSuccess] = useState(false);
   const [ticketNumber, setTicketNumber] = useState('');
+  const [submissionError, setSubmissionError] = useState({ isOpen: false, title: '', message: '' });
   const [conversationPhase, setConversationPhase] = useState(0);
   const [escalationTicketData, setEscalationTicketData] = useState(null);
   const [ticketOptions, setTicketOptions] = useState(null);
+  const [feedbackMap, setFeedbackMap] = useState({});
 
   useEffect(() => {
+    if (!effectiveUser) return;
     getTicketFormOptions()
       .then(opts => setTicketOptions(opts))
       .catch(err => console.warn("Failed to load ticket form options:", err));
-  }, []);
+  }, [effectiveUser]);
 
   useEffect(() => {
     if (effectiveUser?.role && effectiveUser.role !== 'customer') {
@@ -501,10 +734,46 @@ function AISupportPage() {
 
   // Store per-conversation state
   const conversationStateRef = useRef({});
+  const conversationsRef = useRef(conversations);
+
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
 
   // Load conversation state
+  // Load conversation state
   const loadConversation = useCallback((convId) => {
-    axiosInstance.get(`${AI_API_URL}/conversations/${convId}`, { baseURL: '' })
+    if (!convId) return;
+
+    // Handle local draft conversations that have not been persisted to the backend yet
+    const isLocalDraft = String(convId).startsWith('draft-') && !(conversationsRef.current || []).some(c => c.id === convId);
+    if (isLocalDraft) {
+      const saved = conversationStateRef.current[convId];
+      if (saved) {
+        setMessages(saved.messages);
+        setShowSuggestionChips(saved.showSuggestionChips);
+        setShowTicketCard(saved.showTicketCard);
+        setConversationPhase(saved.conversationPhase);
+        setEscalationTicketData(saved.escalationTicketData || null);
+      } else {
+        setMessages([welcomeMessage, gatherDetailsMessage]);
+        setShowSuggestionChips(true);
+        setShowTicketCard(false);
+        setConversationPhase(0);
+        setEscalationTicketData(null);
+      }
+      setActiveConversationId(convId);
+      return;
+    }
+
+    setLoadingConversationId(convId);
+    axiosInstance.get(`${AI_API_URL}/conversations/${convId}`, { 
+      baseURL: '',
+      params: { user_id: currentUserId }
+    })
+      .finally(() => {
+        setLoadingConversationId((current) => (current === convId ? null : current));
+      })
       .then(res => {
         if (res.data.success && res.data.conversation) {
           const conv = res.data.conversation;
@@ -525,6 +794,11 @@ function AISupportPage() {
               finalMessages = [welcomeMessage, gatherDetailsMessage, ...finalMessages];
             }
           }
+
+          finalMessages = finalMessages.map((m, idx) => ({
+            ...m,
+            id: m.id || m._id || `loaded-msg-${idx}-${m.timestamp || m.created_at || idx}`
+          }));
 
           setMessages(finalMessages);
           setShowSuggestionChips(finalMessages.length <= 2);
@@ -594,24 +868,42 @@ function AISupportPage() {
         }
         setActiveConversationId(convId);
       });
-  }, []);
+  }, [currentUserId]);
 
   const handleNewChat = useCallback(() => {
-    // Prevent creating multiple duplicate "New Conversation" entries in sidebar
-    const existingUnused = conversations.find(c => (c.title === 'New Conversation' || c.title === 'New Chat') && c.messageCount <= 2);
+    const list = conversationsRef.current || [];
+    // If active conversation or an existing list item is already an unused conversation, just navigate to it
+    const existingUnused = list.find(c =>
+      (c.title === 'New Conversation' || c.title === 'New Chat') &&
+      (!c.messageCount || c.messageCount <= 2)
+    );
     if (existingUnused && existingUnused.id) {
       loadConversation(existingUnused.id);
       return;
     }
 
-    const id = `conv-${Date.now()}`;
-    setConversations(prev => [{ id, title: 'New Conversation', timestamp: new Date().toISOString(), messageCount: 2 }, ...prev]);
+    const id = `draft-${Date.now()}`;
+    const newConv = {
+      id,
+      title: 'New Conversation',
+      timestamp: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      messageCount: 2,
+    };
+
+    setConversations(prev => {
+      // Remove any prior empty local draft
+      const filtered = prev.filter(c => !(String(c.id).startsWith('draft-') && c.title === 'New Conversation' && (!c.messageCount || c.messageCount <= 2)));
+      return [newConv, ...filtered];
+    });
+
     setActiveConversationId(id);
     setMessages([welcomeMessage, gatherDetailsMessage]);
     setShowSuggestionChips(true);
     setShowTicketCard(false);
     setConversationPhase(0);
     setEscalationTicketData(null);
+
     conversationStateRef.current[id] = {
       messages: [welcomeMessage, gatherDetailsMessage],
       conversationPhase: 0,
@@ -619,16 +911,19 @@ function AISupportPage() {
       showTicketCard: false,
       escalationTicketData: null,
     };
-  }, [conversations, loadConversation]);
+  }, [loadConversation]);
 
-  // Load all conversations from MongoDB
+  // Load all conversations from MongoDB / MySQL
   const fetchConversationsListOnly = useCallback(() => {
+    if (!currentUserId) return;
     axiosInstance.get(`${AI_API_URL}/conversations`, { baseURL: '', params: { user_id: currentUserId } })
       .then(res => {
-        if (res.data.success && res.data.conversations) {
+        if (res.data.success && Array.isArray(res.data.conversations)) {
           const cleanConvs = res.data.conversations.map(c => ({
             ...c,
-            title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : c.title
+            timestamp: c.updated_at || c.created_at || new Date().toISOString(),
+            messageCount: c.message_count !== undefined ? c.message_count : (Array.isArray(c.messages) ? c.messages.length : (c.messageCount || 2)),
+            title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : 'Support Inquiry'
           }));
           setConversations(cleanConvs);
         }
@@ -638,18 +933,33 @@ function AISupportPage() {
       });
   }, [currentUserId]);
 
-  const fetchConversations = useCallback(() => {
+  useEffect(() => {
+    if (!currentUserId) return;
+
+    let isMounted = true;
     axiosInstance.get(`${AI_API_URL}/conversations`, { baseURL: '', params: { user_id: currentUserId } })
+      .finally(() => {
+        if (isMounted) setConversationsLoading(false);
+      })
       .then(res => {
-        if (res.data.success && res.data.conversations) {
+        if (!isMounted) return;
+        if (res.data.success && Array.isArray(res.data.conversations)) {
           const fetched = res.data.conversations.map(c => ({
             ...c,
-            title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : c.title
+            timestamp: c.updated_at || c.created_at || new Date().toISOString(),
+            messageCount: c.message_count !== undefined ? c.message_count : (Array.isArray(c.messages) ? c.messages.length : (c.messageCount || 2)),
+            title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : 'Support Inquiry'
           }));
           setConversations(fetched);
-          if (fetched.length > 0 && fetched[0].id) {
+          if (startNewChatRef.current) {
+            startNewChatRef.current = false;
+            // Drop the one-shot flag from history so a refresh reopens normally.
+            navigate(location.pathname, { replace: true, state: {} });
+            handleNewChat();
+          } else if (fetched.length > 0 && fetched[0].id && !FINISHED_CONVERSATION_STATUSES.includes(String(fetched[0].status || '').toLowerCase())) {
             loadConversation(fetched[0].id);
           } else {
+            // No chats yet, or the latest chat already became a ticket: start fresh.
             handleNewChat();
           }
         } else {
@@ -657,14 +967,18 @@ function AISupportPage() {
         }
       })
       .catch(err => {
+        if (!isMounted) return;
         console.error("Failed to load conversations:", err);
-        handleNewChat();
+        const list = conversationsRef.current || [];
+        if (list.length === 0) {
+          handleNewChat();
+        }
       });
-  }, [currentUserId, loadConversation, handleNewChat]);
 
-  useEffect(() => {
-    fetchConversations();
-  }, [fetchConversations]);
+    return () => {
+      isMounted = false;
+    };
+  }, [currentUserId, loadConversation, handleNewChat]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -695,9 +1009,11 @@ function AISupportPage() {
   }, [activeConversationId, conversationPhase, showSuggestionChips, showTicketCard, escalationTicketData, saveConversationState]);
 
   const simulateAIResponse = useCallback((content, sources) => {
-    setIsTyping(true);
+    const convId = activeConvIdRef.current;
+    markPending(convId);
     setTimeout(() => {
-      setIsTyping(false);
+      clearPending(convId);
+      if (activeConvIdRef.current !== convId) return;
       addMessage({
         id: `ai-${Date.now()}`,
         role: 'ai',
@@ -706,7 +1022,7 @@ function AISupportPage() {
         timestamp: new Date().toISOString(),
       });
     }, 1500);
-  }, [addMessage]);
+  }, [addMessage, markPending, clearPending]);
 
   const handleSuggestionClick = useCallback((chip) => {
     setInput(chip);
@@ -727,7 +1043,8 @@ function AISupportPage() {
     addMessage(userMessage);
     setInput('');
     if (showSuggestionChips) setShowSuggestionChips(false);
-    setIsTyping(true);
+    const sendingConvId = activeConversationId;
+    markPending(sendingConvId);
 
     const updatedMessages = [...messages, userMessage];
     const apiMessages = updatedMessages
@@ -738,13 +1055,27 @@ function AISupportPage() {
       }))
       .filter(m => m.content !== '');
 
+    const activeIdToSend = String(activeConversationId).startsWith('draft-') ? null : activeConversationId;
+
     axiosInstance.post(`${AI_API_URL}/chat`, { 
       messages: apiMessages,
-      conversation_id: activeConversationId,
+      conversation_id: activeIdToSend,
       user_id: currentUserId
     }, { baseURL: '' })
       .then(res => {
-        setIsTyping(false);
+        clearPending(sendingConvId);
+        const returnedConvId = res.data.conversation_id || activeConversationId;
+        // The customer moved to another chat while waiting. The backend already saved the reply,
+        // so only refresh the list; the reply shows when they open that chat again.
+        if (activeConvIdRef.current !== sendingConvId) {
+          delete conversationStateRef.current[sendingConvId];
+          fetchConversationsListOnly();
+          return;
+        }
+        if (returnedConvId !== activeConversationId) {
+          setActiveConversationId(returnedConvId);
+        }
+
         if (res.data.is_duplicate && res.data.conversation_id) {
           loadConversation(res.data.conversation_id);
           fetchConversationsListOnly();
@@ -778,30 +1109,39 @@ function AISupportPage() {
             setShowTicketCard(false);
           }
 
-          saveConversationState(activeConversationId, updated, conversationPhase, false, shouldSuggestTicket, escTicketData);
+          saveConversationState(returnedConvId, updated, conversationPhase, false, shouldSuggestTicket, escTicketData);
           fetchConversationsListOnly();
           return updated;
         });
       })
       .catch(err => {
-        setIsTyping(false);
+        clearPending(sendingConvId);
         console.error(err);
+        if (activeConvIdRef.current !== sendingConvId) return;
         const errorText = err.response?.data?.error || 'AI Assistant is currently offline or unreachable. You can create a support ticket manually with our technical support team.';
         
         const offlineErrorContent = (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-900 space-y-2">
-            <div className="flex items-center gap-2 text-amber-700 font-bold text-sm">
-              <AlertTriangle size={18} />
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-900 space-y-3 text-left">
+            <div className="flex items-center gap-2 text-amber-800 font-bold text-sm">
+              <AlertTriangle size={18} className="text-amber-600 shrink-0" />
               <span>AI Service Unavailable</span>
             </div>
-            <p className="text-xs leading-relaxed text-amber-800">{errorText}</p>
-            <div className="pt-1">
+            <p className="text-xs leading-relaxed text-amber-800 font-medium">{errorText}</p>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
               <button
+                type="button"
                 onClick={handleCreateTicket}
-                className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all cursor-pointer inline-flex items-center gap-1.5"
+                className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-all cursor-pointer inline-flex items-center gap-1.5"
               >
                 <Plus size={14} />
-                Create Ticket Manually
+                Create Ticket With Context
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/create-ticket', { state: { prefillData: { problemSummary: text, description: text } } })}
+                className="px-3.5 py-1.5 bg-white hover:bg-gray-50 border border-gray-300 text-gray-700 text-xs font-semibold rounded-xl transition-all cursor-pointer"
+              >
+                Standard Ticket Form
               </button>
             </div>
           </div>
@@ -821,7 +1161,7 @@ function AISupportPage() {
         });
       });
 
-  }, [input, conversationPhase, messages, showSuggestionChips, showTicketCard, activeConversationId, isTyping, addMessage, saveConversationState, escalationTicketData, fetchConversationsListOnly]);
+  }, [input, conversationPhase, messages, showSuggestionChips, showTicketCard, activeConversationId, isTyping, addMessage, saveConversationState, escalationTicketData, fetchConversationsListOnly, currentUserId, markPending, clearPending]);
 
   const handleKeyDown = useCallback((e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -831,35 +1171,52 @@ function AISupportPage() {
   }, [handleSend]);
 
   const handleDeleteConversation = useCallback((e, convId) => {
-    e.stopPropagation();
-    axiosInstance.delete(`${AI_API_URL}/conversations/${convId}`, { baseURL: '' })
+    if (e && e.stopPropagation) e.stopPropagation();
+    delete conversationStateRef.current[convId];
+
+    setConversations(prev => {
+      const nextList = prev.filter(c => c.id !== convId);
+      if (activeConversationId === convId) {
+        if (nextList.length > 0 && nextList[0].id) {
+          loadConversation(nextList[0].id);
+        } else {
+          handleNewChat();
+        }
+      }
+      return nextList;
+    });
+
+    axiosInstance.delete(`${AI_API_URL}/conversations/${convId}`, {
+      baseURL: '',
+      params: { user_id: currentUserId }
+    })
       .then(() => {
-        axiosInstance.get(`${AI_API_URL}/conversations`, { baseURL: '', params: { user_id: currentUserId } })
-          .then(res => {
-            if (res.data.success && res.data.conversations) {
-              const fetched = res.data.conversations;
-              setConversations(fetched);
-              if (activeConversationId === convId) {
-                if (fetched.length > 0 && fetched[0].id) {
-                  loadConversation(fetched[0].id);
-                } else {
-                  handleNewChat();
-                }
-              }
-            } else {
-              setConversations([]);
-              if (activeConversationId === convId) handleNewChat();
-            }
-          })
-          .catch(() => {
-            setConversations(prev => prev.filter(c => c.id !== convId));
-            if (activeConversationId === convId) handleNewChat();
-          });
+        fetchConversationsListOnly();
       })
       .catch(err => {
-        console.error("Failed to delete conversation from backend:", err);
+        console.warn("Conversation delete completed with notice:", err);
       });
-  }, [activeConversationId, loadConversation, handleNewChat, currentUserId]);
+  }, [activeConversationId, loadConversation, handleNewChat, fetchConversationsListOnly, currentUserId]);
+
+  const handleClearChat = useCallback(() => {
+    if (window.confirm("Are you sure you want to clear this conversation's messages?")) {
+      setMessages([welcomeMessage, gatherDetailsMessage]);
+      setShowSuggestionChips(true);
+      setShowTicketCard(false);
+      setConversationPhase(0);
+      setEscalationTicketData(null);
+
+      if (activeConversationId) {
+        delete conversationStateRef.current[activeConversationId];
+        axiosInstance.delete(`${AI_API_URL}/conversations/${activeConversationId}`, {
+          baseURL: '',
+          params: { user_id: currentUserId }
+        }).then(() => {
+          fetchConversationsListOnly();
+        }).catch(() => null);
+      }
+    }
+  }, [activeConversationId, currentUserId, fetchConversationsListOnly]);
 
   const [duplicateModal, setDuplicateModal] = useState({
     isOpen: false,
@@ -894,7 +1251,7 @@ function AISupportPage() {
         }
       }
       // Strip leading question numbers, bullets, list markers e.g. "1.", "1)", "1 -", "Q1:", "Machine:"
-      res = res.replace(/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '');
+      res = res.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '');
       return res.trim();
     };
 
@@ -1026,50 +1383,39 @@ function AISupportPage() {
       if (found) targetMachineId = found.machine_ID;
     }
 
-    // Duplicate check: only block pre-emptively if this machine was explicitly identified
-    if (review.isExplicitMachine) {
-      try {
-        const existingTickets = await getCustomerTickets({ createdBy: currentUserId || 1, forceRefresh: true }).catch(() => []);
-        
-        // Duplicate protection: only block if active ongoing ticket is for the SAME machine
-        const ongoingSameMachine = (existingTickets || []).find(t => {
-          const s = (t.status || '').toLowerCase();
-          const isActive = s !== 'closed' && s !== 'resolved' && s !== 'completed' && s !== 'cancelled' && s !== 'discarded';
-          if (!isActive) return false;
-
-          const isSameId = targetMachineId && t.machine_ID && Number(t.machine_ID) === Number(targetMachineId);
-          const tEquip = (t.equipment || t.machine_name || '').toLowerCase();
-          const isSameName = targetModel && tEquip && (tEquip.includes(targetModel) || targetModel.includes(tEquip));
-
-          return isSameId || isSameName;
-        });
-
-        if (ongoingSameMachine) {
-          const ticketNo = ongoingSameMachine.ticket_ID ? (String(ongoingSameMachine.ticket_ID).startsWith('TKT-') ? String(ongoingSameMachine.ticket_ID) : `TKT-${String(ongoingSameMachine.ticket_ID).padStart(4, '0')}`) : 'ongoing ticket';
-          const machineLabel = ongoingSameMachine.equipment || ongoingSameMachine.machine_name || review.machineModel || 'this machine';
-          addMessage({
-            id: `ai-${Date.now()}`,
-            role: 'ai',
-            content: `Notice: You already have an active ongoing support ticket for **${machineLabel}** (**${ticketNo}** - Status: *${ongoingSameMachine.status || 'Open'}*). Duplicate ticket creation for the same machine is restricted until resolved.\n\nOpening review form: If you have an issue with a **different machine**, please select that machine in the form.`,
-            timestamp: new Date().toISOString(),
-          });
-          setReviewData({
-            ...review,
-            machineModel: '',
-            machine_ID: null,
-          });
-          setShowReviewModal(true);
-          setShowTicketCard(false);
-          return;
-        }
-      } catch (err) {
-        console.warn("Failed to check ongoing customer tickets:", err);
-      }
+    let targetCategoryId = review.problem_category_ID || null;
+    const targetCategory = (review.category || '').trim().toLowerCase();
+    if (!targetCategoryId && ticketOptions?.problem_categories && targetCategory) {
+      const foundCat = ticketOptions.problem_categories.find(c =>
+        c.category_name?.toLowerCase() === targetCategory ||
+        targetCategory.includes(c.category_name?.toLowerCase())
+      );
+      if (foundCat) targetCategoryId = foundCat.problem_category_ID;
     }
 
-    setReviewData(review);
-    setShowReviewModal(true);
-  }, [currentUserId, escalationTicketData, generateRealReviewData, ticketOptions, addMessage]);
+    const prefill = {
+      title: review.problemSummary || '',
+      problemSummary: review.problemSummary || '',
+      machine_ID: targetMachineId || review.machine_ID || '',
+      machineModel: review.machineModel || '',
+      machine_name: review.machineModel || '',
+      problem_category_ID: targetCategoryId || review.problem_category_ID || '',
+      category: review.category || '',
+      category_name: review.category || '',
+      description: review.conversationSummary || '',
+      conversationSummary: review.conversationSummary || '',
+    };
+
+    navigate('/create-ticket', {
+      state: {
+        conversationId: activeConversationId,
+        conversation_id: activeConversationId,
+        fromConversationId: activeConversationId,
+        fromAiChat: true,
+        prefillData: prefill,
+      },
+    });
+  }, [activeConversationId, escalationTicketData, generateRealReviewData, ticketOptions, navigate]);
 
   const handleSubmitTicket = useCallback(async (formData) => {
     try {
@@ -1141,7 +1487,7 @@ function AISupportPage() {
 
       const activeConv = conversations.find(c => c.id === activeConversationId);
       let ticketTitle = (formData.problemSummary || activeConv?.title || 'Support Ticket').trim();
-      ticketTitle = ticketTitle.replace(/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim();
+      ticketTitle = ticketTitle.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim();
       if (ticketTitle.length > 0) {
         ticketTitle = formatProperTitleCase(ticketTitle);
       } else {
@@ -1171,7 +1517,9 @@ function AISupportPage() {
       }
 
       const rawTicketId = response?.ticket?.ticket_ID || response?.ticket_ID || response?.dashboard_ticket?.ticket_ID || response?.id;
-      const formattedNo = rawTicketId ? (String(rawTicketId).startsWith('TKT-') ? String(rawTicketId) : `TKT-${String(rawTicketId).padStart(4, '0')}`) : 'TKT-0001';
+      const serverTicketNumber = response?.ticket?.ticket_number || response?.dashboard_ticket?.ticket_number || response?.ticket_number;
+      const formattedNo = serverTicketNumber
+        || (rawTicketId ? (String(rawTicketId).startsWith('TKT-') ? String(rawTicketId) : `TKT-${String(rawTicketId).padStart(4, '0')}`) : 'TKT-0001');
 
       setShowReviewModal(false);
       setTicketNumber(formattedNo);
@@ -1193,15 +1541,129 @@ function AISupportPage() {
       });
     } catch (err) {
       console.error('Failed to submit support ticket to enterprise ticketing system:', err);
-      const errorMsg = err?.response?.data?.message || 'Failed to submit ticket. Please check enterprise ticketing service connection.';
+      const errorMsg = err?.response?.data?.message || err?.message || 'Failed to submit ticket. Please check enterprise ticketing service connection.';
+      
+      setShowReviewModal(false);
+      setSubmissionError({
+        isOpen: true,
+        title: 'Ticket Submission Error',
+        message: errorMsg,
+      });
+
       addMessage({
-        id: `ai-${Date.now()}`,
+        id: `err-${Date.now()}`,
         role: 'ai',
-        content: `Ticket Submission Error: ${errorMsg}`,
+        isError: true,
+        errorTitle: 'Ticket Submission Error',
+        content: errorMsg,
+        savedForm: formData,
         timestamp: new Date().toISOString(),
       });
+
+      throw err;
     }
   }, [addMessage, conversations, activeConversationId, currentUserId]);
+
+  const handleSaveTicketDraft = useCallback(async (formData) => {
+    try {
+      const options = ticketOptions || await getTicketFormOptions().catch(() => null);
+
+      let matchedMachine = null;
+      let machineId = 1;
+      if (options?.machines && options.machines.length > 0) {
+        matchedMachine = options.machines.find(m =>
+          (m.machine_name && formData.machineModel && m.machine_name.toLowerCase().trim() === formData.machineModel.toLowerCase().trim()) ||
+          (m.machine_name && formData.machineModel && formData.machineModel.toLowerCase().includes(m.machine_name.toLowerCase())) ||
+          (m.machine_name && formData.machineModel && m.machine_name.toLowerCase().includes(formData.machineModel.toLowerCase())) ||
+          (m.model && formData.machineModel && formData.machineModel.toLowerCase().includes(m.model.toLowerCase()))
+        );
+        if (matchedMachine) {
+          machineId = matchedMachine.machine_ID;
+        } else {
+          machineId = formData.machine_ID || options.machines[0].machine_ID;
+        }
+      }
+
+      // Check ongoing tickets for this user for duplicate detection
+      const existingTickets = await getCustomerTickets({ createdBy: currentUserId || 1, forceRefresh: true }).catch(() => []);
+
+      const activeConv = conversations.find(c => c.id === activeConversationId);
+      let ticketTitle = (formData.problemSummary || activeConv?.title || 'Support Ticket').trim();
+      ticketTitle = ticketTitle.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim();
+      if (ticketTitle.length > 0) {
+        ticketTitle = formatProperTitleCase(ticketTitle);
+      } else {
+        ticketTitle = 'Equipment Support Request';
+      }
+
+      // Duplicate protection: block if an active ongoing ticket exists for this machine or identical problem
+      const ongoingSameMachine = (existingTickets || []).find(t => {
+        const s = (t.status || '').toLowerCase();
+        const isActive = s !== 'closed' && s !== 'resolved' && s !== 'completed' && s !== 'cancelled' && s !== 'discarded';
+        if (!isActive) return false;
+
+        const isSameId = matchedMachine && t.machine_ID && Number(t.machine_ID) === Number(matchedMachine.machine_ID);
+        const tEquip = (t.equipment || t.machine_name || '').trim().toLowerCase();
+        const cand = (formData.machineModel || '').trim().toLowerCase();
+        const isSameName = Boolean(cand && tEquip && (tEquip.includes(cand) || cand.includes(tEquip)));
+        const isSameTitle = t.title && ticketTitle && t.title.trim().toLowerCase() === ticketTitle.trim().toLowerCase();
+
+        return isSameId || isSameName || isSameTitle;
+      });
+
+      if (ongoingSameMachine) {
+        setShowReviewModal(false);
+        const ticketNo = ongoingSameMachine.ticket_ID ? (String(ongoingSameMachine.ticket_ID).startsWith('TKT-') ? String(ongoingSameMachine.ticket_ID) : `TKT-${String(ongoingSameMachine.ticket_ID).padStart(4, '0')}`) : 'ongoing ticket';
+        const machineLabel = ongoingSameMachine.equipment || ongoingSameMachine.machine_name || formData.machineModel || 'this machine';
+        setDuplicateModal({
+          isOpen: true,
+          machineName: machineLabel,
+          ticketNo,
+          ticketStatus: ongoingSameMachine.status || 'Open',
+          existingTicket: ongoingSameMachine,
+        });
+        return;
+      }
+
+      let categoryId = 1;
+      if (options?.problem_categories && options.problem_categories.length > 0) {
+        const found = options.problem_categories.find(c =>
+          c.category_name?.toLowerCase() === (formData.category || '').toLowerCase()
+        );
+        if (found) categoryId = found.problem_category_ID;
+        else categoryId = options.problem_categories[0].problem_category_ID;
+      }
+
+      let priorityId = 2;
+      if (options?.ticket_priorities && options.ticket_priorities.length > 0) {
+        const found = options.ticket_priorities.find(p =>
+          p.priority_name?.toLowerCase() === (formData.priority || '').toLowerCase()
+        );
+        if (found) priorityId = found.priority_ID;
+        else priorityId = options.ticket_priorities[0].priority_ID;
+      }
+
+      const draftPayload = {
+        title: ticketTitle,
+        machine_ID: machineId,
+        problem_category_ID: categoryId,
+        priority_ID: priorityId,
+        description: formData.conversationSummary || formData.problemSummary || 'Draft created from AI Support Assistant.',
+      };
+
+      const res = await saveTicketDraft(draftPayload);
+      const savedDraftId = res.draft?.id || res.id;
+
+      setShowReviewModal(false);
+      setShowTicketCard(false);
+
+      // Redirect to the draft ticket creation page with draft data pre-loaded
+      navigate('/create-ticket', { state: { draftId: savedDraftId } });
+    } catch (err) {
+      console.error('Failed to save draft from AI Support:', err);
+      throw err;
+    }
+  }, [currentUserId, conversations, activeConversationId, ticketOptions, navigate]);
 
   const handleViewTicket = useCallback(() => {
     setShowSuccess(false);
@@ -1210,7 +1672,9 @@ function AISupportPage() {
 
   const handleCloseSuccess = useCallback(() => {
     setShowSuccess(false);
-  }, []);
+    // The chat is finished once its ticket exists; move the customer to a new chat.
+    handleNewChat();
+  }, [handleNewChat]);
 
   const handleContinueChatting = useCallback(() => {
     setShowTicketCard(false);
@@ -1230,6 +1694,31 @@ function AISupportPage() {
     }, 1200);
   }, [addMessage]);
 
+  const handleFeedbackResolved = useCallback((msgId) => {
+    setFeedbackMap(prev => ({ ...prev, [msgId]: 'resolved' }));
+    addMessage({
+      id: `feedback-resolved-${Date.now()}`,
+      role: 'ai',
+      content: 'Glad to hear the troubleshooting steps resolved your issue! If you experience any other machine problems, feel free to start a new chat anytime.',
+      timestamp: new Date().toISOString(),
+    });
+  }, [addMessage]);
+
+  const handleFeedbackUnresolved = useCallback((msgId) => {
+    setFeedbackMap(prev => ({ ...prev, [msgId]: 'unresolved' }));
+  }, []);
+
+  const handleContinueChattingFromPrompt = useCallback((msgId) => {
+    setFeedbackMap(prev => ({ ...prev, [msgId]: 'continue' }));
+    inputRef.current?.focus();
+    addMessage({
+      id: `ai-prompt-${Date.now()}`,
+      role: 'ai',
+      content: 'Please describe what happened when you tried the steps above, or share any specific error codes displayed on your machine.',
+      timestamp: new Date().toISOString(),
+    });
+  }, [addMessage]);
+
   const handleBack = useCallback(() => {
     const dept = (user?.department || user?.profile?.department?.name || '').toLowerCase();
     const role = (user?.role || user?.profile?.role?.name || '').toLowerCase();
@@ -1242,51 +1731,64 @@ function AISupportPage() {
   }, [navigate, user]);
 
   return (
-    <div className="flex flex-col h-screen p-4">
-      <div className="flex flex-1 bg-white rounded-xl shadow-md border border-gray-100 overflow-hidden min-h-0">
+    <div className="flex flex-col h-screen p-4 bg-page">
+      <div className="flex flex-1 bg-card rounded-xl shadow-xs border border-border overflow-hidden min-h-0">
         {sidebarOpen && (
-          <div className="w-[280px] lg:w-[300px] border-r border-gray-100 flex flex-col flex-shrink-0 bg-gray-50/50">
-            <div className="px-3 pt-6 pb-3 border-b border-gray-100 flex-shrink-0 space-y-4">
+          <div className="w-[280px] lg:w-[300px] border-r border-border flex flex-col shrink-0 bg-slate-50/50">
+            <div className="px-3 pt-6 pb-3 border-b border-border shrink-0 space-y-4">
               <button
                 onClick={handleBack}
-                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-500 hover:text-[#252578] hover:bg-gray-100 rounded-lg transition-all cursor-pointer"
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-muted hover:text-primary hover:bg-slate-100 rounded-lg transition-all cursor-pointer"
               >
                 <ArrowLeft size={14} />
                 Back to Dashboard
               </button>
               <button
                 onClick={handleNewChat}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-white border border-gray-200 hover:border-[#252578] hover:text-[#252578] text-gray-700 rounded-lg text-xs font-semibold transition-all shadow-sm cursor-pointer"
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-card border border-border hover:border-primary hover:text-primary text-slate-dark rounded-lg text-xs font-semibold transition-all shadow-xs cursor-pointer"
               >
                 <Plus size={14} />
                 New Chat
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto py-2">
-              {conversations.map((conv) => (                <div
+            <div className="flex-1 overflow-y-auto py-2" aria-busy={conversationsLoading}>
+              {conversationsLoading && (
+                <div className="space-y-2 px-3" data-testid="conversation-list-skeleton">
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <div key={i} className="flex items-start gap-2 py-2">
+                      <SkeletonLoader className="h-4 w-4 rounded" />
+                      <div className="flex-1 space-y-2">
+                        <SkeletonLoader className="h-3 w-3/4" />
+                        <SkeletonLoader className="h-2 w-1/3" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!conversationsLoading && conversations.map((conv) => (                <div
                   key={conv.id}
                   onClick={() => loadConversation(conv.id)}
                   className={`group w-full flex items-start gap-2.5 px-3 py-2.5 text-left transition-all border-l-2 cursor-pointer ${
                     activeConversationId === conv.id
-                      ? 'bg-[#252578]/5 border-l-[#252578]'
-                      : 'border-l-transparent hover:bg-gray-100'
+                      ? 'bg-primary/5 border-l-primary'
+                      : 'border-l-transparent hover:bg-slate-100'
                   }`}
                 >
-                  <MessageSquare size={16} className="text-gray-400 mt-0.5 flex-shrink-0" />
+                  <MessageSquare size={16} className="text-slate-muted mt-0.5 shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <p className={`text-xs truncate ${activeConversationId === conv.id ? 'font-semibold text-[#252578]' : 'font-medium text-gray-700'}`}>
+                    <p className={`text-xs truncate ${activeConversationId === conv.id ? 'font-semibold text-primary' : 'font-medium text-slate-dark'}`}>
                       {conv.title}
                     </p>
                     <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className="text-[10px] text-gray-400">{formatShortTime(conv.timestamp)}</span>
-                      <span className="text-[10px] text-gray-300">·</span>
-                      <span className="text-[10px] text-gray-400">{conv.messageCount} msgs</span>
+                      <span className="text-[10px] text-slate-muted">{formatShortTime(conv.timestamp || conv.updated_at || conv.created_at)}</span>
+                      <span className="text-[10px] text-slate-300">·</span>
+                      <span className="text-[10px] text-slate-muted">{conv.message_count !== undefined ? conv.message_count : (conv.messageCount || 0)} msgs</span>
                     </div>
                   </div>
                   <button
                     onClick={(e) => handleDeleteConversation(e, conv.id)}
-                    className="p-1 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-gray-200 text-gray-400 hover:text-red-500 transition-all flex-shrink-0 cursor-pointer"
+                    className="p-1 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-slate-200 text-slate-muted hover:text-red-500 transition-all shrink-0 cursor-pointer"
                     title="Delete conversation"
                   >
                     <Trash2 size={12} />
@@ -1295,19 +1797,19 @@ function AISupportPage() {
               ))}
             </div>
 
-            <div className="p-3 border-t border-gray-100 flex-shrink-0">
+            <div className="p-3 border-t border-border shrink-0">
               <div className="flex items-center gap-2.5 px-2 py-2">
-                <div className="w-7 h-7 rounded-full bg-[#252578] text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0">
+                <div className="w-7 h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-[10px] font-bold shrink-0">
                   {(() => {
                     const name = user?.first_name || user?.name || 'User';
                     return name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
                   })()}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-semibold text-gray-800 truncate">
+                  <p className="text-xs font-semibold text-slate-dark truncate">
                     {user?.first_name ? `${user.first_name} ${user.last_name || ''}` : (user?.name || 'User')}
                   </p>
-                  <p className="text-[10px] text-gray-400 truncate">{user?.email || ''}</p>
+                  <p className="text-[10px] text-slate-muted truncate">{user?.email || ''}</p>
                 </div>
               </div>
             </div>
@@ -1315,54 +1817,198 @@ function AISupportPage() {
         )}
 
         <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex items-center justify-between px-6 py-3 border-b border-gray-100 bg-white flex-shrink-0">
+          <div className="flex items-center justify-between px-6 py-3 border-b border-border bg-card shrink-0">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full bg-[#252578] flex items-center justify-center">
-                <Bot size={18} className="text-white" />
+              <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center shadow-xs">
+                <Bot size={20} className="text-white" />
               </div>
               <div>
-                <p className="font-semibold text-sm text-gray-800">AI Support Assistant</p>
-                <p className="text-[11px] text-gray-500">Powered by AI Knowledge Base</p>
+                <div className="flex items-center gap-2">
+                  <h1 className="font-bold text-sm text-slate-dark">AI Support Assistant</h1>
+                  <span className="bg-accent/10 border border-accent/20 text-primary text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
+                    Automated System
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-muted">
+                  Not a live human agent · AI searches technical manuals & knowledge base
+                </p>
               </div>
             </div>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-50 border border-green-200 text-green-700 text-xs font-semibold">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-              Online
-            </span>
+            <div className="flex items-center gap-2">
+              {messages.length > 2 && (
+                <button
+                  onClick={handleClearChat}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-muted hover:text-red-600 hover:bg-red-50 rounded-lg transition-all border border-border hover:border-red-200 cursor-pointer"
+                  title="Clear all messages in this conversation"
+                >
+                  <Trash2 size={13} />
+                  <span>Clear Chat</span>
+                </button>
+              )}
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                Online
+              </span>
+            </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3 bg-[#f4f7fb]/50">
-            {messages.map((msg) => (
-              <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className="max-w-[75%] flex flex-col">
-                  <div className="flex items-start gap-3">
-                    {(msg.role === 'ai' || msg.role === 'assistant') && (
-                      <div className="w-8 h-8 rounded-full bg-[#252578] flex items-center justify-center flex-shrink-0 mt-1">
-                        <Bot size={16} className="text-white" />
-                      </div>
-                    )}
-                    <div>
-                      <div className={msg.role === 'user'
-                        ? 'px-4 py-2.5 bg-[#252578] text-white rounded-2xl rounded-br-md'
-                        : 'bg-white text-gray-800 border border-gray-100 rounded-2xl rounded-bl-md shadow-sm px-4 py-3'
-                      }>
-                        {typeof msg.content === 'string' ? (
-                          <FormattedText text={msg.content} />
-                        ) : (
-                          msg.content
-                        )}
-                      </div>
-                      {msg.role === 'ai' && msg.sources && msg.sources.length > 0 && (
-                        <AISourceList sources={msg.sources} />
+          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3 bg-page" aria-busy={conversationsLoading || Boolean(loadingConversationId)}>
+            {(conversationsLoading || loadingConversationId) ? (
+              <div className="space-y-4" data-testid="chat-messages-skeleton">
+                {[0, 1, 2].map((i) => (
+                  <React.Fragment key={i}>
+                    <div className="flex items-start gap-2">
+                      <SkeletonLoader className="h-8 w-8 rounded-full" />
+                      <SkeletonLoader className="h-16 w-2/3 rounded-2xl" />
+                    </div>
+                    <div className="flex justify-end">
+                      <SkeletonLoader className="h-10 w-1/2 rounded-2xl" />
+                    </div>
+                  </React.Fragment>
+                ))}
+              </div>
+            ) : messages.map((msg, msgIndex) => {
+              const isErrorMessage = msg.isError || (typeof msg.content === 'string' && msg.content.startsWith('Ticket Submission Error:'));
+              const displayErrorText = msg.isError
+                ? (typeof msg.content === 'string' ? msg.content : msg.errorMessage)
+                : (typeof msg.content === 'string' && msg.content.startsWith('Ticket Submission Error:')
+                    ? msg.content.replace(/^Ticket Submission Error:\s*/, '')
+                    : msg.content);
+              const messageKey = msg.id || msg._id || `msg-${msgIndex}-${msg.timestamp || ''}`;
+
+              return (
+                <div key={messageKey} className={`group/msg flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className="max-w-[75%] flex flex-col">
+                    <div className="flex items-start gap-3">
+                      {(msg.role === 'ai' || msg.role === 'assistant') && (
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-1 ${isErrorMessage ? 'bg-red-600' : 'bg-primary'}`}>
+                          {isErrorMessage ? <AlertTriangle size={16} className="text-white" /> : <Bot size={16} className="text-white" />}
+                        </div>
                       )}
-                      <p className={`text-[10px] text-gray-400 mt-1 ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
-                        {formatTime(msg.timestamp)}
-                      </p>
+                      <div>
+                        {msg.role === 'ai' && !isErrorMessage && (
+                          <div className="flex items-center gap-1.5 mb-1.5 text-[11px] font-bold text-[#252578]">
+                            <Bot size={13} />
+                            <span>AI Assistant (Automated)</span>
+                          </div>
+                        )}
+                        {isErrorMessage ? (
+                          <div className="bg-red-50 border border-red-200 rounded-2xl rounded-bl-md shadow-xs p-4 text-left">
+                            <div className="flex items-start gap-3">
+                              <AlertTriangle size={20} className="text-red-600 shrink-0 mt-0.5" />
+                              <div className="flex-1">
+                                <p className="text-sm font-bold text-red-800">
+                                  {msg.errorTitle || 'Ticket Submission Error'}
+                                </p>
+                                <p className="text-xs text-red-700 mt-1.5 leading-relaxed font-medium">
+                                  {displayErrorText}
+                                </p>
+                                <div className="flex flex-wrap gap-2 mt-3">
+                                  <button
+                                    onClick={() => navigate('/my-tickets')}
+                                    className="px-3.5 py-1.5 bg-primary hover:bg-primary-hover text-white text-xs font-semibold rounded-xl transition-all cursor-pointer shadow-xs"
+                                  >
+                                    View My Tickets
+                                  </button>
+                                  {(msg.savedForm || reviewData) && (
+                                    <button
+                                      onClick={() => {
+                                        if (msg.savedForm) setReviewData(msg.savedForm);
+                                        setShowReviewModal(true);
+                                      }}
+                                      className="px-3.5 py-1.5 bg-card hover:bg-slate-50 border border-border text-slate-dark text-xs font-semibold rounded-xl transition-all cursor-pointer"
+                                    >
+                                      Edit & Retry
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className={msg.role === 'user'
+                            ? 'px-4 py-2.5 bg-primary text-primary-foreground rounded-2xl rounded-br-md shadow-xs'
+                            : 'bg-card text-slate-dark border border-border rounded-2xl rounded-bl-md shadow-xs px-4 py-3'
+                          }>
+                            {typeof msg.content === 'string' ? (
+                              <FormattedText text={msg.content} />
+                            ) : (
+                              msg.content
+                            )}
+
+                            {/* "Did this help?" Interactive Feedback Prompt on substantive AI troubleshooting messages */}
+                            {msg.role === 'ai' && !isErrorMessage && msg.id !== 'welcome' && msg.id !== 'gather-details' && (feedbackMap[msg.id] || isTroubleshootingResponse(msg.content)) && (
+                              <div className="mt-3 pt-2.5 border-t border-gray-150 text-left">
+                                {feedbackMap[msg.id] === 'resolved' ? (
+                                  <div className="bg-green-50 border border-green-200 rounded-xl p-2.5 text-xs text-green-800 flex items-center gap-2">
+                                    <CheckCircle size={15} className="text-green-600 shrink-0" />
+                                    <span className="font-semibold">Thank you for confirming! Marked as resolved.</span>
+                                  </div>
+                                ) : feedbackMap[msg.id] === 'unresolved' ? (
+                                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs space-y-2">
+                                    <p className="font-semibold text-amber-900">Issue still unresolved. How would you like to proceed?</p>
+                                    <div className="flex flex-wrap gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleContinueChattingFromPrompt(msg.id)}
+                                        className="px-3 py-1.5 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-semibold rounded-lg transition cursor-pointer text-xs"
+                                      >
+                                        Continue Troubleshooting
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setFeedbackMap(prev => ({ ...prev, [msg.id]: 'escalated' }));
+                                          handleCreateTicket();
+                                        }}
+                                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg transition cursor-pointer text-xs inline-flex items-center gap-1 shadow-xs"
+                                      >
+                                        <Plus size={13} />
+                                        Create a Support Ticket
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex flex-wrap items-center justify-between gap-2 py-1 text-xs">
+                                    <span className="text-gray-500 font-medium text-[11px]">Did this help resolve your concern?</span>
+                                    <div className="flex items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleFeedbackResolved(msg.id)}
+                                        className="px-2.5 py-1 bg-white hover:bg-green-50 text-gray-700 hover:text-green-800 border border-gray-200 hover:border-green-300 rounded-lg text-xs font-semibold transition cursor-pointer inline-flex items-center gap-1"
+                                      >
+                                        <CheckCircle size={12} className="text-green-600" />
+                                        Yes
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleFeedbackUnresolved(msg.id)}
+                                        className="px-2.5 py-1 bg-white hover:bg-amber-50 text-gray-700 hover:text-amber-800 border border-gray-200 hover:border-amber-300 rounded-lg text-xs font-semibold transition cursor-pointer inline-flex items-center gap-1"
+                                      >
+                                        <AlertTriangle size={12} className="text-amber-600" />
+                                        No, need help
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {msg.role === 'ai' && !isErrorMessage && msg.sources && msg.sources.length > 0 && (
+                          <AISourceList sources={msg.sources} />
+                        )}
+                        <div className={`flex items-center gap-2 mt-1 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                          <p className="text-[10px] text-slate-muted">
+                            {formatTime(msg.timestamp)}
+                          </p>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
             {showSuggestionChips && messages.length === 1 && (
               <div className="flex justify-start pl-11">
@@ -1371,7 +2017,7 @@ function AISupportPage() {
                     <button
                       key={chip}
                       onClick={() => handleSuggestionClick(chip)}
-                      className="px-3 py-1.5 bg-white border border-gray-200 rounded-full text-xs font-medium text-gray-600 hover:border-[#252578] hover:text-[#252578] hover:bg-[#252578]/5 transition-all cursor-pointer"
+                      className="px-3 py-1.5 bg-card border border-border rounded-full text-xs font-medium text-slate-muted hover:border-accent hover:text-accent hover:bg-accent/5 transition-all cursor-pointer"
                     >
                       {chip}
                     </button>
@@ -1392,11 +2038,11 @@ function AISupportPage() {
             <div ref={messagesEndRef} />
           </div>
 
-          <div className="px-6 py-3 border-t border-gray-100 bg-white flex-shrink-0">
+          <div className="px-6 py-3 border-t border-border bg-card shrink-0">
             <div className="flex items-center gap-3">
               <button
                 type="button"
-                className="p-2 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all flex-shrink-0 cursor-pointer"
+                className="p-2 rounded-xl text-slate-muted hover:text-slate-dark hover:bg-slate-100 transition-all shrink-0 cursor-pointer"
                 title="Attach file"
               >
                 <Paperclip size={18} />
@@ -1408,12 +2054,12 @@ function AISupportPage() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Type a message..."
-                className="flex-1 rounded-xl border border-gray-200 px-4 py-2.5 text-sm outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-[#252578] resize-none min-h-[42px] max-h-[120px] overflow-y-auto"
+                className="flex-1 rounded-xl border border-border px-4 py-2.5 text-sm outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 resize-none min-h-[42px] max-h-[120px] overflow-y-auto"
               />
               <button
                 onClick={handleSend}
                 disabled={!input.trim() || isTyping}
-                className="bg-[#252578] text-white rounded-xl px-4 py-2.5 transition-all hover:bg-[#1f1f66] disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0 cursor-pointer"
+                className="bg-primary text-primary-foreground rounded-xl px-4 py-2.5 transition-all hover:bg-primary-hover disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
               >
                 <Send size={18} />
               </button>
@@ -1428,6 +2074,7 @@ function AISupportPage() {
         machines={ticketOptions?.machines || []}
         onClose={() => setShowReviewModal(false)}
         onSubmit={handleSubmitTicket}
+        onSaveDraft={handleSaveTicketDraft}
       />
 
       <SuccessDialog
@@ -1435,6 +2082,17 @@ function AISupportPage() {
         ticketNumber={ticketNumber}
         onViewTicket={handleViewTicket}
         onClose={handleCloseSuccess}
+      />
+
+      <SubmissionErrorDialog
+        isOpen={submissionError.isOpen}
+        title={submissionError.title}
+        message={submissionError.message}
+        onViewTickets={() => {
+          setSubmissionError(prev => ({ ...prev, isOpen: false }));
+          navigate('/my-tickets');
+        }}
+        onClose={() => setSubmissionError(prev => ({ ...prev, isOpen: false }))}
       />
 
       <DuplicateTicketModal

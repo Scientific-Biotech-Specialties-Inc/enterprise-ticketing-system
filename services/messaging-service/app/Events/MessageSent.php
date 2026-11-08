@@ -49,7 +49,9 @@ class MessageSent implements ShouldBroadcastNow
             'sender_id' => $this->message->sender_id,
             'sender_name' => $this->message->sender_name,
             'sender_type' => $this->message->sender_type,
+            'sender_role' => $this->message->sender_role ?? null,
             'message' => $this->message->message,
+            'attachments' => $this->message->attachments ?? [],
             'created_at' => $this->message->created_at ? $this->message->created_at->toIso8601String() : now()->toIso8601String(),
         ];
     }

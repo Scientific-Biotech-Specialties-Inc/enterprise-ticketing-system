@@ -1,12 +1,22 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { MoreVertical, Filter } from 'lucide-react';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { MoreVertical, Filter, RotateCcw, Trash2, Edit3, FileText, X, Plus, Search, Calendar, User, Tag, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
+import { PageHeader } from '@/components/ui/page-header';
+import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
+import { DataTableSkeleton, DataTableEmptyState } from '@/components/ui/data-table';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import TicketModal from '@/components/TicketModal';
 import CustomerTicketDetailModal from '@/components/CustomerTicketDetailModal';
 import NotificationModal from '@/components/NotificationModal';
-import SkeletonLoader from '@/components/SkeletonLoader';
-import { statusColors } from '@/constants/employeeTickets';
+import { statusColors, priorityColors } from '@/constants/employeeTickets';
 import { useAuth } from '@/context/AuthContext';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import { normalizeCasing } from '@/utils/normalizeCasing';
@@ -20,15 +30,19 @@ import {
   saveCustomerTicketDetail,
   getTicketDetails,
   updateTicket,
+  reopenTicket,
+  getTicketDrafts,
+  deleteTicketDraft,
+  getCustomerFilterOptions,
 } from '@/services/ticketService';
-import { getExternalTicketsFromStorage, seedDemoExternalTicket } from '@/data/mockFeedbackData';
 import { getMaxOpenTicketsLimit, OPEN_STATUS_SET } from '@/data/ticketLimitConfig';
 
 import { parseUTCDate } from '@/utils/dateUtils';
 import TitleCasingModal from '@/components/TitleCasingModal';
-import { formatProperTitleCase, needsProperCasing } from '@/utils/titleCaseUtils';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
+import { hasFeedbackBeenSubmitted, fetchFeedbackForTicket } from '@/data/mockFeedbackData';
 
-const ACTIVE_STATUSES = ['Open', 'Pending Assignment', 'In Progress', 'Pending', 'On Hold'];
+const ACTIVE_STATUSES = ['Open', 'Pending Assignment', 'In Progress', 'Pending', 'On Hold', 'Closed'];
 const HISTORY_STATUSES = ['Resolved', 'Closed', 'Discarded by Customer', 'Discarded'];
 
 const getStoredUser = () => {
@@ -41,6 +55,17 @@ const getStoredUser = () => {
 
 const formatDate = (value) => formatDisplayDate(value);
 
+const getTicketAssignedEmployee = (ticket) => {
+  if (!ticket) return 'Unassigned';
+  const candidate =
+    ticket.assigned_employee ||
+    ticket.assigned_employee_name ||
+    ticket.assigned_to_name ||
+    (Array.isArray(ticket.assigned_employees) && ticket.assigned_employees[0]?.name ? ticket.assigned_employees[0].name : null) ||
+    (typeof ticket.assigned_to === 'string' && ticket.assigned_to.trim() && ticket.assigned_to.trim().toLowerCase() !== 'unassigned' ? ticket.assigned_to.trim() : null);
+  return candidate || 'Unassigned';
+};
+
 const statusClass = (s) => statusColors[s] ?? (s?.includes('Discarded') ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-700');
 
 export default function MyTickets({ mode = 'all' }) {
@@ -50,6 +75,9 @@ export default function MyTickets({ mode = 'all' }) {
   const customerId = effectiveUser?.id || 1;
   const location = useLocation();
   const navigate = useNavigate();
+  const params = useParams();
+  const [searchParams] = useSearchParams();
+  const urlTicketId = params?.ticketId || searchParams.get('ticketId');
 
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -60,6 +88,7 @@ export default function MyTickets({ mode = 'all' }) {
   const [modalLoading, setModalLoading] = useState(false);
   const [loadingText, setLoadingText] = useState('Loading...');
   const [editingTicket, setEditingTicket] = useState(null);
+  useLockBodyScroll(!!editingTicket);
   const [editTitle, setEditTitle] = useState('');
   const [titleCasingData, setTitleCasingData] = useState(null);
   const [showTitleCasingModal, setShowTitleCasingModal] = useState(false);
@@ -70,39 +99,137 @@ export default function MyTickets({ mode = 'all' }) {
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPos, setMenuPos] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
-  const [filters, setFilters] = useState({
-    status: '',
-    category: '',
-    dateFrom: '',
-    dateTo: '',
-    search: '',
+  const [activeTab, setActiveTab] = useState(location.state?.tab === 'drafts' ? 'drafts' : 'tickets'); // 'tickets' | 'drafts'
+  const [feedbackVersion, setFeedbackVersion] = useState(0);
+  const [drafts, setDrafts] = useState([]);
+  const [loadingDrafts, setLoadingDrafts] = useState(false);
+  const [filterOptions, setFilterOptions] = useState({
+    categories: [],
+    statuses: [],
+    machines: [],
   });
 
-  const loadTickets = useCallback(async ({ forceRefresh = false } = {}) => {
-    setLoading(true);
-    setError('');
+  const [filters, setFilters] = useState({
+    keywords: '',
+    status: '',
+    category: '',
+    machine: '',
+    priority: '',
+    employee: '',
+    date: '',
+  });
 
+  useEffect(() => {
+    if (location.state?.tab) {
+      setActiveTab(location.state.tab);
+    }
+  }, [location.state?.tab]);
+
+  // Auto-open ticket modal when navigating with ticketId (e.g. from email links or alerts)
+  useEffect(() => {
+    if (!urlTicketId) return;
+    const cleanId = String(urlTicketId).replace(/\D/g, '');
+    if (!cleanId) return;
+
+    let isMounted = true;
+    (async () => {
+      setModalLoading(true);
+      setLoadingText('Loading ticket details...');
+      try {
+        const fullTicket = await getTicketDetails(Number(cleanId));
+        if (isMounted && fullTicket) {
+          setSelectedTicket({
+            ...fullTicket,
+            id: fullTicket.id || `TKT-${String(cleanId).padStart(4, '0')}`,
+            status: fullTicket.status || 'Open',
+            description: fullTicket.description || '',
+            proofAttachments: fullTicket.proofAttachments || [],
+            proofFiles: fullTicket.proofFiles || [],
+            attachments: fullTicket.attachments || fullTicket.ticket_attachments || [],
+            can_discard: (fullTicket.status || 'Open') === 'Open' && !fullTicket.assigned_to,
+          });
+        }
+      } catch (err) {
+        console.warn('Could not auto-open ticket from URL:', err);
+      } finally {
+        if (isMounted) setModalLoading(false);
+      }
+    })();
+
+    return () => { isMounted = false; };
+  }, [urlTicketId]);
+
+  const loadDrafts = useCallback(async () => {
+    setLoadingDrafts(true);
+    try {
+      const list = await getTicketDrafts();
+      setDrafts(list || []);
+    } catch (err) {
+      console.warn('Failed to load ticket drafts:', err);
+    } finally {
+      setLoadingDrafts(false);
+    }
+  }, [customerId]);
+
+  const loadFilterOptions = useCallback(async () => {
+    try {
+      const opts = await getCustomerFilterOptions(customerId);
+      if (opts) {
+        setFilterOptions((prev) => ({
+          ...prev,
+          categories: opts.categories || [],
+          statuses: opts.statuses || [],
+          priorities: opts.priorities || [],
+          machines: opts.machines || [],
+          employees: opts.employees || prev.employees || [],
+        }));
+      }
+    } catch (err) {
+      console.warn('Failed to load customer filter options:', err);
+    }
+  }, [customerId]);
+
+  const loadTickets = useCallback(async ({ forceRefresh = false, source = 'manual' } = {}) => {
+    // Realtime ticks (websocket/poll) refresh silently instead of flashing the skeleton.
+    if (source !== 'websocket' && source !== 'poll') setLoading(true);
+    setError('');
     try {
       const ticketsList = await getCustomerTickets({ createdBy: customerId, limit: 100, forceRefresh });
-      const externalTickets = getExternalTicketsFromStorage();
-      const merged = [...externalTickets, ...ticketsList];
-      setTickets(merged);
+      const seen = new Set();
+      const uniqueTickets = (ticketsList || []).filter((t) => {
+        const id = t.id || t.ticket_ID;
+        if (!id || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+      setTickets(uniqueTickets);
+
+      // Prefetch feedback for completed tickets so feedback status is immediately known
+      uniqueTickets.forEach((t) => {
+        if (t.status === 'Closed' || t.status === 'Resolved') {
+          const tId = t.id || t.ticket_ID;
+          if (tId && typeof fetchFeedbackForTicket === 'function') {
+            fetchFeedbackForTicket(tId).catch(() => {});
+          }
+        }
+      });
     } catch (err) {
-      const externalTickets = getExternalTicketsFromStorage();
-      if (externalTickets.length > 0) {
-        setTickets(externalTickets);
-      } else {
-        setError(err?.response?.data?.message || 'Failed to load tickets.');
-      }
+      setError(err?.response?.data?.message || 'Failed to load tickets.');
     } finally {
       setLoading(false);
     }
   }, [customerId]);
 
   useEffect(() => {
-    seedDemoExternalTicket();
+    try {
+      localStorage.removeItem('demo_external_tickets');
+    } catch {
+      // ignore
+    }
     loadTickets({ forceRefresh: false });
-  }, [loadTickets]);
+    loadDrafts();
+    loadFilterOptions();
+  }, [loadTickets, loadDrafts, loadFilterOptions]);
 
   useEffect(() => {
     if (!openMenuId) return;
@@ -137,32 +264,178 @@ export default function MyTickets({ mode = 'all' }) {
     intervalMs: 30000,
   });
 
-  const categories = useMemo(() => {
-    const unique = new Set(tickets.map((ticket) => ticket.category).filter(Boolean));
-    return Array.from(unique).sort();
-  }, [tickets]);
+  const availableEmployees = useMemo(() => {
+    const set = new Set();
+    if (Array.isArray(filterOptions.employees) && filterOptions.employees.length > 0) {
+      filterOptions.employees.forEach((e) => {
+        const name = typeof e === 'string' ? e : (e.name || `${e.first_name || ''} ${e.last_name || ''}`.trim());
+        if (name) set.add(name);
+      });
+    }
+    (tickets || []).forEach((t) => {
+      const emp = t.assigned_employee || t.assigned_employee_name || t.assigned_to_name || (typeof t.assigned_to === 'string' ? t.assigned_to : null);
+      if (emp && typeof emp === 'string' && emp.trim() && emp.trim().toLowerCase() !== 'unassigned') {
+        set.add(emp.trim());
+      }
+    });
+    return Array.from(set).sort();
+  }, [filterOptions.employees, tickets]);
+
+  const availablePriorities = useMemo(() => {
+    if (filterOptions.priorities && filterOptions.priorities.length > 0) {
+      return filterOptions.priorities.map((p) => (typeof p === 'string' ? p : (p.priority_name || p.name || p.label || String(p.priority_ID))));
+    }
+    const set = new Set();
+    (tickets || []).forEach((t) => {
+      if (t.priority) set.add(t.priority);
+    });
+    if (set.size > 0) return Array.from(set);
+    return ['Low', 'Medium', 'High', 'Critical'];
+  }, [filterOptions.priorities, tickets]);
+
+  const availableMachines = useMemo(() => {
+    if (filterOptions.machines && filterOptions.machines.length > 0) {
+      return filterOptions.machines.map((m) => {
+        if (typeof m === 'string') return m;
+        return m.machine_name ? `${m.machine_name}${m.serial_number ? ` - ${m.serial_number}` : ''}` : (m.label || m.name || (m.machine_ID ? `Machine #${m.machine_ID}` : ''));
+      }).filter(Boolean);
+    }
+    const set = new Set();
+    (tickets || []).forEach((t) => {
+      const m = t.equipment || t.machine_name;
+      if (m && m.trim()) set.add(m.trim());
+    });
+    return Array.from(set).sort();
+  }, [filterOptions.machines, tickets]);
+
+  const availableCategories = useMemo(() => {
+    if (filterOptions.categories && filterOptions.categories.length > 0) {
+      return filterOptions.categories.map((c) => (typeof c === 'string' ? c : (c.category_name || c.name || c.label || String(c.problem_category_ID))));
+    }
+    const set = new Set();
+    (tickets || []).forEach((t) => {
+      if (t.category && t.category.trim()) set.add(t.category.trim());
+    });
+    return Array.from(set).sort();
+  }, [filterOptions.categories, tickets]);
+
+  const availableStatuses = useMemo(() => {
+    if (filterOptions.statuses && filterOptions.statuses.length > 0) {
+      return filterOptions.statuses.map((s) => (typeof s === 'string' ? s : (s.status_name || s.name || s.label || String(s.ticket_status_ID))));
+    }
+    return isHistory ? HISTORY_STATUSES : ACTIVE_STATUSES;
+  }, [filterOptions.statuses, isHistory]);
+
+  const activeFilterList = useMemo(() => {
+    const list = [];
+    if (filters.keywords) list.push({ key: 'keywords', label: `Keywords: "${filters.keywords}"` });
+    if (filters.machine) list.push({ key: 'machine', label: `Machine: ${filters.machine}` });
+    if (filters.status) list.push({ key: 'status', label: `Status: ${filters.status}` });
+    if (filters.category) list.push({ key: 'category', label: `Category: ${filters.category}` });
+    if (filters.priority) list.push({ key: 'priority', label: `Priority: ${filters.priority}` });
+    if (filters.employee) list.push({ key: 'employee', label: `Employee: ${filters.employee}` });
+    if (filters.date) list.push({ key: 'date', label: `Date: ${filters.date}` });
+    return list;
+  }, [filters]);
 
   const visibleTickets = useMemo(() => {
     return tickets.filter((ticket) => {
       const normalizedStatus = ticket.status === 'Discarded by Customer' ? 'Discarded' : ticket.status;
-      if (isHistory && !HISTORY_STATUSES.includes(ticket.status)) return false;
-      if (!isHistory && (HISTORY_STATUSES.includes(ticket.status) || ['Closed', 'Resolved', 'Discarded', 'Discarded by Customer'].includes(ticket.status))) return false;
-      if (filters.status && normalizedStatus !== filters.status) return false;
-      if (filters.category && (ticket.category || '').trim() !== filters.category.trim()) return false;
-      const ticketDate = ticket.date_created ? new Date(String(ticket.date_created).replace(' ', 'T')) : null;
-      const isValidTicketDate = ticketDate && !isNaN(ticketDate.getTime());
-      if (filters.dateFrom && isValidTicketDate) {
-        const from = new Date(`${filters.dateFrom}T00:00:00`);
-        if (ticketDate < from) return false;
-      }
-      if (filters.dateTo && isValidTicketDate) {
-        const to = new Date(`${filters.dateTo}T23:59:59`);
-        if (ticketDate > to) return false;
+      const isInternal = ticket.is_internal || ticket.ticket_type === 'Internal';
+      const hasFeedback = hasFeedbackBeenSubmitted(ticket.id) || hasFeedbackBeenSubmitted(ticket.ticket_ID);
+      const isClosedPendingFeedback = ticket.status === 'Closed' && !isInternal && !hasFeedback;
+
+      if (isHistory) {
+        if (!HISTORY_STATUSES.includes(ticket.status)) return false;
+        // Closed tickets pending feedback stay in My Tickets until feedback is submitted
+        if (isClosedPendingFeedback) return false;
+      } else {
+        // Active "My Tickets"
+        if (filters.status) {
+          // If the user explicitly selects a status filter like 'Closed' or 'Resolved', respect it
+          if (ticket.status !== filters.status) return false;
+        } else {
+          if (ticket.status === 'Closed') {
+            if (!isClosedPendingFeedback) return false;
+          } else if (HISTORY_STATUSES.includes(ticket.status) || ['Resolved', 'Discarded', 'Discarded by Customer'].includes(ticket.status)) {
+            return false;
+          }
+        }
       }
 
-      const search = filters.search.trim().toLowerCase();
-      if (!search) return true;
-      return ticket.id.toLowerCase().includes(search) || ticket.title.toLowerCase().includes(search);
+      // Keywords filter (matching Ticket ID, Title, Description, Machine/Equipment, Category)
+      if (filters.keywords) {
+        const kw = filters.keywords.trim().toLowerCase();
+        const tid = String(ticket.id || '').toLowerCase();
+        const numId = String(ticket.ticket_ID || ticket.id || '').replace(/\D/g, '');
+        const cleanKw = kw.replace(/\D/g, '');
+        const matches = (
+          tid.includes(kw) ||
+          (cleanKw && numId.includes(cleanKw)) ||
+          (ticket.title && ticket.title.toLowerCase().includes(kw)) ||
+          (ticket.description && ticket.description.toLowerCase().includes(kw)) ||
+          (ticket.equipment && ticket.equipment.toLowerCase().includes(kw)) ||
+          (ticket.machine_name && ticket.machine_name.toLowerCase().includes(kw)) ||
+          (ticket.category && ticket.category.toLowerCase().includes(kw))
+        );
+        if (!matches) return false;
+      }
+
+      // Status filter
+      if (filters.status && normalizedStatus.toLowerCase() !== filters.status.toLowerCase()) {
+        return false;
+      }
+
+      // Category filter
+      if (filters.category && (ticket.category || '').trim().toLowerCase() !== filters.category.trim().toLowerCase()) {
+        return false;
+      }
+
+      // Machine filter
+      if (filters.machine) {
+        const machineFilter = filters.machine.trim().toLowerCase();
+        const ticketMachine = (ticket.equipment || ticket.machine_name || '').trim().toLowerCase();
+        if (!ticketMachine.includes(machineFilter)) {
+          return false;
+        }
+      }
+
+      // Priority filter
+      if (filters.priority && (ticket.priority || 'Medium').trim().toLowerCase() !== filters.priority.trim().toLowerCase()) {
+        return false;
+      }
+
+      // Employee filter
+      if (filters.employee) {
+        const empFilter = filters.employee.trim().toLowerCase();
+        const empName = getTicketAssignedEmployee(ticket).toLowerCase();
+        if (empFilter === 'unassigned') {
+          if (empName !== 'unassigned' && empName !== '' && empName !== 'null') {
+            return false;
+          }
+        } else {
+          if (!empName.includes(empFilter)) {
+            return false;
+          }
+        }
+      }
+
+      // Date filter
+      if (filters.date) {
+        const ticketDate = ticket.date_created ? new Date(String(ticket.date_created).replace(' ', 'T')) : null;
+        if (ticketDate && !isNaN(ticketDate.getTime())) {
+          const filterDateStr = filters.date; // "YYYY-MM-DD"
+          const year = ticketDate.getFullYear();
+          const month = String(ticketDate.getMonth() + 1).padStart(2, '0');
+          const day = String(ticketDate.getDate()).padStart(2, '0');
+          const ticketDateStr = `${year}-${month}-${day}`;
+          if (ticketDateStr !== filterDateStr) {
+            return false;
+          }
+        }
+      }
+
+      return true;
     });
   }, [filters, isHistory, tickets]);
 
@@ -173,6 +446,44 @@ export default function MyTickets({ mode = 'all' }) {
 
   const updateFilter = (key, value) => {
     setFilters((current) => ({ ...current, [key]: value }));
+  };
+
+  const clearFilter = (key) => {
+    setFilters((current) => ({ ...current, [key]: '' }));
+  };
+
+  const resetFilters = () => {
+    setFilters({
+      keywords: '',
+      status: '',
+      category: '',
+      machine: '',
+      priority: '',
+      employee: '',
+      date: '',
+    });
+  };
+
+  const handleEditDraft = (draft) => {
+    navigate('/create-ticket', { state: { draftId: draft.id } });
+  };
+
+  const handleDeleteDraft = (draft) => {
+    showConfirm(
+      'Delete this draft?',
+      `Delete "${draft.title || 'Untitled draft'}"? This action cannot be undone.`,
+      async () => {
+        closeNotif();
+        try {
+          await deleteTicketDraft(draft.id);
+          showSuccess('Draft Deleted', 'The draft has been permanently removed.');
+          loadDrafts();
+        } catch (err) {
+          showError('Error', err?.response?.data?.message || 'Failed to delete draft.');
+        }
+      },
+      { confirmText: 'Delete Draft', confirmClassName: 'bg-red-600 hover:bg-red-700' }
+    );
   };
 
   const customerOpenCount = useMemo(() => {
@@ -193,9 +504,12 @@ export default function MyTickets({ mode = 'all' }) {
         created_by: customerId,
       });
       
-      const createdId = response.ticket 
-        ? 'TKT-' + String(response.ticket.ticket_ID).padStart(3, '0')
-        : 'TKT-' + String(response.ticket_ID || 'new').padStart(3, '0');
+      const createdId = response.ticket?.ticket_number
+        || response.dashboard_ticket?.ticket_number
+        || response.ticket_number
+        || (response.ticket
+          ? 'TKT-' + String(response.ticket.ticket_ID).padStart(4, '0')
+          : 'TKT-' + String(response.ticket_ID || 'new').padStart(4, '0'));
         
       const newTicketId = response.ticket?.ticket_ID || response.ticket_ID;
         
@@ -283,17 +597,30 @@ export default function MyTickets({ mode = 'all' }) {
       })();
       setSelectedTicket({
         ...t,
-        ...fullTicket,
         ...localDetails,
-        description: localDetails.description || fullTicket.description || t.description || '',
-        last_updated: localDetails.last_updated || fullTicket.updated_at || fullTicket.last_updated || t.last_updated,
-        updated_at: localDetails.last_updated || fullTicket.updated_at,
+        ...fullTicket,
+        status: fullTicket.status || t.status || localDetails.status,
+        description: fullTicket.description || localDetails.description || t.description || '',
+        last_updated: fullTicket.updated_at || fullTicket.last_updated || localDetails.last_updated || t.last_updated,
+        updated_at: fullTicket.updated_at || localDetails.last_updated,
         timeline: mergedTimeline || fullTicket.timeline || localDetails.timeline,
-        resolved_at: fullTicket.resolved_at || null,
+        resolved_at: fullTicket.resolved_at || t.resolved_at || localDetails.resolved_at || null,
+        closed_at: fullTicket.closed_at || t.closed_at || localDetails.closed_at || null,
         proofAttachments: fullTicket.proofAttachments || [],
         proofFiles: fullTicket.proofFiles || [],
+        attachments: fullTicket.attachments || fullTicket.ticket_attachments || t.attachments || localDetails.attachments || [],
         can_discard: (fullTicket.status || t.status) === 'Open' && !fullTicket.assigned_to,
       });
+
+      try {
+        const storedAll = JSON.parse(localStorage.getItem('customer_ticket_details') || '{}');
+        storedAll[t.id] = {
+          ...storedAll[t.id],
+          ...fullTicket,
+          status: fullTicket.status || t.status,
+        };
+        localStorage.setItem('customer_ticket_details', JSON.stringify(storedAll));
+      } catch { /* ignore */ }
     } catch (err) {
       console.error('Failed to load ticket details:', err);
       setSelectedTicket(t);
@@ -621,9 +948,9 @@ export default function MyTickets({ mode = 'all' }) {
     const isMock = selectedTicket ? !!selectedTicket.isMock : false;
     if (isMock) {
       const stored = JSON.parse(localStorage.getItem('customer_created_tickets') || '[]');
+      const timestamp = new Date().toISOString();
       const updatedList = stored.map(t => {
         if (t.id === ticketId || t.ticket_ID === ticketId) {
-          const timestamp = new Date().toISOString();
           const timeline = t.timeline || [
             { id: 'creation', type: 'system', text: 'Ticket created.', timestamp: t.date_created }
           ];
@@ -646,185 +973,583 @@ export default function MyTickets({ mode = 'all' }) {
       });
       localStorage.setItem('customer_created_tickets', JSON.stringify(updatedList));
       setTickets(updatedList);
-      setSelectedTicket(null);
       showSuccess('Ticket reopened', 'Ticket reopened successfully.');
-      return;
+      return { success: true };
     }
 
-    setLoadingText('Reopening ticket...');
-    setModalLoading(true);
     try {
       const numericId = Number(String(ticketId).replace(/\D/g, ''));
-      await updateTicket({
-        ticketId: numericId,
-        statusId: 8, // Reopened
-      });
-      setSelectedTicket(null);
+      const res = await reopenTicket(numericId, reason);
       showSuccess('Ticket reopened', 'Ticket reopened successfully.');
       loadTickets({ forceRefresh: true });
+      return res;
     } catch (err) {
       console.error('Failed to reopen ticket:', err);
-      showError('Error', err?.response?.data?.message || 'Failed to reopen ticket.');
-    } finally {
-      setModalLoading(false);
+      const msg = err?.response?.data?.message || 'Failed to reopen ticket.';
+      showError('Error', msg);
+      throw err;
     }
   };
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
-        <div>
-          <h1 className="text-3xl font-bold text-[#252578]">{isHistory ? 'Ticket History' : 'My Tickets'}</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            {isHistory ? 'Review completed and discarded tickets.' : 'Track and manage your submitted support tickets.'}
-          </p>
-        </div>
-        {!isHistory && (
+    <div className="flex flex-col gap-6 font-sans text-dark-slate">
+      <PageHeader
+        title={isHistory ? 'Ticket History' : 'My Tickets'}
+        subtitle={isHistory ? 'Review completed and discarded tickets.' : 'Track and manage your submitted support tickets.'}
+        actions={
+          !isHistory && (
+            <Button
+              onClick={() => navigate('/ai-support', { state: { startNewChat: true } })}
+              icon={<Plus className="h-4 w-4" />}
+            >
+              Create Ticket
+            </Button>
+          )
+        }
+      />
+
+      {!isHistory && (
+        <div className="flex border-b border-gray-200 gap-2">
           <button
-            onClick={() => navigate('/ai-support')}
-            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-linear-to-r from-[#252578] to-[#3b82f6] px-6 py-3 text-sm font-semibold text-white transition-all hover:shadow-lg cursor-pointer"
+            type="button"
+            onClick={() => setActiveTab('tickets')}
+            className={`pb-3 px-4 text-sm font-bold transition-all border-b-2 -mb-px flex items-center gap-2 cursor-pointer ${
+              activeTab === 'tickets'
+                ? 'border-brand-primary text-brand-primary'
+                : 'border-transparent text-muted-slate hover:text-dark-slate'
+            }`}
           >
-            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
-            </svg>
-            Create Ticket
+            All Tickets
+            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+              activeTab === 'tickets' ? 'bg-brand-primary/10 text-brand-primary' : 'bg-page text-muted-slate'
+            }`}>
+              {visibleTickets.length}
+            </span>
           </button>
-        )}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-sm">
-        <input
-          type="text"
-          placeholder="Search ID or title"
-          value={filters.search}
-          onChange={(event) => updateFilter('search', event.target.value)}
-          className="w-full md:w-[725px] max-w-[725px] shrink-0 rounded-xl border border-gray-200 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#252578]"
-        />
-        <div className="flex flex-wrap items-center gap-3 ml-auto shrink-0">
-          <select value={filters.status} onChange={(event) => updateFilter('status', event.target.value)} className="w-full sm:w-[150px] md:w-[160px] shrink-0 rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#252578]">
-            <option value="">All statuses</option>
-            {(isHistory ? HISTORY_STATUSES : ACTIVE_STATUSES).map((status) => <option key={status} value={status}>{status}</option>)}
-          </select>
-          <select value={filters.category} onChange={(event) => updateFilter('category', event.target.value)} className="w-full sm:w-[150px] md:w-[160px] shrink-0 rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#252578]">
-            <option value="">All categories</option>
-            {categories.map((category) => <option key={category} value={category}>{category}</option>)}
-          </select>
-          <input type="date" value={filters.dateFrom} onChange={(event) => { const v = event.target.value; setFilters((c) => ({ ...c, dateFrom: v, dateTo: v })); }} className="w-full sm:w-auto shrink-0 rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#252578]" />
+          <button
+            type="button"
+            onClick={() => { setActiveTab('drafts'); loadDrafts(); }}
+            className={`pb-3 px-4 text-sm font-bold transition-all border-b-2 -mb-px flex items-center gap-2 cursor-pointer ${
+              activeTab === 'drafts'
+                ? 'border-brand-primary text-brand-primary'
+                : 'border-transparent text-muted-slate hover:text-dark-slate'
+            }`}
+          >
+            My Drafts
+            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+              activeTab === 'drafts' ? 'bg-amber-100 text-amber-800' : 'bg-page text-muted-slate'
+            }`}>
+              {drafts.length}
+            </span>
+          </button>
         </div>
-      </div>
+      )}
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
-
-      <div className="overflow-x-auto rounded-2xl border border-gray-100 bg-white shadow-sm">
-          <table className="w-full text-left">
-            <thead className="border-b border-gray-100 bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
-              <tr>
-                <th className="px-5 py-4">ID</th>
-                <th className="px-5 py-4">Title</th>
-                <th className="px-5 py-4">Equipment</th>
-                <th className="px-5 py-4">Status</th>
-                <th className="px-5 py-4">Date Created</th>
-                <th className="px-5 py-4">Last Updated</th>
-                <th className="px-5 py-4 text-center">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {visibleTickets.length === 0 && loading && (
-                <tr>
-                  <td colSpan={7}>
-                    <div className="rounded-xl bg-white p-8">
-                      <table className="w-full">
-                        <tbody>
-                          <SkeletonLoader variant="table-row" />
-                          <SkeletonLoader variant="table-row" />
-                          <SkeletonLoader variant="table-row" />
-                          <SkeletonLoader variant="table-row" />
-                          <SkeletonLoader variant="table-row" />
-                        </tbody>
-                      </table>
-                    </div>
-                  </td>
-                </tr>
-              )}
-              {visibleTickets.length === 0 && !loading && (
-                <tr>
-                  <td colSpan={7} className="px-5 py-8 text-center text-sm text-gray-500">
-                    No tickets match the current filters.
-                  </td>
-                </tr>
-              )}
-              {visibleTickets.map((ticket) => (
-                <tr key={ticket.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => handleViewTicket(ticket)}>
-                  <td className="px-5 py-4 text-sm font-semibold text-[#252578] whitespace-nowrap">{ticket.id}</td>
-                  <td className="px-5 py-4 text-sm font-medium text-gray-800 max-w-[280px]"><div className="truncate whitespace-nowrap overflow-hidden text-ellipsis" title={ticket.title}>{ticket.title}</div><div className="truncate max-w-[260px] text-xs text-gray-500 font-normal whitespace-nowrap overflow-hidden text-ellipsis md:hidden" title={ticket.description}>{ticket.description}</div></td>
-                  <td className="px-5 py-4 text-sm text-gray-600 max-w-[160px] truncate whitespace-nowrap overflow-hidden text-ellipsis" title={ticket.equipment || ticket.category}>{ticket.equipment || ticket.category || '—'}</td>
-                  <td className="px-5 py-4">
-                    <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold whitespace-nowrap ${statusClass(ticket.status)}`}>
-                      <span className="h-1.5 w-1.5 rounded-full bg-current" />
-                      {ticket.status}
-                    </span>
-                  </td>
-                  <td className="px-5 py-4 text-sm text-gray-600">{formatDisplayDate(ticket.date_created)}</td>
-                  <td className="px-5 py-4 text-sm text-gray-600">{formatDisplayDate(ticket.last_updated)}</td>
-                  <td className="px-5 py-4 text-center" onClick={(e) => e.stopPropagation()}>
+      {activeTab !== 'drafts' ? (
+        <>
+          {/* ─── Search & Filter Bar ─── */}
+          <div className="rounded-2xl border border-gray-150 bg-white p-4 shadow-sm space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
+              {/* 1. Keywords Search */}
+              <div className="relative">
+                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Keywords</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    aria-label="Search by keywords"
+                    placeholder="Search keywords, ID, title..."
+                    value={filters.keywords}
+                    onChange={(e) => updateFilter('keywords', e.target.value)}
+                    className="w-full rounded-xl border border-gray-200 pl-8 pr-7 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition"
+                  />
+                  <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                  {filters.keywords && (
                     <button
-                      onClick={(e) => {
-                        if (openMenuId === ticket.id) {
-                          setOpenMenuId(null);
-                          setMenuPos(null);
-                          return;
-                        }
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        setMenuPos({ x: rect.right - 144, y: rect.bottom + 4 });
-                        setOpenMenuId(ticket.id);
-                      }}
-                      className="rounded-full p-2 text-gray-500 hover:bg-gray-100 menu-trigger"
-                      aria-label="Actions"
+                      type="button"
+                      aria-label="Clear keywords filter"
+                      onClick={() => clearFilter('keywords')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded cursor-pointer"
                     >
-                      <MoreVertical size={18} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-      </div>
-
-      {openMenuId && menuPos && createPortal(
-        (() => {
-          const t = visibleTickets.find(x => x.id === openMenuId);
-          if (!t) return null;
-          const isHist = isHistory;
-          const canEdit = canEditTicket(t);
-          return (
-            <div data-menu-id={t.id}
-              style={{ position: 'fixed', left: menuPos.x, top: menuPos.y, zIndex: 9999 }}
-              className="w-36 rounded-xl border border-gray-200 bg-white shadow-lg overflow-hidden">
-              {isHist ? (
-                <>
-                  <button onClick={() => { handleViewTicket(t); setMenuPos(null); setOpenMenuId(null); }} disabled={t.status !== 'Closed'} className={`flex w-full items-center gap-2 px-4 py-2.5 text-sm ${t.status === 'Closed' ? 'text-[#252578] hover:bg-indigo-50' : 'text-gray-400 cursor-not-allowed'} `}>
-                    Reopen
-                  </button>
-                  <button onClick={() => { handleDeleteTicket(t); setMenuPos(null); }} className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50">
-                    Delete
-                  </button>
-                </>
-              ) : (
-                <>
-                  {canEdit && (
-                    <button onClick={() => { handleEditTicket(t); setMenuPos(null); }} className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 border-b border-gray-100">
-                      Edit
+                      <X size={13} />
                     </button>
                   )}
-                  <button onClick={() => { handleDeleteTicket(t); setMenuPos(null); }} className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50">
-                    Delete
-                  </button>
-                </>
-              )}
+                </div>
+              </div>
+
+              {/* 2. Machine Dropdown */}
+              <div className="relative">
+                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Machine</label>
+                <div className="relative">
+                  <select
+                    aria-label="Filter by machine"
+                    value={filters.machine}
+                    onChange={(e) => updateFilter('machine', e.target.value)}
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition bg-white appearance-none pr-7"
+                  >
+                    <option value="">All Machines</option>
+                    {availableMachines.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                  {filters.machine ? (
+                    <button
+                      type="button"
+                      aria-label="Clear machine filter"
+                      onClick={() => clearFilter('machine')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded cursor-pointer"
+                    >
+                      <X size={13} />
+                    </button>
+                  ) : (
+                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none text-[10px]">▼</span>
+                  )}
+                </div>
+              </div>
+
+              {/* 3. Status Dropdown */}
+              <div className="relative">
+                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Status</label>
+                <div className="relative">
+                  <select
+                    aria-label="Filter by status"
+                    value={filters.status}
+                    onChange={(e) => updateFilter('status', e.target.value)}
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition bg-white appearance-none pr-7"
+                  >
+                    <option value="">All Statuses</option>
+                    {availableStatuses.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                  {filters.status ? (
+                    <button
+                      type="button"
+                      aria-label="Clear status filter"
+                      onClick={() => clearFilter('status')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded cursor-pointer"
+                    >
+                      <X size={13} />
+                    </button>
+                  ) : (
+                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none text-[10px]">▼</span>
+                  )}
+                </div>
+              </div>
+
+              {/* 4. Category Dropdown */}
+              <div className="relative">
+                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Category</label>
+                <div className="relative">
+                  <select
+                    aria-label="Filter by category"
+                    value={filters.category}
+                    onChange={(e) => updateFilter('category', e.target.value)}
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition bg-white appearance-none pr-7"
+                  >
+                    <option value="">All Categories</option>
+                    {availableCategories.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                  {filters.category ? (
+                    <button
+                      type="button"
+                      aria-label="Clear category filter"
+                      onClick={() => clearFilter('category')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded cursor-pointer"
+                    >
+                      <X size={13} />
+                    </button>
+                  ) : (
+                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none text-[10px]">▼</span>
+                  )}
+                </div>
+              </div>
+
+              {/* 5. Priority Dropdown */}
+              <div className="relative">
+                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Priority</label>
+                <div className="relative">
+                  <select
+                    aria-label="Filter by priority"
+                    value={filters.priority}
+                    onChange={(e) => updateFilter('priority', e.target.value)}
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition bg-white appearance-none pr-7"
+                  >
+                    <option value="">All Priorities</option>
+                    {availablePriorities.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                  {filters.priority ? (
+                    <button
+                      type="button"
+                      aria-label="Clear priority filter"
+                      onClick={() => clearFilter('priority')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded cursor-pointer"
+                    >
+                      <X size={13} />
+                    </button>
+                  ) : (
+                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none text-[10px]">▼</span>
+                  )}
+                </div>
+              </div>
+
+              {/* 6. Employee Dropdown */}
+              <div className="relative">
+                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Employee</label>
+                <div className="relative">
+                  <select
+                    aria-label="Filter by employee"
+                    value={filters.employee}
+                    onChange={(e) => updateFilter('employee', e.target.value)}
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition bg-white appearance-none pr-7"
+                  >
+                    <option value="">All Employees</option>
+                    <option value="Unassigned">Unassigned</option>
+                    {availableEmployees.map((emp) => (
+                      <option key={emp} value={emp}>{emp}</option>
+                    ))}
+                  </select>
+                  {filters.employee ? (
+                    <button
+                      type="button"
+                      aria-label="Clear employee filter"
+                      onClick={() => clearFilter('employee')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded cursor-pointer"
+                    >
+                      <X size={13} />
+                    </button>
+                  ) : (
+                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none text-[10px]">▼</span>
+                  )}
+                </div>
+              </div>
+
+              {/* 7. Date Picker */}
+              <div className="relative">
+                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Date</label>
+                <div className="relative">
+                  <input
+                    type="date"
+                    aria-label="Filter by date"
+                    value={filters.date}
+                    onChange={(e) => updateFilter('date', e.target.value)}
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition bg-white"
+                  />
+                  {filters.date && (
+                    <button
+                      type="button"
+                      aria-label="Clear date filter"
+                      onClick={() => clearFilter('date')}
+                      className="absolute right-7 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded cursor-pointer"
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
-          );
-        })(),
-        document.body
+
+            {/* Active Filter Badges + Reset Actions */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-gray-100 text-xs">
+              <div className="flex flex-wrap items-center gap-1.5 flex-1 min-w-[240px]">
+                {activeFilterList.map((item) => (
+                  <span
+                    key={item.key}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-blue-50 text-[#252578] border border-blue-200/60 animate-in fade-in duration-150"
+                  >
+                    <span>{item.label}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove filter ${item.label}`}
+                      onClick={() => clearFilter(item.key)}
+                      className="hover:bg-blue-200/60 rounded-full p-0.5 transition cursor-pointer"
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                ))}
+                {activeFilterList.length === 0 && (
+                  <span className="text-gray-400 text-xs">No active filters</span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 ml-auto shrink-0">
+                <span className="text-gray-400 text-[11px]">
+                  Showing <strong className="text-gray-700">{visibleTickets.length}</strong> of {tickets.length}
+                </span>
+                {activeFilterList.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={resetFilters}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition cursor-pointer"
+                  >
+                    <RotateCcw size={12} /> Reset all filters
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {error && (
+            <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm font-semibold flex items-center justify-between">
+              <span>{error}</span>
+              <button
+                type="button"
+                onClick={() => loadTickets({ forceRefresh: true })}
+                className="underline hover:no-underline text-xs"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-surface shadow-xs">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[110px]">Ticket ID</TableHead>
+                  <TableHead className="min-w-[220px]">Title & Summary</TableHead>
+                  <TableHead className="min-w-[140px]">Equipment</TableHead>
+                  <TableHead className="w-[100px]">Priority</TableHead>
+                  <TableHead className="w-[170px] min-w-[155px]">Status</TableHead>
+                  <TableHead className="min-w-[140px]">Assigned Employee</TableHead>
+                  <TableHead className="w-[130px]">Date Created</TableHead>
+                  <TableHead className="w-[130px]">Last Updated</TableHead>
+                  <TableHead className="w-[70px] text-center">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visibleTickets.length === 0 && loading && (
+                  <DataTableSkeleton columns={9} rows={5} />
+                )}
+                {visibleTickets.length === 0 && !loading && (
+                  <DataTableEmptyState
+                    colSpan={9}
+                    title="No tickets match your criteria"
+                    description="Try adjusting your search keywords or clearing active filters."
+                    action={
+                      activeFilterList.length > 0 && (
+                        <Button variant="outline" size="sm" onClick={resetFilters} icon={<RotateCcw className="h-3.5 w-3.5" />}>
+                          Clear all filters
+                        </Button>
+                      )
+                    }
+                  />
+                )}
+                {visibleTickets.map((ticket, idx) => {
+                  const assignedEmpDisplay = getTicketAssignedEmployee(ticket);
+
+                  return (
+                    <TableRow
+                      key={ticket.id || ticket.ticket_ID || `ticket-${idx}`}
+                      className="cursor-pointer"
+                      onClick={() => handleViewTicket(ticket)}
+                    >
+                      <TableCell className="font-semibold text-brand-primary whitespace-nowrap">
+                        {ticket.id}
+                      </TableCell>
+                      <TableCell className="max-w-[260px]">
+                        <div className="truncate font-medium text-dark-slate" title={ticket.title}>{ticket.title}</div>
+                        <div className="truncate max-w-[240px] text-xs text-muted-slate md:hidden" title={ticket.description}>{ticket.description}</div>
+                      </TableCell>
+                      <TableCell className="text-muted-slate max-w-[160px] truncate" title={ticket.equipment || ticket.category}>
+                        {ticket.equipment || ticket.category || '—'}
+                      </TableCell>
+                      <TableCell>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${priorityColors[ticket.priority] ?? 'bg-gray-100 text-gray-700'}`}>
+                          {ticket.priority || 'Low'}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-col items-start gap-1">
+                          <Badge variant={getStatusBadgeVariant(ticket.status)}>
+                            {ticket.status}
+                          </Badge>
+                          {(hasFeedbackBeenSubmitted(ticket.id) || hasFeedbackBeenSubmitted(ticket.ticket_ID)) && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                              ★ Rated
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-muted-slate max-w-[150px] truncate" title={assignedEmpDisplay}>
+                        <div className="flex items-center gap-1.5 text-xs">
+                          <User size={13} className="text-muted-slate shrink-0" />
+                          <span className="truncate">{assignedEmpDisplay}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-muted-slate text-xs whitespace-nowrap">
+                        {formatDisplayDate(ticket.date_created)}
+                      </TableCell>
+                      <TableCell className="text-muted-slate text-xs whitespace-nowrap">
+                        {formatDisplayDate(ticket.last_updated)}
+                      </TableCell>
+                      <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              className="rounded-full p-2 text-muted-slate hover:bg-page hover:text-dark-slate transition-colors cursor-pointer"
+                              aria-label="Actions"
+                            >
+                              <MoreVertical size={16} />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            {isHistory ? (
+                              <>
+                                <DropdownMenuItem
+                                  onClick={() => handleViewTicket(ticket)}
+                                  disabled={ticket.status !== 'Closed'}
+                                >
+                                  Reopen
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  destructive
+                                  onClick={() => handleDeleteTicket(ticket)}
+                                >
+                                  Delete
+                                </DropdownMenuItem>
+                              </>
+                            ) : (
+                              <>
+                                {canEditTicket(ticket) && (
+                                  <DropdownMenuItem onClick={() => handleEditTicket(ticket)}>
+                                    Edit
+                                  </DropdownMenuItem>
+                                )}
+                                <DropdownMenuItem
+                                  destructive
+                                  onClick={() => handleDeleteTicket(ticket)}
+                                >
+                                  Discard
+                                </DropdownMenuItem>
+                              </>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        </>
+      ) : (
+        /* ─── My Drafts Tab (TS020) ─── */
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-gray-150 shadow-xs">
+            <div>
+              <h2 className="text-sm font-bold text-gray-800">Your Saved Drafts</h2>
+              <p className="text-xs text-gray-500">Finish and submit in-progress tickets at your convenience.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`px-3 py-1 rounded-full text-xs font-bold border ${
+                drafts.length >= 10
+                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                  : drafts.length >= 7
+                  ? 'bg-amber-50 text-amber-700 border-amber-200'
+                  : 'bg-blue-50 text-[#252578] border-blue-200'
+              }`}>
+                {drafts.length} / 10 Drafts
+              </span>
+              <button
+                type="button"
+                onClick={() => navigate('/create-ticket')}
+                disabled={drafts.length >= 10}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#252578] hover:bg-[#1f1f66] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition cursor-pointer"
+              >
+                + New Ticket
+              </button>
+            </div>
+          </div>
+
+          {drafts.length >= 10 && (
+            <div className="rounded-xl bg-amber-50 border border-amber-200 p-3.5 text-xs font-semibold text-amber-800 flex items-center gap-2.5">
+              <AlertCircle size={16} className="text-amber-600 shrink-0" />
+              <span>You have reached the maximum allowed limit of 10 drafts. Please submit or delete an existing draft to create new ones.</span>
+            </div>
+          )}
+
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-surface shadow-xs">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Draft Title / Summary</TableHead>
+                  <TableHead>Equipment</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead>Last Saved</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+              {drafts.length === 0 && loadingDrafts && (
+                <DataTableSkeleton columns={5} rows={3} />
+              )}
+              {drafts.length === 0 && !loadingDrafts && (
+                <DataTableEmptyState
+                  colSpan={5}
+                  icon={FileText}
+                  title="No saved drafts"
+                  description="When creating a ticket, you can click 'Save as Draft' to continue anytime."
+                  action={
+                    <Button size="sm" onClick={() => navigate('/create-ticket')} icon={<Plus className="h-3.5 w-3.5" />}>
+                      Create New Ticket
+                    </Button>
+                  }
+                />
+              )}
+              {drafts.map((draft) => (
+                <TableRow key={draft.id}>
+                  <TableCell className="max-w-[280px]">
+                    <div className="truncate font-semibold text-dark-slate" title={draft.title}>
+                      {draft.title || 'Untitled draft'}
+                    </div>
+                    {draft.description && (
+                      <div className="text-xs text-muted-slate truncate mt-0.5">
+                        {draft.description}
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-muted-slate">
+                    {draft.machine_ID ? `Equipment #${draft.machine_ID}` : '—'}
+                  </TableCell>
+                  <TableCell className="text-muted-slate">
+                    {draft.problem_category_ID ? `Category #${draft.problem_category_ID}` : '—'}
+                  </TableCell>
+                  <TableCell className="text-muted-slate text-xs whitespace-nowrap">
+                    {formatDisplayDate(draft.last_saved_at || draft.updated_at)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleEditDraft(draft)}
+                        icon={<Edit3 className="h-3.5 w-3.5" />}
+                      >
+                        Continue
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => handleDeleteDraft(draft)}
+                        icon={<Trash2 className="h-3.5 w-3.5" />}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
       )}
 
       <TicketModal
@@ -833,52 +1558,58 @@ export default function MyTickets({ mode = 'all' }) {
         onSubmit={handleCreateTicket}
         openTicketsCount={customerOpenCount}
       />
-      <CustomerTicketDetailModal ticket={selectedTicket} onClose={() => setSelectedTicket(null)} onDiscard={(ticket) => showConfirm('Discard this ticket?', `This will mark ${ticket.id} as Discarded.`, () => handleConfirmDiscard(ticket), { confirmText: 'Discard', confirmClassName: 'bg-red-600 hover:bg-red-700' })} onReopen={(ticketId, reason) => handleReopenTicket(ticketId, reason)} onResolve={(ticketId) => handleCloseTicket(ticketId)} customerName={effectiveUser?.name || effectiveUser?.first_name ? `${effectiveUser.first_name}${effectiveUser.last_name ? ' ' + effectiveUser.last_name : ''}` : 'Customer'} allowReopen={true} isHistoryView={isHistory} />
+      <CustomerTicketDetailModal
+        ticket={selectedTicket}
+        onClose={() => setSelectedTicket(null)}
+        onDiscard={(ticket) => showConfirm('Discard this ticket?', `This will mark ${ticket.id} as Discarded.`, () => handleConfirmDiscard(ticket), { confirmText: 'Discard', confirmClassName: 'bg-red-600 hover:bg-red-700' })}
+        onReopen={(ticketId, reason) => handleReopenTicket(ticketId, reason)}
+        onResolve={(ticketId) => handleCloseTicket(ticketId)}
+        customerName={effectiveUser?.name || effectiveUser?.first_name ? `${effectiveUser.first_name}${effectiveUser.last_name ? ' ' + effectiveUser.last_name : ''}` : 'Customer'}
+        allowReopen={true}
+        isHistoryView={isHistory}
+        onFeedbackSubmitted={() => {
+          setFeedbackVersion((v) => v + 1);
+          loadTickets({ forceRefresh: true });
+        }}
+      />
 
       {editingTicket && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-          <div className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
-            <div className="flex items-start justify-between border-b border-gray-100 px-6 py-5 shrink-0">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] animate-in fade-in duration-200">
+          <div className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-surface shadow-level-4">
+            <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5 shrink-0 bg-surface">
               <div>
-                {!editingTicket.assigned_to ? (
-                  <>
-                    <h2 className="text-xl font-bold text-gray-900">Edit Ticket</h2>
-                    <p className="mt-0.5 text-sm font-semibold text-[#252578]">{editingTicket.id}</p>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-sm font-semibold text-[#252578]">{editingTicket.id}</p>
-                    <h2 className="mt-1 text-xl font-bold text-gray-900">Edit Ticket</h2>
-                  </>
-                )}
+                <h2 className="text-xl font-bold text-dark-slate">Edit Ticket</h2>
+                <p className="mt-0.5 text-xs font-semibold text-brand-primary">{editingTicket.id}</p>
               </div>
-              <button type="button" onClick={() => setEditingTicket(null)} className="rounded-full p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700">
-                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
+              <button
+                type="button"
+                onClick={() => setEditingTicket(null)}
+                className="rounded-full p-2 text-muted-slate hover:bg-page hover:text-dark-slate transition-colors cursor-pointer"
+              >
+                <X className="h-5 w-5" />
               </button>
             </div>
-            <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
+            <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5 text-dark-slate">
               <div>
-                <label className="mb-2 block text-sm font-medium text-gray-700">Title</label>
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-muted-slate">Title</label>
                 <input
                   type="text"
                   value={editTitle}
                   onChange={(e) => setEditTitle(e.target.value)}
                   onBlur={(e) => { const n = normalizeCasing(e.target.value); if (n !== e.target.value) { setEditTitle(n); e.target.value = n; } }}
                   placeholder={editingTicket.title || 'Enter title'}
-                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-[#252578] placeholder:text-gray-400"
+                  className="w-full rounded-xl border border-gray-200 bg-surface px-4 py-2.5 text-sm text-dark-slate outline-none transition-all placeholder:text-muted-slate/60 focus:border-transparent focus:ring-2 focus:ring-brand-accent"
                 />
               </div>
               <div className="grid gap-4 md:grid-cols-3">
                 <div className="min-w-0 md:col-span-2">
-                  <p className="text-xs font-semibold uppercase text-gray-400">Category</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-slate">Category</p>
                   {editOptions ? (
                     <select
                       value={editCategory}
                       onChange={(e) => setEditCategory(e.target.value)}
                       title={editingTicket.category || ''}
-                      className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-[#252578]"
+                      className="mt-1 w-full rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-brand-accent"
                     >
                       <option value="">{editingTicket.category ? `Current: ${editingTicket.category}` : 'Select category'}</option>
                       {(editOptions.problem_categories || editOptions.category_options || []).map((cat) => (
@@ -888,60 +1619,63 @@ export default function MyTickets({ mode = 'all' }) {
                       ))}
                     </select>
                   ) : (
-                    <p className="mt-1 text-sm text-gray-800 break-words">{editingTicket.category}</p>
+                    <p className="mt-1 text-sm text-dark-slate break-words">{editingTicket.category}</p>
                   )}
                 </div>
                 <div>
-                  <p className="text-xs font-semibold uppercase text-gray-400">Status</p>
-                  <p className="mt-1 text-sm font-semibold text-gray-800">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-slate">Status</p>
+                  <p className="mt-1 text-sm font-semibold text-dark-slate">
                     {!editingTicket.assigned_to && editingTicket.status === 'In Progress' ? 'Open' : editingTicket.status}
                   </p>
                 </div>
                 <div className="min-w-0 md:col-span-2">
-                  <p className="text-xs font-semibold uppercase text-gray-400">Equipment</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-slate">Equipment</p>
                   {editOptions ? (
                     <select
                       value={editEquipment}
                       onChange={(e) => setEditEquipment(e.target.value)}
                       title={editingTicket.equipment || ''}
-                      className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-[#252578]"
+                      className="mt-1 w-full rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-brand-accent"
                     >
                       <option value="">{editingTicket.equipment ? `Current: ${editingTicket.equipment}` : 'Select equipment'}</option>
-                      {(editOptions.equipment_options || editOptions.machines || []).map((m) => (
-                        <option key={m.machine_ID || m.value} value={m.machine_ID || m.value} title={m.machine_name ? `${m.machine_name} - ${m.serial_number}` : m.label}>
-                          {m.machine_name ? `${m.machine_name} - ${m.serial_number}` : m.label}
-                        </option>
-                      ))}
+                      {(editOptions.equipment_options || editOptions.machines || []).map((m) => {
+                        const optVal = m.machine_ID || m.value || '';
+                        const optLabel = m.machine_name ? `${m.machine_name}${m.serial_number ? ` - ${m.serial_number}` : ''}` : (typeof m.label === 'string' ? m.label : (m.name || `Machine #${optVal}`));
+                        return (
+                          <option key={optVal || optLabel} value={optVal} title={optLabel}>
+                            {optLabel}
+                          </option>
+                        );
+                      })}
                     </select>
                   ) : (
-                    <p className="mt-1 text-sm text-gray-800 break-words">{editingTicket.equipment}</p>
+                    <p className="mt-1 text-sm text-dark-slate break-words">{editingTicket.equipment}</p>
                   )}
                 </div>
                 <div>
-                  <p className="text-xs font-semibold uppercase text-gray-400">Date Created</p>
-                  <p className="mt-1 text-sm text-gray-800">{formatDate(editingTicket.date_created)}</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-slate">Date Created</p>
+                  <p className="mt-1 text-sm text-dark-slate">{formatDate(editingTicket.date_created)}</p>
                 </div>
               </div>
               <div>
-                <label className="mb-2 block text-sm font-medium text-gray-700">Description</label>
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-muted-slate">Description</label>
                 <textarea
                   rows="4"
                   value={editDescription}
                   onChange={(e) => setEditDescription(e.target.value)}
                   onBlur={(e) => { const n = normalizeCasing(e.target.value); if (n !== e.target.value) { setEditDescription(n); e.target.value = n; } }}
                   placeholder={editingTicket.description || 'Enter description'}
-                  className="w-full resize-none rounded-xl border border-gray-200 bg-white px-4 py-3 outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-[#252578] placeholder:text-gray-400"
+                  className="w-full resize-none rounded-xl border border-gray-200 bg-surface px-4 py-2.5 text-sm text-dark-slate outline-none transition-all placeholder:text-muted-slate/60 focus:border-transparent focus:ring-2 focus:ring-brand-accent"
                 />
               </div>
             </div>
-            <div className="border-t border-gray-100 px-6 py-4 shrink-0 flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={handleSaveEdit}
-                className="rounded-xl bg-[#252578] px-8 py-2.5 text-sm font-semibold text-white transition-all hover:shadow-lg"
-              >
-                Save
-              </button>
+            <div className="border-t border-slate-200 px-6 py-4 shrink-0 flex justify-end gap-3 bg-surface">
+              <Button variant="outline" onClick={() => setEditingTicket(null)}>
+                Cancel
+              </Button>
+              <Button onClick={handleSaveEdit}>
+                Save Changes
+              </Button>
             </div>
           </div>
         </div>
@@ -969,9 +1703,9 @@ export default function MyTickets({ mode = 'all' }) {
 
       {modalLoading && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-[1.5px] animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl p-6 shadow-2xl flex flex-col items-center gap-4 max-w-xs w-full mx-4 border border-gray-100">
-            <div className="w-10 h-10 border-4 border-[#252578]/10 border-t-[#252578] rounded-full animate-spin" />
-            <p className="text-sm font-semibold text-[#252578] text-center font-sans">
+          <div className="bg-surface rounded-2xl p-6 shadow-level-4 flex flex-col items-center gap-4 max-w-xs w-full mx-4 border border-slate-200">
+            <div className="w-10 h-10 border-4 border-brand-primary/10 border-t-brand-primary rounded-full animate-spin" />
+            <p className="text-sm font-semibold text-brand-primary text-center font-sans">
               {loadingText}
             </p>
           </div>

@@ -1,22 +1,94 @@
 import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Search, Filter } from 'lucide-react';
+import { Search, Filter, Inbox, AlertTriangle, Bell } from 'lucide-react';
 import {
   statusColors,
   priorityColors,
   sortTicketsByPriority,
 } from '@/constants/employeeTickets';
 import TicketDetailModal from '@/components/employee/TicketDetailModal';
+import ActionErrorModal, { getActionError } from '@/components/employee/ActionErrorModal';
 import TicketInfoModal from '@/components/employee/TicketInfoModal';
 import ReassignmentModal from '@/components/employee/ReassignmentModal';
-import { formatDisplayDate } from '@/utils/dateUtils';
+import { formatDisplayDate, parseUTCDate } from '@/utils/dateUtils';
 import { useAuth } from '@/context/AuthContext';
-import { getEmployeeAssignedTickets, acceptTicket, updateTicket, updateEmployeeTicketOverride } from '@/services/ticketService';
-import SkeletonLoader from '@/components/SkeletonLoader';
+import { getEmployeeAssignedTickets, acceptTicket, updateTicket, updateEmployeeTicketOverride, clearEmployeeTicketsCache } from '@/services/ticketService';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
-import { isReassignmentDenied } from '@/utils/reassignmentUtils';
+import { isReassignmentDenied, hasPendingReassignment } from '@/utils/reassignmentUtils';
+import { PageHeader } from '@/components/ui/page-header';
+import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
+import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
+import { DataTableSkeleton, DataTableEmptyState } from '@/components/ui/data-table';
+import { Button } from '@/components/ui/button';
 
 const CLOSED_STATUSES = ['Closed', 'Resolved'];
+
+const buildEmployeeTicketSearchString = (t) => {
+  if (!t) return '';
+  const id = String(t.id || t.ticket_ID || t.ticket_number || '');
+  const customer = String(
+    t.customer ||
+    t.customer_name ||
+    t.requestor ||
+    t.created_by_name ||
+    (typeof t.customer === 'object' ? t.customer?.name : '') ||
+    ''
+  );
+  const isInternal = Boolean(
+    t.title?.startsWith('[Internal]') ||
+    t.is_internal ||
+    t.ticket_type === 'Internal' ||
+    t.type === 'Internal'
+  );
+  const typeStr = isInternal ? 'internal' : 'external';
+  const title = String(t.title || '');
+  const category = String(t.category || '');
+  const rawStatus = String(t.status || '');
+  const reassignmentBadge = hasPendingReassignment(t)
+    ? 'pending reassignment'
+    : isReassignmentDenied(t)
+    ? 'reassignment failed reassignment disapproved'
+    : '';
+  const statusStr = `${rawStatus} ${reassignmentBadge}`;
+  const priorityStr = String(t.priority || '');
+  const facility = String(t.facility || '');
+  const dept = String(t.department || '');
+  const equip = String(t.equipment || t.machine_name || '');
+
+  const dateValue = t.updated_at || t.last_update || t.date || t.created_at || '';
+  const rawDate = String(dateValue);
+  const formattedDate = formatDisplayDate(dateValue);
+  let extraDates = '';
+  try {
+    const parsed = parseUTCDate(dateValue);
+    if (parsed && !isNaN(parsed.getTime())) {
+      extraDates = [
+        parsed.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+        parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+        parsed.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }),
+        parsed.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' }),
+      ].join(' ');
+    }
+  } catch (e) {}
+
+  return [
+    id,
+    customer,
+    typeStr,
+    title,
+    category,
+    priorityStr,
+    statusStr,
+    facility,
+    dept,
+    equip,
+    rawDate,
+    formattedDate,
+    extraDates,
+  ]
+    .join(' ')
+    .toLowerCase();
+};
 
 const selectClass =
   'text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-700 outline-none focus:ring-2 focus:ring-[#252578]/20 cursor-pointer min-w-[8.5rem]';
@@ -39,21 +111,34 @@ export default function EmployeeAssigned() {
 
   const [isAccepting, setIsAccepting] = useState(false);
   const [typeFilter, setTypeFilter] = useState('all');
+  const [incomingTab, setIncomingTab] = useState('incoming'); // 'incoming' | 'pending_reassignment' | 'all'
 
-  // Compute pending counts for display
-  const pendingCount = useMemo(() => {
-    return tickets.filter((t) => !t.rejected && !CLOSED_STATUSES.includes(t.status) && !t.accepted).length;
+  // Compute incoming counts for display
+  const pendingAcceptanceCount = useMemo(() => {
+    return tickets.filter((t) => !t.rejected && !CLOSED_STATUSES.includes(t.status) && (!t.accepted || t.proofRejected) && !hasPendingReassignment(t)).length;
   }, [tickets]);
+
+  const pendingReassignmentCount = useMemo(() => {
+    return tickets.filter((t) => !t.rejected && !CLOSED_STATUSES.includes(t.status) && hasPendingReassignment(t)).length;
+  }, [tickets]);
+
+  const totalIncomingCount = useMemo(() => {
+    return tickets.filter((t) => !t.rejected && !CLOSED_STATUSES.includes(t.status) && (!t.accepted || t.proofRejected)).length;
+  }, [tickets]);
+
+  const pendingCount = totalIncomingCount;
 
   // Modal state — which modal to show
   const [pendingTicket, setPendingTicket] = useState(null);   // not-yet-accepted → TicketDetailModal
   const [infoTicket, setInfoTicket] = useState(null);         // accepted & active → TicketInfoModal
+  const [actionError, setActionError] = useState(null);       // why a status change failed
   const [reassignTicket, setReassignTicket] = useState(null); // reassign flow
   const [deniedReassignTicket, setDeniedReassignTicket] = useState(null); // denied reassign → skip accept, show update
 
-  const loadTickets = useCallback(async ({ forceRefresh = false } = {}) => {
+  const loadTickets = useCallback(async ({ forceRefresh = false, source = 'manual' } = {}) => {
     const email = user?.email || 'frontend@example.com';
-    setLoading(true);
+    // Realtime ticks (websocket/poll) refresh silently instead of flashing the skeleton.
+    if (source !== 'websocket' && source !== 'poll') setLoading(true);
     setLoadError('');
     try {
       const list = await getEmployeeAssignedTickets({ employeeEmail: email, forceRefresh });
@@ -90,19 +175,49 @@ export default function EmployeeAssigned() {
 
 
 
+  const handleRealtimeRefresh = useCallback((context) => {
+    clearEmployeeTicketsCache();
+    loadTickets({ forceRefresh: true, source: context?.source || 'poll' });
+  }, [loadTickets]);
+
   useRealtimeRefresh({
-    refresh: loadTickets,
+    refresh: handleRealtimeRefresh,
     channels: [{ name: 'ticket-updates', event: 'ticket.changed' }],
     intervalMs: 30000,
     shouldRefresh: ({ source, payload }) => {
       if (source === 'websocket') {
         const myEmpId = Number(user?.emp_id ?? user?.id);
-        const isRelevant =
+        const payloadTicketId = Number(
+          payload?.ticket_id ||
+          payload?.ticket_ID ||
+          payload?.ticketId ||
+          payload?.id ||
+          payload?.ticket?.ticket_ID ||
+          payload?.ticket?.id ||
+          0
+        );
+        const isCurrentAssignee =
           payload && (
             Number(payload.assigned_to) === myEmpId ||
+            Number(payload.employee_id) === myEmpId ||
             (Array.isArray(payload.employee_ids) && payload.employee_ids.map(Number).includes(myEmpId))
           );
-        return !!isRelevant;
+        const isRemovedAssignee =
+          payload && (
+            (Array.isArray(payload.removed_employee_ids) && payload.removed_employee_ids.map(Number).includes(myEmpId)) ||
+            (Array.isArray(payload.previous_employee_ids) && payload.previous_employee_ids.map(Number).includes(myEmpId))
+          );
+        const isHoldingTicket =
+          Boolean(payloadTicketId) &&
+          tickets.some((t) => Number(t.ticket_ID || String(t.id).replace(/\D/g, '')) === payloadTicketId);
+
+        if (isRemovedAssignee && payloadTicketId) {
+          setPendingTicket((prev) => (Number(prev?.ticket_ID || String(prev?.id).replace(/\D/g, '')) === payloadTicketId ? null : prev));
+          setInfoTicket((prev) => (Number(prev?.ticket_ID || String(prev?.id).replace(/\D/g, '')) === payloadTicketId ? null : prev));
+          setReassignTicket((prev) => (Number(prev?.ticket_ID || String(prev?.id).replace(/\D/g, '')) === payloadTicketId ? null : prev));
+        }
+
+        return Boolean(isCurrentAssignee || isRemovedAssignee || isHoldingTicket || !payloadTicketId);
       }
       return true;
     },
@@ -113,11 +228,20 @@ export default function EmployeeAssigned() {
     let list = tickets.filter((t) => {
       if (t.rejected) return false;
       if (CLOSED_STATUSES.includes(t.status)) return false;
-      if (t.accepted) return false;
+      if (t.accepted && !t.proofRejected) return false;
+
+      // Tab filtering
+      if (incomingTab === 'incoming') {
+        if (hasPendingReassignment(t)) return false;
+      } else if (incomingTab === 'pending_reassignment') {
+        if (!hasPendingReassignment(t)) return false;
+      }
 
       if (statusFilter !== 'All Status') {
         if (statusFilter === 'Pending Reassignment' || statusFilter === 'Pending Reassign') {
-          if (!t.reassignmentRequested) return false;
+          if (!hasPendingReassignment(t)) return false;
+        } else if (statusFilter === 'Reassignment Failed' || statusFilter === 'Reassignment Disapproved') {
+          if (!isReassignmentDenied(t)) return false;
         } else if (t.status !== statusFilter) {
           return false;
         }
@@ -134,16 +258,30 @@ export default function EmployeeAssigned() {
       if (categoryFilter !== 'All Category' && t.category !== categoryFilter) return false;
       if (priorityFilter !== 'All Priority' && t.priority !== priorityFilter) return false;
       if (q) {
-        const blob = `${t.id} ${t.title} ${t.customer} ${t.facility ?? ''}`.toLowerCase();
-        if (!blob.includes(q)) return false;
+        const cleanQ = q.trim().toLowerCase();
+        const searchBlob = buildEmployeeTicketSearchString(t);
+        if (!searchBlob.includes(cleanQ)) {
+          const tokens = cleanQ.replace(/,/g, ' ').split(/\s+/).filter(Boolean);
+          if (!(tokens.length > 0 && tokens.every((token) => searchBlob.includes(token)))) {
+            return false;
+          }
+        }
       }
       return true;
     });
+
     if (sortPriority === 'Priority') {
       list = sortTicketsByPriority(list, 'desc');
+    } else {
+      list = [...list].sort((a, b) => {
+        const timeA = new Date(a.updated_at || a.last_update || a.lastUpdate || a.date || a.created_at || 0).getTime();
+        const timeB = new Date(b.updated_at || b.last_update || b.lastUpdate || b.date || b.created_at || 0).getTime();
+        return timeB - timeA;
+      });
     }
+
     return list;
-  }, [tickets, search, statusFilter, categoryFilter, priorityFilter, sortPriority, typeFilter]);
+  }, [tickets, search, incomingTab, statusFilter, categoryFilter, priorityFilter, sortPriority, typeFilter]);
 
   const handleAcceptAssignment = useCallback(async (id) => {
     const ticketObj = tickets.find((t) => t.id === id);
@@ -225,15 +363,8 @@ export default function EmployeeAssigned() {
       );
     } catch (err) {
       console.error('Failed to update ticket status on backend:', err);
-      // fallback
-      updateEmployeeTicketOverride(id, {
-        status: newStatus,
-        proofRejected: false,
-        rejectionReason: null,
-      });
-      setTickets((prev) =>
-        prev.map((t) => (t.id === id ? { ...t, status: newStatus } : t))
-      );
+      // A failed change must not be shown as saved: tell the employee what went wrong instead.
+      setActionError(getActionError(err, 'Failed to update ticket status.'));
     }
   }, [tickets, user]);
 
@@ -245,9 +376,23 @@ export default function EmployeeAssigned() {
         navigate('/employee/progress');
         return;
       }
-      // If reassignment was denied, show info modal with disapproval banner
+      // If reassignment was denied/failed, show ticket detail modal so they can review disapproval reason and accept
       if (t.deniedReassignment || isReassignmentDenied(t)) {
-        setDeniedReassignTicket(t);
+        if (!t.accepted) {
+          setPendingTicket(t);
+        } else {
+          setDeniedReassignTicket(t);
+        }
+        return;
+      }
+      // If pending reassignment, open TicketDetailModal (which hides Request Reassignment button and shows pending banner)
+      if (hasPendingReassignment(t)) {
+        setPendingTicket(t);
+        return;
+      }
+      // If proof rejected → show TicketInfoModal with proof rejection banner and Update button
+      if (t.proofRejected) {
+        setInfoTicket(t);
         return;
       }
       // Not yet accepted → show full Accept/Reject modal
@@ -266,150 +411,253 @@ export default function EmployeeAssigned() {
   ).length;
 
   return (
-    <div className="p-6 flex flex-col gap-6">
-      <div className="flex flex-col gap-2">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <h1 className="text-3xl font-bold text-[#252578]">Incoming Ticket</h1>
-          <div className="flex border border-gray-200 rounded-xl overflow-hidden bg-white shrink-0 shadow-xs">
+    <div className="flex flex-col gap-6 font-sans text-dark-slate">
+      <PageHeader
+        title="Incoming Tickets"
+        subtitle="Pending tickets awaiting your acceptance."
+        actions={
+          <div className="flex border border-gray-200 rounded-xl overflow-hidden bg-surface shadow-xs">
             {['all', 'external', 'internal'].map((type) => (
               <button
                 key={type}
                 type="button"
                 onClick={() => setTypeFilter(type)}
-                className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
+                className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors cursor-pointer ${
                   typeFilter === type
-                    ? 'bg-[#252578] text-white'
-                    : 'bg-white hover:bg-gray-55 text-gray-600'
+                    ? 'bg-brand-primary text-white'
+                    : 'bg-surface hover:bg-page text-muted-slate'
                 }`}
               >
                 {type}
               </button>
             ))}
           </div>
-        </div>
-        <p className="text-sm text-gray-500 mt-1">
-          Pending tickets awaiting your acceptance.
-        </p>
-      </div>
+        }
+      />
 
       {loadError && (
-        <div className="rounded-xl bg-red-50 text-red-700 px-4 py-2 text-sm">
+        <div className="rounded-xl border border-red-200 bg-red-50 text-red-700 px-4 py-3 text-sm">
           {loadError}
         </div>
       )}
 
-      {loading ? (
-        <div className="rounded-2xl border border-gray-100 bg-white shadow-sm p-8">
-          <div className="space-y-4">
-            <SkeletonLoader variant="ticket-card" />
-            <SkeletonLoader variant="ticket-card" />
-            <SkeletonLoader variant="ticket-card" />
-          </div>
+      {/* Incoming Tabs */}
+      <div className="flex border-b border-gray-200 gap-1 sm:gap-2">
+        <button
+          type="button"
+          onClick={() => setIncomingTab('incoming')}
+          className={`pb-3 px-3 sm:px-4 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+            incomingTab === 'incoming'
+              ? 'border-brand-primary text-brand-primary'
+              : 'border-transparent text-muted-slate hover:text-dark-slate hover:border-gray-300'
+          }`}
+        >
+          <span>Pending Acceptance</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+            incomingTab === 'incoming' ? 'bg-brand-primary/10 text-brand-primary' : 'bg-page text-muted-slate'
+          }`}>
+            {pendingAcceptanceCount}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setIncomingTab('pending_reassignment')}
+          className={`pb-3 px-3 sm:px-4 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+            incomingTab === 'pending_reassignment'
+              ? 'border-amber-500 text-amber-700'
+              : 'border-transparent text-muted-slate hover:text-dark-slate hover:border-gray-300'
+          }`}
+        >
+          <span>Pending Reassignment</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+            incomingTab === 'pending_reassignment' ? 'bg-amber-100 text-amber-800' : 'bg-page text-muted-slate'
+          }`}>
+            {pendingReassignmentCount}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setIncomingTab('all')}
+          className={`pb-3 px-3 sm:px-4 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+            incomingTab === 'all'
+              ? 'border-brand-primary text-brand-primary'
+              : 'border-transparent text-muted-slate hover:text-dark-slate hover:border-gray-300'
+          }`}
+        >
+          <span>All Incoming</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+            incomingTab === 'all' ? 'bg-brand-primary/10 text-brand-primary' : 'bg-page text-muted-slate'
+          }`}>
+            {totalIncomingCount}
+          </span>
+        </button>
+      </div>
+
+      <div className="w-full space-y-3 shrink-0">
+        <div className="relative w-full">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-slate" />
+          <input
+            type="search"
+            placeholder="Search ID, title, customer..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full rounded-xl border border-gray-200 bg-surface pl-9 pr-4 py-2.5 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent placeholder:text-muted-slate/60"
+          />
         </div>
-      ) : (
-        <>
-          <div className="flex flex-wrap lg:flex-nowrap items-center gap-3 rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-sm w-full shrink-0">
-            <input type="search" placeholder="Search ID, title, customer..." value={search} onChange={(e) => setSearch(e.target.value)} className="flex-1 min-w-[260px] max-w-[630px] w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#252578] shrink" />
-            <div className="flex flex-wrap lg:flex-nowrap items-center gap-3 shrink-0 lg:ml-auto">
-              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-[132px] xl:w-[150px] shrink-0 rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#252578]">
-                {['All Status', 'Open', 'In Progress', 'Escalated', 'Pending', 'Pending Reassign', 'On Hold'].map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-              <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="w-[132px] xl:w-[150px] shrink-0 rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#252578]">
-                {[
-                  'All Category',
-                  'MRI',
-                  'CT Scan',
-                  'Ultrasound',
-                  'X-Ray',
-                  'Ventilator',
-                  'Defibrillator',
-                ].map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-              <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} className="w-[132px] xl:w-[150px] shrink-0 rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#252578]">
-                {['All Priority', 'Critical', 'High', 'Medium', 'Low'].map((p) => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
-              </select>
-              </div>
-            </div>
-            <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left" style={{ minWidth: '900px' }}>
-                <thead className="border-b border-gray-100 bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  <tr>
-                    <th className="px-5 py-4">Ticket ID</th>
-                    <th className="px-5 py-4">Customer</th>
-                    <th className="px-5 py-4">Type</th>
-                    <th className="px-5 py-4">Title</th>
-                    <th className="px-5 py-4">Category</th>
-                    <th className="px-5 py-4">Priority</th>
-                    <th className="px-5 py-4">Status</th>
-                    <th className="px-5 py-4">Last Update</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 text-gray-700">
-                  {filtered.length === 0 ? (
-                    <tr>
-                      <td
-                        colSpan={8}
-                        className="py-12 text-center text-gray-400 text-sm"
-                      >
-                        No incoming tickets pending acceptance.
-                      </td>
-                    </tr>
-                  ) : (
-                    filtered.map((t) => (
-                      <tr
-                        key={t.id}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => openTicketFlow(t)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            openTicketFlow(t);
-                          }
-                        }}
-                        className="border-b border-gray-100 hover:bg-blue-50/40 cursor-pointer transition-colors"
-                      >
-                        <td className="px-5 py-4 align-middle">
-                          <span className="font-semibold text-[#252578] text-sm leading-tight">{t.id}</span>
-                        </td>
-                        <td className="px-5 py-4 align-middle min-w-0">
-                          <p className="font-semibold text-gray-900 text-sm truncate">{t.customer}</p>
-                        </td>
-                        <td className="px-5 py-4 align-middle">
-                          <span className={`inline-flex whitespace-nowrap px-2.5 py-1 rounded-full text-xs font-semibold ${(t.title?.startsWith('[Internal]') || t.is_internal || t.ticket_type === 'Internal' || t.type === 'Internal') ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>{(t.title?.startsWith('[Internal]') || t.is_internal || t.ticket_type === 'Internal' || t.type === 'Internal') ? 'Internal' : 'External'}</span>
-                        </td>
-                        <td className="px-5 py-4 align-middle min-w-0">
-                          <p className="font-semibold text-gray-900 text-sm line-clamp-2 leading-snug">{t.title}</p>
-                        </td>
-                        <td className="px-5 py-4 align-middle text-gray-600 text-sm truncate">{t.category}</td>
-                        <td className="px-5 py-4 align-middle">
-                          <span className={`inline-flex whitespace-nowrap px-2.5 py-1 rounded-full text-xs font-semibold ${priorityColors[t.priority]}`}>{t.priority}</span>
-                        </td>
-                        <td className="px-5 py-4 align-middle">
-                          <span className={`inline-flex whitespace-nowrap px-2.5 py-1 rounded-full text-xs font-semibold border ${statusColors[t.status] ?? 'bg-gray-100 text-gray-700 border-gray-200'}`}>{t.status}</span>
-                        </td>
-                        <td className="px-5 py-4 align-middle text-gray-600 text-sm whitespace-nowrap">{formatDisplayDate(t.lastUpdate)}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-                </table>
-              </div>
-              <div className="px-4 py-3 border-t border-gray-100">
-                <p className="text-sm text-gray-500">
-                  Showing {filtered.length} of {pendingCount} incoming tickets
-                </p>
-              </div>
-            </div>
-          </>
-        )}
+        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+          >
+            {['All Status', 'Open', 'In Progress', 'Pending Reassignment', 'Reassignment Failed', 'Escalated', 'Pending', 'On Hold'].map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+          >
+            {[
+              'All Category',
+              'MRI',
+              'CT Scan',
+              'Ultrasound',
+              'X-Ray',
+              'Ventilator',
+              'Defibrillator',
+            ].map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <select
+            value={priorityFilter}
+            onChange={(e) => setPriorityFilter(e.target.value)}
+            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+          >
+            {['All Priority', 'Critical', 'High', 'Medium', 'Low'].map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-surface shadow-xs">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[120px]">Ticket ID</TableHead>
+              <TableHead className="w-[160px]">Customer</TableHead>
+              <TableHead className="w-[110px]">Type</TableHead>
+              <TableHead className="min-w-[240px]">Title</TableHead>
+              <TableHead className="w-[140px]">Category</TableHead>
+              <TableHead className="w-[110px]">Priority</TableHead>
+              <TableHead className="w-[160px]">Status</TableHead>
+              <TableHead className="w-[140px]">Last Update</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {loading ? (
+              <DataTableSkeleton columns={8} rows={4} />
+            ) : filtered.length === 0 ? (
+              <DataTableEmptyState
+                colSpan={8}
+                icon={Inbox}
+                title="No incoming tickets"
+                description="No incoming tickets pending acceptance match your current filters."
+              />
+            ) : (
+              filtered.map((t) => (
+                <TableRow
+                  key={t.id}
+                  className="cursor-pointer hover:bg-page"
+                  onClick={() => openTicketFlow(t)}
+                >
+                  <TableCell className="font-semibold text-brand-primary whitespace-nowrap">
+                    {t.id}
+                  </TableCell>
+                  <TableCell className="max-w-[160px] truncate text-dark-slate font-medium">
+                    {t.customer}
+                  </TableCell>
+                  <TableCell>
+                    <span className={`inline-flex whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                      (t.title?.startsWith('[Internal]') || t.is_internal || t.ticket_type === 'Internal' || t.type === 'Internal')
+                        ? 'bg-purple-100 text-purple-700'
+                        : 'bg-blue-100 text-blue-700'
+                    }`}>
+                      {(t.title?.startsWith('[Internal]') || t.is_internal || t.ticket_type === 'Internal' || t.type === 'Internal') ? 'Internal' : 'External'}
+                    </span>
+                  </TableCell>
+                  <TableCell className="max-w-[260px]">
+                    <p className="font-medium text-dark-slate text-sm line-clamp-2 leading-snug">{t.title}</p>
+                    {t.proofRejected && (
+                      <p className="text-xs text-rose-600 font-medium truncate mt-0.5" title={`Proof rejected: ${t.rejectionReason || 'No reason provided'}`}>
+                        Rejection reason: &quot;{t.rejectionReason || 'Proof rejected by CS'}&quot;
+                      </p>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-muted-slate text-sm truncate">{t.category}</TableCell>
+                  <TableCell>
+                    <span className="text-xs font-semibold text-muted-slate">{t.priority}</span>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {isReassignmentDenied(t) ? (
+                        <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs">
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                          Reassignment Failed
+                        </span>
+                      ) : hasPendingReassignment(t) ? (
+                        <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
+                          Pending Reassignment
+                        </span>
+                      ) : t.proofRejected ? (
+                        <div className="flex flex-col gap-1 items-start">
+                          <Badge variant={getStatusBadgeVariant(t.status)}>
+                            {t.status}
+                          </Badge>
+                          <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs">
+                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                            Proof Rejected
+                          </span>
+                        </div>
+                      ) : (
+                        <Badge variant={getStatusBadgeVariant(t.status)}>
+                          {t.status}
+                        </Badge>
+                      )}
+                      {(() => {
+                        const rawSla = t.sla_status || t.slaStatus || (t.sla_breached ? 'Breached' : null);
+                        const normalized = rawSla ? String(rawSla).toLowerCase().replace(/[\s_-]+/g, '') : '';
+                        if (normalized === 'breached' || normalized === 'violated') {
+                          return (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                              <AlertTriangle className="h-2.5 w-2.5 text-rose-600 shrink-0" />
+                              <span>Breached</span>
+                            </span>
+                          );
+                        }
+                        return null;
+                      })()}
+                      {(t.last_reminder_sent_at || t.lastReminderSentAt) && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200" title={`Reminder sent by CS: ${formatDisplayDate(t.last_reminder_sent_at || t.lastReminderSentAt)}`}>
+                          <Bell className="h-2.5 w-2.5 text-indigo-600 shrink-0" />
+                          <span>Reminder</span>
+                        </span>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-muted-slate text-xs whitespace-nowrap">
+                    {formatDisplayDate(t.lastUpdate)}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
 
       {/* Modal: Not-yet-accepted ticket (Accept / Request Reassignment) */}
       {pendingTicket && (
@@ -426,11 +674,33 @@ export default function EmployeeAssigned() {
         />
       )}
 
+      <ActionErrorModal error={actionError} onClose={() => setActionError(null)} />
+
       {/* Modal: Accepted active ticket — lightweight info + Update button */}
       {infoTicket && (
         <TicketInfoModal
           ticket={infoTicket}
           onClose={() => setInfoTicket(null)}
+          onReassignSuccess={(id, reason) => {
+            setTickets((prev) =>
+              prev.map((t) =>
+                t.id === id || t.ticket_ID === id
+                  ? {
+                      ...t,
+                      reassignmentRequested: true,
+                      reassignmentStatus: 'Pending',
+                      reassignmentReason: reason,
+                      status: 'Pending Reassignment',
+                      deniedReassignment: false,
+                      reassignmentDenied: false,
+                      disapprovalReason: null,
+                      reassignmentDenyReason: null,
+                    }
+                  : t
+              )
+            );
+            loadTickets({ forceRefresh: true });
+          }}
         />
       )}
 
@@ -439,6 +709,26 @@ export default function EmployeeAssigned() {
         <TicketInfoModal
           ticket={deniedReassignTicket}
           onClose={() => setDeniedReassignTicket(null)}
+          onReassignSuccess={(id, reason) => {
+            setTickets((prev) =>
+              prev.map((t) =>
+                t.id === id || t.ticket_ID === id
+                  ? {
+                      ...t,
+                      reassignmentRequested: true,
+                      reassignmentStatus: 'Pending',
+                      reassignmentReason: reason,
+                      status: 'Pending Reassignment',
+                      deniedReassignment: false,
+                      reassignmentDenied: false,
+                      disapprovalReason: null,
+                      reassignmentDenyReason: null,
+                    }
+                  : t
+              )
+            );
+            loadTickets({ forceRefresh: true });
+          }}
         />
       )}
 
@@ -447,14 +737,27 @@ export default function EmployeeAssigned() {
         <ReassignmentModal
           ticket={reassignTicket}
           onClose={() => setReassignTicket(null)}
-          onReassignSuccess={(id) => {
+          onReassignSuccess={(id, reason) => {
             setTickets((prev) =>
               prev.map((t) =>
-                t.id === id
-                  ? { ...t, reassignmentRequested: true, reassignmentStatus: 'Pending' }
+                t.id === id || t.ticket_ID === id
+                  ? {
+                      ...t,
+                      reassignmentRequested: true,
+                      reassignmentStatus: 'Pending',
+                      reassignmentReason: reason,
+                      status: 'Pending Reassignment',
+                      deniedReassignment: false,
+                      reassignmentDenied: false,
+                      disapprovalReason: null,
+                      reassignmentDenyReason: null,
+                    }
                   : t
               )
             );
+            setIncomingTab('pending_reassignment');
+            setReassignTicket(null);
+            loadTickets({ forceRefresh: true });
           }}
         />
       )}

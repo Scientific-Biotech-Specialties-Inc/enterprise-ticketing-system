@@ -48,19 +48,119 @@ const getMockUser = (email = 'frontend@example.com', mode = 'customer') => {
   };
 };
 
-const checkIsCS = (user) => {
-  if (!user) return false;
-  const dept = (user.department || user.profile?.department?.name || '').toLowerCase();
-  const role = (user.role || user.profile?.role?.name || '').toLowerCase();
-  if (dept.includes('customer service') || dept.includes('customer support') || dept === 'cs') return true;
-  return role.includes('customer service') || role.includes('customer-service') || role === 'cs';
+export const resolveUserRole = (user) => {
+  if (!user) return '';
+  const profileRole = user.profile?.role
+    ? (typeof user.profile.role === 'object' ? user.profile.role.name : user.profile.role)
+    : '';
+  // If user has a specific profile role (like "Super Admin", "IT Admin", "Customer Service"), trust that over a generic "customer" fallback
+  if (profileRole && (!user.role || user.role === 'customer')) {
+    return profileRole;
+  }
+  if (typeof user.role === 'object' && user.role !== null) {
+    return user.role.name || '';
+  }
+  if (typeof user.role === 'string' && user.role) {
+    return user.role;
+  }
+  return profileRole || 'customer';
 };
 
-const checkIsEmployee = (user) => {
+export const resolveUserDepartment = (user) => {
+  if (!user) return '';
+  if (typeof user.department === 'string' && user.department) return user.department;
+  if (typeof user.department === 'object' && user.department !== null) return user.department.name || '';
+  if (user.profile?.department) {
+    return typeof user.profile.department === 'object' ? user.profile.department.name : user.profile.department;
+  }
+  return '';
+};
+
+export const checkIsItManager = (user) => {
+  if (!user) return false;
+  const role = resolveUserRole(user).toLowerCase();
+  const dept = resolveUserDepartment(user).toLowerCase();
+  return (
+    role === 'it_manager' ||
+    role === 'it manager' ||
+    role === 'it department manager' ||
+    (dept.includes('it') && role.includes('manager'))
+  );
+};
+
+export const checkIsServiceManager = (user) => {
+  if (!user) return false;
+  const role = resolveUserRole(user).toLowerCase();
+  const dept = resolveUserDepartment(user).toLowerCase();
+  const posLevel = (user.position_level || user.profile?.position_level || '').toLowerCase();
+  const email = (user.email || '').toLowerCase();
+  if (email === 'carlos.mendoza@hospital.com') return true;
+  return (
+    role === 'service_manager' ||
+    role === 'service manager' ||
+    role === 'service department manager' ||
+    role === 'lead service engineer' ||
+    ((dept.includes('service') || dept.includes('biomedical') || dept.includes('radiology') || dept.includes('facilities')) && (role.includes('manager') || posLevel === 'manager'))
+  );
+};
+
+export const checkIsCSManager = (user) => {
+  if (!user) return false;
+  const role = resolveUserRole(user).toLowerCase();
+  const dept = resolveUserDepartment(user).toLowerCase();
+  const posLevel = (user.position_level || user.profile?.position_level || '').toLowerCase();
+  const email = (user.email || '').toLowerCase();
+  if (email === 'headofcs@gmail.com') return true;
+  return (
+    role === 'cs_manager' ||
+    role === 'cs manager' ||
+    role === 'customer_service_manager' ||
+    role === 'customer service manager' ||
+    role === 'customer support manager' ||
+    role === 'head of cs' ||
+    role === 'head of customer service' ||
+    role === 'head cs' ||
+    ((dept.includes('customer service') || dept.includes('customer support') || dept === 'cs') && (role.includes('manager') || role.includes('head') || posLevel === 'manager'))
+  );
+};
+
+export const checkIsCS = (user) => {
+  if (!user) return false;
+  if (checkIsCSManager(user)) return false;
+  const dept = resolveUserDepartment(user).toLowerCase();
+  const role = resolveUserRole(user).toLowerCase();
+  if (dept.includes('customer service') || dept.includes('customer support') || dept === 'cs') return true;
+  return (
+    role.includes('customer service') ||
+    role.includes('customer-service') ||
+    role === 'cs'
+  );
+};
+
+export const checkIsSuperAdmin = (user) => {
+  if (!user) return false;
+  const role = resolveUserRole(user).toLowerCase();
+  const dept = resolveUserDepartment(user).toLowerCase();
+  return role === 'superadmin' || role === 'super admin' || dept === 'superadmin' || dept === 'super admin';
+};
+
+export const checkIsAdmin = (user) => {
+  if (!user) return false;
+  const role = resolveUserRole(user).toLowerCase();
+  const dept = resolveUserDepartment(user).toLowerCase();
+  return role === 'admin' || role === 'it admin' || (dept === 'admin' && role !== 'superadmin' && role !== 'super admin');
+};
+
+export const checkIsEmployee = (user) => {
   if (!user) return false;
   if (checkIsCS(user)) return false;
-  const dept = (user.department || user.profile?.department?.name || '').toLowerCase();
-  const role = (user.role || user.profile?.role?.name || '').toLowerCase();
+  if (checkIsCSManager(user)) return false;
+  if (checkIsAdmin(user)) return false;
+  if (checkIsSuperAdmin(user)) return false;
+  if (checkIsItManager(user)) return false;
+  if (checkIsServiceManager(user)) return false;
+  const dept = resolveUserDepartment(user).toLowerCase();
+  const role = resolveUserRole(user).toLowerCase();
   if (dept === 'service' || dept.includes('engineer')) return true;
   return role === 'employee' || role.includes('service') || role.includes('engineer');
 };
@@ -68,8 +168,8 @@ const checkIsEmployee = (user) => {
 const normalizeUser = (userData) => {
   if (!userData) return null;
 
-  let firstName = userData.first_name;
-  let lastName = userData.last_name;
+  let firstName = userData.first_name || userData.profile?.first_name;
+  let lastName = userData.last_name || userData.profile?.last_name;
 
   if (!firstName && userData.client_name) {
     const parts = userData.client_name.split(' ');
@@ -77,23 +177,120 @@ const normalizeUser = (userData) => {
     lastName = parts.slice(1).join(' ');
   }
 
+  const role = resolveUserRole(userData);
+  const department = resolveUserDepartment(userData);
+
+  const branchName = userData.branch || userData.profile?.branch?.name || userData.branch_details?.name || null;
+  const branchId = userData.branch_id || userData.profile?.branch_id || userData.branch_details?.id || null;
+  const branchDetails = userData.branch_details || (userData.profile?.branch ? {
+    id: userData.profile.branch.id,
+    name: userData.profile.branch.name,
+    address: userData.profile.branch.address,
+  } : null);
+
   return {
     ...userData,
     first_name: firstName || userData.name || '',
     last_name: lastName || '',
-    phone: userData.phone || userData.contact_number || '',
-    role: userData.role || 'customer',
+    phone: userData.phone || userData.contact_number || userData.profile?.phone || '',
+    department,
+    role,
+    branch: branchName,
+    branch_id: branchId,
+    branch_details: branchDetails,
   };
+};
+
+export const isStaffUser = (userData) => {
+  if (!userData) return false;
+  return (
+    checkIsSuperAdmin(userData) ||
+    checkIsAdmin(userData) ||
+    checkIsCS(userData) ||
+    checkIsCSManager(userData) ||
+    checkIsItManager(userData) ||
+    checkIsServiceManager(userData) ||
+    checkIsEmployee(userData)
+  );
+};
+
+export const sanitizeCustomerForStorage = (userData) => {
+  if (!userData) return null;
+  return {
+    id: userData.id,
+    first_name: userData.first_name || userData.name || '',
+    last_name: userData.last_name || '',
+    name: userData.client_name || userData.name || `${userData.first_name || ''} ${userData.last_name || ''}`.trim(),
+    email: userData.email || '',
+    role: resolveUserRole(userData) || 'customer',
+    status: userData.status ?? true,
+  };
+};
+
+const persistStoredUser = (userData) => {
+  try {
+    if (!userData) {
+      sessionStorage.removeItem('user');
+      localStorage.removeItem('user');
+      return;
+    }
+
+    if (!isStaffUser(userData)) {
+      // Customer: Sanitize PII (strip address, phone, contact_number, timestamps)
+      // and restrict persistence strictly to sessionStorage (purged on tab/browser close).
+      const sanitized = sanitizeCustomerForStorage(userData);
+      sessionStorage.setItem('user', JSON.stringify(sanitized));
+      localStorage.removeItem('user');
+      return;
+    }
+
+    sessionStorage.setItem('user', JSON.stringify(userData));
+
+    // Overwriting the key replaces any stale record from a different account or role.
+    localStorage.setItem('user', JSON.stringify(userData));
+  } catch {}
+};
+
+const clearStoredUser = () => {
+  try {
+    sessionStorage.removeItem('user');
+    sessionStorage.removeItem('first_login_pending');
+    localStorage.removeItem('user');
+  } catch {}
 };
 
 const readStoredUser = () => {
   try {
-    const stored = JSON.parse(localStorage.getItem('user'));
-    if (!stored) return null;
+    let raw = sessionStorage.getItem('user');
+    if (!raw) {
+      raw = localStorage.getItem('user');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (isStaffUser(parsed)) {
+          sessionStorage.setItem('user', raw);
+          // Keep localStorage['user'] intact so Central Auth Module does not think the session was destroyed
+        } else {
+          // If a customer record is found in localStorage, sanitize it, migrate to sessionStorage,
+          // and immediately wipe it from localStorage.
+          const sanitized = sanitizeCustomerForStorage(normalizeUser(parsed));
+          sessionStorage.setItem('user', JSON.stringify(sanitized));
+          localStorage.removeItem('user');
+          raw = JSON.stringify(sanitized);
+        }
+      }
+    } else {
+      // If customer record is already in sessionStorage, ensure any stale customer entry in localStorage is purged
+      try {
+        const parsedSession = JSON.parse(raw);
+        if (!isStaffUser(parsedSession)) {
+          localStorage.removeItem('user');
+        }
+      } catch {}
+    }
+    if (!raw) return null;
+    const stored = JSON.parse(raw);
 
-    const isCS = checkIsCS(stored);
-    const isEmployee = checkIsEmployee(stored);
-    const isCustomer = !isCS && !isEmployee;
+    const isCustomer = !isStaffUser(stored);
 
     const isCustomerSite = import.meta.env.VITE_APP_MODE === 'customer';
     if (isCustomerSite && !isCustomer) {
@@ -127,7 +324,7 @@ const ensureCsrfCookie = async () => {
 //logout cleanup 
 const applyUnauthenticated = (setUser, setIsAuthenticated) => {
   tokenStore.clearToken();
-  localStorage.removeItem('user');
+  clearStoredUser();
   setUser(null);
   setIsAuthenticated(false);
 };
@@ -163,7 +360,15 @@ export function AuthProvider({ children }) {
       return false;
     }
 
-    // Skip session revalidation on guest/login pages
+    // Skip session revalidation on guest/login pages or if user explicitly logged out
+    if (
+      typeof window !== 'undefined' &&
+      (sessionStorage.getItem('is_logged_out') === 'true' || sessionStorage.getItem('logged_out') === 'true')
+    ) {
+      applyUnauthenticated(setUser, setIsAuthenticated);
+      return false;
+    }
+
     const pathname = window.location.pathname;
     const isLoginPage =
       pathname.endsWith('/customer') ||
@@ -174,14 +379,64 @@ export function AuthProvider({ children }) {
       return false;
     }
 
+    // Customer portal guests (e.g. the landing page) have no token and no stored user,
+    // so probing /me and /auth/refresh would only log two expected 401s in the console.
+    if (import.meta.env.VITE_APP_MODE === 'customer') {
+      let hasStoredUser = false;
+      try {
+        hasStoredUser = Boolean(sessionStorage.getItem('user') || localStorage.getItem('user'));
+      } catch {}
+      if (!tokenStore.getToken() && !hasStoredUser) {
+        applyUnauthenticated(setUser, setIsAuthenticated);
+        return false;
+      }
+    }
+
+    const existingToken = tokenStore.getToken();
+
+    // Employee/CS sessions come from the central SSO and have no customer-service refresh token,
+    // so they must fall through to the /me probe (which accepts the SSO access_token cookie).
+    if (!existingToken && import.meta.env.VITE_APP_MODE === 'customer') {
+      // In-memory access token is empty on page reload / new tab.
+      // Silently restore session via the httpOnly refresh cookie.
+      try {
+        const resp = await axiosInstance.post(AUTH_ENDPOINTS.REFRESH_TOKEN, {}, { withCredentials: true });
+        const newToken = resp.data?.token;
+        const userData = resp.data?.user;
+        if (newToken) {
+          tokenStore.setToken(newToken);
+          const normalized = normalizeUser(userData);
+          setUser(normalized);
+          setIsAuthenticated(true);
+          const firstLoginRefreshed = Boolean(resp.data?.is_first_login);
+          setIsFirstLogin(firstLoginRefreshed);
+          if (firstLoginRefreshed) {
+            sessionStorage.setItem('first_login_pending', 'true');
+          } else {
+            sessionStorage.removeItem('first_login_pending');
+          }
+          if (normalized) persistStoredUser(normalized);
+          return true;
+        }
+      } catch {
+        // Refresh token expired or unauthenticated guest
+      }
+      applyUnauthenticated(setUser, setIsAuthenticated);
+      return false;
+    }
+
     try {
       const resp = await axiosInstance.get(AUTH_ENDPOINTS.ME);
       const userData = resp.data?.user;
       const firstLogin = Boolean(resp.data?.is_first_login);
+      const sessionToken = resp.data?.token;
+      if (sessionToken) {
+        tokenStore.setToken(sessionToken);
+      }
       if (userData) {
         const normalized = normalizeUser(userData);
         setUser(normalized);
-        localStorage.setItem('user', JSON.stringify(normalized));
+        persistStoredUser(normalized);
       }
       setIsAuthenticated(true);
       setIsFirstLogin(firstLogin);
@@ -209,7 +464,7 @@ export function AuthProvider({ children }) {
             } else {
               sessionStorage.removeItem('first_login_pending');
             }
-            if (normalized) localStorage.setItem('user', JSON.stringify(normalized));
+            if (normalized) persistStoredUser(normalized);
             return true;
           }
         } catch {
@@ -219,12 +474,8 @@ export function AuthProvider({ children }) {
         return false;
       }
 
-      const storedUser = readStoredUser();
-      if (storedUser) {
-        setUser(normalizeUser(storedUser));
-        setIsAuthenticated(true);
-        return true;
-      }
+      // Fail-closed principle: Any error during revalidation MUST deny access
+      applyUnauthenticated(setUser, setIsAuthenticated);
       return false;
     }
   }, []);
@@ -285,8 +536,13 @@ export function AuthProvider({ children }) {
       if (MOCK_AUTH_ENABLED) {
         const userData = getMockUser(email, mode);
 
+        try {
+          sessionStorage.removeItem('logged_out');
+          sessionStorage.removeItem('is_logged_out');
+        } catch {}
+
         tokenStore.setToken(MOCK_TOKEN);
-        localStorage.setItem('user', JSON.stringify(userData));
+        persistStoredUser(userData);
         setUser(userData);
         setIsAuthenticated(true);
         setIsFirstLogin(false);
@@ -312,10 +568,15 @@ export function AuthProvider({ children }) {
 
       const { user: userData, token, is_first_login: firstLogin } = response.data;
 
+      try {
+        sessionStorage.removeItem('logged_out');
+        sessionStorage.removeItem('is_logged_out');
+      } catch {}
+
       // Store auth data in memory and set user
       const normalized = normalizeUser(userData);
       tokenStore.setToken(token);
-      localStorage.setItem('user', JSON.stringify(normalized));
+      persistStoredUser(normalized);
       setUser(normalized);
       setIsAuthenticated(true);
       setIsFirstLogin(Boolean(firstLogin));
@@ -365,7 +626,7 @@ export function AuthProvider({ children }) {
         };
 
         tokenStore.setToken(MOCK_TOKEN);
-        localStorage.setItem('user', JSON.stringify(newUser));
+        persistStoredUser(newUser);
         setUser(newUser);
         setIsAuthenticated(true);
         setIsFirstLogin(false);
@@ -382,7 +643,7 @@ export function AuthProvider({ children }) {
 
       const normalized = normalizeUser(newUser);
       tokenStore.setToken(token);
-      localStorage.setItem('user', JSON.stringify(normalized));
+      persistStoredUser(normalized);
 
       setUser(normalized);
       setIsAuthenticated(true);
@@ -402,9 +663,12 @@ export function AuthProvider({ children }) {
     const currentToken = tokenStore.getToken();
 
     if (MOCK_AUTH_ENABLED) {
-      localStorage.removeItem('user');
-      localStorage.removeItem(LOCKOUT_STORAGE_KEY);
-      sessionStorage.removeItem('first_login_pending');
+      clearStoredUser();
+      try {
+        localStorage.removeItem(LOCKOUT_STORAGE_KEY);
+        sessionStorage.removeItem('first_login_pending');
+        sessionStorage.setItem('logged_out', 'true');
+      } catch {}
       tokenStore.clearToken();
 
       setUser(null);
@@ -412,6 +676,33 @@ export function AuthProvider({ children }) {
       setError(null);
       setIsFirstLogin(false);
       setIsLoading(false);
+
+      if (typeof window !== 'undefined') {
+        const isCustomerSite = import.meta.env.VITE_APP_MODE === 'customer';
+        const isCustomerUser =
+          user?.role === 'customer' ||
+          (!isStaffUser(user) &&
+            !window.location.pathname.includes('/employee') &&
+            !window.location.pathname.includes('/superadmin') &&
+            !window.location.pathname.includes('/cs') &&
+            !window.location.pathname.includes('/admin'));
+
+        let targetUrl = '/';
+        if (isCustomerSite) {
+          targetUrl = import.meta.env.BASE_URL || '/';
+        } else if (isCustomerUser) {
+          if (import.meta.env.VITE_CUSTOMER_PORTAL_URL) {
+            targetUrl = import.meta.env.VITE_CUSTOMER_PORTAL_URL;
+          } else if (window.location.port === '5173' || window.location.port === '5005') {
+            targetUrl = `${window.location.protocol}//${window.location.hostname}:5006/`;
+          } else {
+            targetUrl = '/';
+          }
+        } else {
+          targetUrl = '/';
+        }
+        window.location.replace(targetUrl);
+      }
 
       return { success: true };
     }
@@ -426,9 +717,13 @@ export function AuthProvider({ children }) {
     } catch {
       // Background logout cleanup failed silently
     } finally {
-      localStorage.removeItem('user');
-      localStorage.removeItem(LOCKOUT_STORAGE_KEY);
-      sessionStorage.removeItem('first_login_pending');
+      clearStoredUser();
+      try {
+        localStorage.removeItem(LOCKOUT_STORAGE_KEY);
+        sessionStorage.removeItem('first_login_pending');
+        sessionStorage.setItem('logged_out', 'true');
+        sessionStorage.setItem('is_logged_out', 'true');
+      } catch {}
       tokenStore.clearToken();
 
       setUser(null);
@@ -438,8 +733,30 @@ export function AuthProvider({ children }) {
       setIsLoading(false);
 
       if (typeof window !== 'undefined') {
-        const isCustomerSite = user?.role === 'customer' || import.meta.env.VITE_APP_MODE === 'customer';
-        window.history.replaceState(null, '', isCustomerSite ? '/customer' : '/');
+        const isCustomerSite = import.meta.env.VITE_APP_MODE === 'customer';
+        const isCustomerUser =
+          user?.role === 'customer' ||
+          (!isStaffUser(user) &&
+            !window.location.pathname.includes('/employee') &&
+            !window.location.pathname.includes('/superadmin') &&
+            !window.location.pathname.includes('/cs') &&
+            !window.location.pathname.includes('/admin'));
+
+        let targetUrl = '/';
+        if (isCustomerSite) {
+          targetUrl = import.meta.env.BASE_URL || '/';
+        } else if (isCustomerUser) {
+          if (import.meta.env.VITE_CUSTOMER_PORTAL_URL) {
+            targetUrl = import.meta.env.VITE_CUSTOMER_PORTAL_URL;
+          } else if (window.location.port === '5173' || window.location.port === '5005') {
+            targetUrl = `${window.location.protocol}//${window.location.hostname}:5006/`;
+          } else {
+            targetUrl = '/';
+          }
+        } else {
+          targetUrl = '/';
+        }
+        window.location.replace(targetUrl);
       }
     }
 
@@ -462,7 +779,7 @@ export function AuthProvider({ children }) {
           ...userData,
         };
 
-        localStorage.setItem('user', JSON.stringify(updatedUser));
+        persistStoredUser(updatedUser);
         setUser(updatedUser);
 
         return { success: true, user: updatedUser };
@@ -472,7 +789,7 @@ export function AuthProvider({ children }) {
 
       const updatedUser = response.data.user;
       const normalized = normalizeUser(updatedUser);
-      localStorage.setItem('user', JSON.stringify(normalized));
+      persistStoredUser(normalized);
       setUser(normalized);
 
       return { success: true, user: normalized };
@@ -515,7 +832,7 @@ export function AuthProvider({ children }) {
 
   // Heartbeat loop for employees
   useEffect(() => {
-    if (!isAuthenticated || !user || user.role === 'customer' || user.role === 'customer service') {
+    if (!isAuthenticated || !user || user.role === 'customer' || user.role === 'customer service' || user.role === 'head of cs' || user.role === 'head of customer service') {
       return undefined;
     }
 

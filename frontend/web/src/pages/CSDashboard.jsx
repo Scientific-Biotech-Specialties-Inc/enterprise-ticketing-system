@@ -1,385 +1,206 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useOutletContext, useNavigate } from 'react-router-dom';
-import { Inbox, Clock, CheckCircle, AlertTriangle, Bot } from 'lucide-react';
 import {
-  getCSDashboard,
+  Inbox,
+  Clock,
+  CheckCircle2,
+  AlertTriangle,
+  ArrowRight,
+  Eye,
+  Loader2,
+  ShieldAlert,
+  PauseCircle,
+  RefreshCw,
+  ExternalLink,
+  UserCheck,
+} from 'lucide-react';
+import {
+  getCSDashboardSummary,
   getTicketDetails,
-  getInternalTickets,
   getAssignableEmployees,
   getDepartments,
-  prefetchTicketFormOptions,
   acceptTicket,
 } from '@/services/ticketService';
-import { statusColors, priorityColors } from '@/constants/employeeTickets';
-import SkeletonLoader from '@/components/SkeletonLoader';
+import { AssignModal } from '@/components/CSModals';
 import { useAuth } from '@/context/AuthContext';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import { formatDisplayDate } from '@/utils/dateUtils';
 import CustomerTicketDetailModal from '@/components/CustomerTicketDetailModal';
-import { AssignModal } from '@/components/CSModals';
-
-function ArrowRight() {
-  return (
-    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-    </svg>
-  );
-}
-
-const MOCK_STATS = {
-  unassigned: 7,
-  pending: 3,
-  assigned: 9,
-  highPriority: 11,
-  slaBreached: 2,
-  escalated: 4,
-};
-
-const MOCK_TICKETS = [
-  { id: 'TKT-1006', customer: 'QC General Hospital', title: 'X-Ray Machine Failure', status: 'New', priority: 'Low', updated: '1 hr ago' },
-  { id: 'TKT-1016', customer: 'St Lukes Taguig', title: 'Ultrasound Equipment Malfunction', status: 'New', priority: 'High', updated: '3 hrs ago' },
-  { id: 'TKT-1007', customer: 'Philippine General Hospital', title: 'CT Scan Machine Error', status: 'Ongoing', priority: 'Medium', updated: '5 hrs ago' },
-  { id: 'TKT-1017', customer: 'The Medical City', title: 'X-Ray Calibration Issue', status: 'New', priority: 'High', updated: '2 hrs ago' },
-];
+import SlaStatusBadge from '@/components/sla/SlaStatusBadge';
+import { DashboardHeader } from '@/components/ui/page-header';
+import { MetricCard } from '@/components/ui/metric-card';
+import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
+import { DataTableSkeleton } from '@/components/ui/data-table';
 
 export default function CSDashboard() {
   const { refreshKey = 0 } = useOutletContext() || {};
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [stats, setStats] = useState(null);
-  const [tickets, setTickets] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [newTicketId, setNewTicketId] = useState(null);
-  const [summaryTicket, setSummaryTicket] = useState(null);
+
+  // Section states & bifurcated loading
+  const [loadingWorkload, setLoadingWorkload] = useState(true);
+  const [workloadError, setWorkloadError] = useState(null);
+
+  const [loadingQueued, setLoadingQueued] = useState(true);
+  const [queuedError, setQueuedError] = useState(null);
+  const [queuedTickets, setQueuedTickets] = useState([]);
+
+  const [loadingAttention, setLoadingAttention] = useState(true);
+  const [attentionError, setAttentionError] = useState(null);
+  const [attentionTickets, setAttentionTickets] = useState([]);
+
+  const [assignedStatusCounts, setAssignedStatusCounts] = useState({
+    open: 0,
+    inProgress: 0,
+    onHold: 0,
+    resolved: 0,
+  });
+
+  const [workloadMetrics, setWorkloadMetrics] = useState({
+    queuedCount: 0,
+    assignedCount: 0,
+    atRiskCount: 0,
+    breachedCount: 0,
+    pendingReassignCount: 0,
+    escalatedCount: 0,
+  });
+
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [modalLoading, setModalLoading] = useState(false);
-  const [myRecentTickets, setMyRecentTickets] = useState([]);
-  const [loadingMyTickets, setLoadingMyTickets] = useState(true);
-  const [selectedMyTicket, setSelectedMyTicket] = useState(null);
-  const [myTicketsModalLoading, setMyTicketsModalLoading] = useState(false);
+  const [newTicketId, setNewTicketId] = useState(null);
   const [assignModalTicket, setAssignModalTicket] = useState(null);
-  const [employees, setEmployees] = useState([]);
-  const [departments, setDepartments] = useState([]);
-  const [priorityOptions, setPriorityOptions] = useState(['Low', 'Medium', 'High', 'Critical']);
-  const newTicketTimerRef = useRef(null);
-
-  const statusClass = (s) => statusColors[s] ?? (s?.includes('Discarded') ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-700');
-
-  const dateStr = new Intl.DateTimeFormat('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }).format(new Date());
-
-  const displayName = user?.first_name
-    ? `${user.first_name}${user.last_name ? ' ' + user.last_name : ''}`
-    : (user?.name || 'Customer Service');
-
-  const loadDashboard = useCallback(async ({ forceRefresh = false } = {}) => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const payload = await getCSDashboard({ limit: 10, forceRefresh: forceRefresh || refreshKey > 0 });
-      const recentTickets = (payload.recent_tickets || MOCK_TICKETS).map((t) => ({
-        ...t,
-        updated: t.updated_at ? formatDisplayDate(t.updated_at) : t.updated || 'Just now',
-        priority: t.priority || 'Unassigned',
-      }));
-      const slaBreachedCount = recentTickets.filter((t) => t.status === 'Escalated').length;
-      const escalatedCount = recentTickets.filter((t) => (t.priority === 'Critical' || t.priority === 'High') && t.status !== 'Resolved' && t.status !== 'Closed').length;
-      setStats({
-        unassigned: payload.summary?.open ?? MOCK_STATS.unassigned,
-        pending: payload.summary?.in_progress ?? MOCK_STATS.pending,
-        assigned: payload.summary?.resolved ?? MOCK_STATS.assigned,
-        highPriority: 0,
-        slaBreached: slaBreachedCount,
-        escalated: escalatedCount,
-      });
-      setTickets(recentTickets);
-    } catch (err) {
-      setError('Unable to load data from API — using local mock data.');
-      setStats(MOCK_STATS);
-      setTickets(MOCK_TICKETS);
-    } finally {
-      setLoading(false);
-    }
-  }, [refreshKey]);
-
-  const handleRealtimeUpdate = useCallback((context) => {
-    if (context && context.source === 'websocket') {
-      const payload = context.payload;
-      if (!payload) return;
-
-      const { action, ticket } = payload;
-      if (!ticket) return;
-
-      // Handle ticket created
-      if (action === 'created') {
-        // Prepend the new ticket to the tickets list (cap at 10 items)
-        setTickets((prev) => {
-          const exists = prev.some((t) => t.id === ticket.id || t.ticket_ID === ticket.ticket_ID);
-          if (exists) return prev;
-          
-          const formatted = {
-            ...ticket,
-            updated: ticket.updated_at ? formatDisplayDate(ticket.updated_at) : 'Just now',
-            priority: ticket.priority || 'Unassigned',
-          };
-          return [formatted, ...prev].slice(0, 10);
-        });
-
-        // Set highlight timer
-        if (newTicketTimerRef.current) {
-          clearTimeout(newTicketTimerRef.current);
-        }
-        setNewTicketId(ticket.id);
-        newTicketTimerRef.current = setTimeout(() => {
-          setNewTicketId(null);
-        }, 5000);
-
-        // Update stats: Increment unassigned (Open) and potentially highPriority
-        setStats((prev) => {
-          if (!prev) return prev;
-          const isHighPriority = ticket.priority === 'High' || ticket.priority === 'Critical';
-          return {
-            ...prev,
-            unassigned: prev.unassigned + 1,
-            highPriority: isHighPriority ? prev.highPriority + 1 : prev.highPriority,
-          };
-        });
-      } 
-      // Handle ticket assigned
-      else if (action === 'assigned' || action === 'accepted') {
-        // Find ticket in recent activities
-        setTickets((prev) => {
-          return prev.map((t) => {
-            if (t.id === ticket.id || t.ticket_ID === ticket.ticket_ID) {
-              return {
-                ...t,
-                ...ticket,
-                updated: ticket.updated_at ? formatDisplayDate(ticket.updated_at) : t.updated,
-                priority: ticket.priority || 'Unassigned',
-              };
-            }
-            return t;
-          });
-        });
-
-        // Update stats: Decrement unassigned (Open), increment pending (In Progress)
-        setStats((prev) => {
-          if (!prev) return prev;
-          
-          const newUnassigned = Math.max(0, prev.unassigned - 1);
-          const newPending = prev.pending + 1;
-          
-          return {
-            ...prev,
-            unassigned: newUnassigned,
-            pending: newPending,
-          };
-        });
-      }
-      // Handle status updates (Resolved / Closed)
-      else if (action === 'updated') {
-        // Find ticket in recent activities and update in-place
-        setTickets((prev) => {
-          return prev.map((t) => {
-            if (t.id === ticket.id || t.ticket_ID === ticket.ticket_ID) {
-              return {
-                ...t,
-                ...ticket,
-                updated: ticket.updated_at ? formatDisplayDate(ticket.updated_at) : t.updated,
-                priority: ticket.priority || 'Unassigned',
-              };
-            }
-            return t;
-          });
-        });
-
-        // Update stats based on ticket status change
-        setStats((prev) => {
-          if (!prev) return prev;
-
-          if (ticket.status === 'Resolved') {
-            const isHighPriority = ticket.priority === 'High' || ticket.priority === 'Critical';
-            return {
-              ...prev,
-              pending: Math.max(0, prev.pending - 1),
-              assigned: prev.assigned + 1,
-              highPriority: isHighPriority ? Math.max(0, prev.highPriority - 1) : prev.highPriority,
-            };
-          } else if (ticket.status === 'Closed') {
-            const isHighPriority = ticket.priority === 'High' || ticket.priority === 'Critical';
-            return {
-              ...prev,
-              pending: Math.max(0, prev.pending - 1),
-              highPriority: isHighPriority ? Math.max(0, prev.highPriority - 1) : prev.highPriority,
-            };
-          }
-          return prev;
-        });
-      }
-    } else {
-      loadDashboard({ forceRefresh: true });
-    }
-  }, [loadDashboard]);
-
-  const handleViewTicket = useCallback(async (t) => {
-    const isMock = !!t.isMock;
-    if (isMock) {
-      setSelectedTicket({ ...t, description: t.description || '', timeline: t.timeline || [{ id: 'creation', type: 'system', text: 'Ticket created.', timestamp: t.date_created || t.updated }], proofAttachments: t.proofAttachments || [] });
-      return;
-    }
-    setModalLoading(true);
-    try {
-      const ticketId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
-      const full = await getTicketDetails(ticketId);
-      setSelectedTicket({ ...t, ...full, description: full.description || t.description || '', timeline: full.timeline || t.timeline, proofAttachments: full.proofAttachments || [], proofFiles: full.proofFiles || [] });
-    } catch {
-      setSelectedTicket(t);
-    } finally {
-      setModalLoading(false);
-    }
-  }, []);
-
-  const loadMyTickets = useCallback(async () => {
-    setLoadingMyTickets(true);
-    try {
-      const apiTickets = await getInternalTickets();
-      if (apiTickets.length > 0) {
-        const mapped = apiTickets.map((ticket) => ({
-          ...ticket,
-          date_created: ticket.date || ticket.created_at,
-          last_updated: ticket.lastUpdate || ticket.updated_at || ticket.last_updated,
-          is_internal: true,
-          ticket_type: 'Internal',
-          can_discard: ticket.status === 'Open' && !ticket.assigned_to,
-        }));
-        setMyRecentTickets(mapped.slice(0, 5));
-        localStorage.setItem('cs_created_tickets', JSON.stringify(mapped));
-      } else {
-        const stored = JSON.parse(localStorage.getItem('cs_created_tickets') || '[]');
-        const mapped = stored.slice(0, 5);
-        setMyRecentTickets(mapped);
-      }
-    } catch {
-      const stored = JSON.parse(localStorage.getItem('cs_created_tickets') || '[]');
-      setMyRecentTickets(stored.slice(0, 5));
-    } finally {
-      setLoadingMyTickets(false);
-    }
-  }, []);
-
-  const handleViewMyTicket = useCallback(async (t) => {
-    const isMock = !!t.isMock;
-    if (isMock) {
-      setSelectedMyTicket({ ...t, description: t.description || '', resolved_at: t.resolved_at || null, proofAttachments: t.proofAttachments || [], proofFiles: t.proofFiles || [], can_discard: t.status === 'Open' && !t.assigned_to });
-      return;
-    }
-    setMyTicketsModalLoading(true);
-    try {
-      const ticketId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
-      const full = await getTicketDetails(ticketId);
-      setSelectedMyTicket({ ...t, ...full, description: full.description || t.description || '', resolved_at: full.resolved_at || null, proofAttachments: full.proofAttachments || [], proofFiles: full.proofFiles || [], can_discard: (full.status || t.status) === 'Open' && !full.assigned_to });
-    } catch {
-      setSelectedMyTicket(t);
-    } finally {
-      setMyTicketsModalLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadDashboard({ forceRefresh: false });
-    loadMyTickets();
-  }, [loadDashboard, loadMyTickets]);
+  const [assignEmployees, setAssignEmployees] = useState([]);
+  const [assignDepartments, setAssignDepartments] = useState([]);
 
   useEffect(() => {
     let isMounted = true;
-    const preloadAssignData = async () => {
-      try {
-        const [empRes, depRes, optRes] = await Promise.allSettled([
-          getAssignableEmployees(),
-          getDepartments(),
-          prefetchTicketFormOptions(),
-        ]);
-        if (!isMounted) return;
-        if (empRes.status === 'fulfilled') setEmployees(empRes.value || []);
-        if (depRes.status === 'fulfilled') setDepartments((depRes.value || []).map((d) => d.name || d));
-        if (optRes.status === 'fulfilled') {
-          const prioList = optRes.value?.ticket_priorities?.map((p) => p.priority_name);
-          if (prioList && prioList.length) setPriorityOptions(prioList);
-        }
-      } catch (err) {
-        console.warn('Failed to preload assign data:', err);
-      }
-    };
-    preloadAssignData();
+    Promise.all([
+      getAssignableEmployees({ forceRefresh: false }).catch(() => []),
+      getDepartments({ forceRefresh: false }).catch(() => []),
+    ]).then(([emps, deps]) => {
+      if (!isMounted) return;
+      setAssignEmployees(Array.isArray(emps) ? emps : (emps?.data || []));
+      setAssignDepartments(Array.isArray(deps) ? deps : (deps?.data || ['Service', 'IT Department', 'Customer Service']));
+    });
     return () => {
       isMounted = false;
     };
   }, []);
+  const newTicketTimerRef = useRef(null);
 
-  const handleOpenAssignModal = useCallback(async (ticket) => {
-    setSelectedTicket(null);
-    setSelectedMyTicket(null);
-    if (employees.length === 0) {
-      try {
-        const [empList, deptList] = await Promise.all([
-          getAssignableEmployees(),
-          getDepartments(),
-        ]);
-        if (empList) setEmployees(empList);
-        if (deptList) setDepartments((deptList || []).map((d) => d.name || d));
-      } catch (err) {
-        console.warn('Failed to fetch assign data on demand:', err);
-      }
-    }
-    setAssignModalTicket(ticket);
-  }, [employees.length]);
+  const displayName = user?.first_name
+    ? `${user.first_name}${user.last_name ? ' ' + user.last_name : ''}`
+    : user?.name || 'Customer Service Representative';
 
-  const handleNavigateTicketHistory = useCallback((ticket) => {
-    setSelectedTicket(null);
-    setSelectedMyTicket(null);
-    const ticketId = ticket.ticket_ID || Number(String(ticket.id).replace(/\D/g, ''));
-    navigate(`/cs/history/${ticketId}`, { state: { ticket, backPath: '/cs/dashboard' } });
-  }, [navigate]);
-
-  const handleSaveAssignment = async (updated) => {
-    const priorityMap = {
-      Low: 1,
-      Medium: 2,
-      High: 3,
-      Critical: 4,
-    };
-
-    const isMock = !!updated.isMock;
-    if (isMock) {
-      const refreshed = {
-        ...updated,
-        status: 'Pending Assignment',
-      };
-      setTickets((prev) => prev.map((t) => (t.ticket_ID === updated.ticket_ID || t.id === updated.id ? refreshed : t)));
-      setAssignModalTicket(null);
-      return true;
-    }
+  // ─── SLA helper ───────────────────────────────────────────────────────────
+  // ─── Load the signed in agent's own summary ─────────────────────────────────
+  // One call returns queue, monitored tickets, workload and attention items for this agent only.
+  // Sections the server could not compute come back in partial_errors and show their own error state.
+  const loadDashboardData = useCallback(async () => {
+    setLoadingWorkload(true);
+    setLoadingQueued(true);
+    setLoadingAttention(true);
+    setWorkloadError(null);
+    setQueuedError(null);
+    setAttentionError(null);
 
     try {
-      const targetTicketId = updated.ticket_ID || Number(String(updated.id || '').replace(/\D/g, ''));
-      await acceptTicket({
-        ticketId: targetTicketId,
-        employeeIds: updated.assigned,
-        assignedByEmail: user?.email,
-        priorityId: priorityMap[updated.priority] ?? 1,
-      });
+      const summary = await getCSDashboardSummary({ limit: 20 });
+      const failed = new Set((summary?.partial_errors || []).map((e) => e.section));
 
-      window.dispatchEvent(new Event('notifications:updated'));
-      setAssignModalTicket(null);
-      await loadDashboard({ forceRefresh: true });
-      return true;
-    } catch (err) {
-      console.error('Failed to assign ticket:', err);
-      window.alert('Failed to assign ticket. Please try again.');
-      return false;
+      if (failed.has('queued_tickets')) {
+        setQueuedError('Incoming queued tickets failed to load.');
+      } else {
+        setQueuedTickets(
+          (summary?.queued_tickets?.items || []).slice(0, 6).map((t) => ({
+            ...t,
+            id: t.ref || `TKT-${t.ticket_ID}`,
+            updated: t.created_at ? formatDisplayDate(t.created_at) : 'Recently',
+          }))
+        );
+      }
+
+      if (failed.has('assigned_monitored') || failed.has('workload_metrics')) {
+        setWorkloadError('Workload summary data is temporarily unavailable.');
+      } else {
+        const byStatus = summary?.assigned_monitored?.by_status || {};
+        setAssignedStatusCounts({
+          open: byStatus['Open'] ?? 0,
+          inProgress: byStatus['In Progress'] ?? 0,
+          onHold: byStatus['On Hold'] ?? 0,
+          resolved: byStatus['Resolved'] ?? 0,
+        });
+        setWorkloadMetrics({
+          queuedCount: summary?.queued_tickets?.count ?? 0,
+          assignedCount: summary?.workload_metrics?.active_tickets ?? 0,
+          atRiskCount: summary?.workload_metrics?.at_risk ?? 0,
+          breachedCount: summary?.workload_metrics?.breached ?? 0,
+          pendingReassignCount: summary?.workload_metrics?.pending_reassignments ?? 0,
+          escalatedCount: byStatus['Escalated'] ?? 0,
+        });
+      }
+
+      if (failed.has('needs_attention') || failed.has('pending_reassignments')) {
+        setAttentionError('Tickets needing immediate attention could not be fetched.');
+      } else {
+        setAttentionTickets(
+          (summary?.needs_attention?.items || []).slice(0, 5).map((t) => ({
+            ...t,
+            id: t.ref || `TKT-${t.ticket_ID}`,
+            attentionType: t.reason === 'Breached' ? 'breached' : t.reason === 'At Risk' ? 'at_risk' : 'reassign',
+            updated: t.requested_at || t.created_at ? formatDisplayDate(t.requested_at || t.created_at) : 'Recently',
+          }))
+        );
+      }
+    } catch {
+      setQueuedError('Incoming queued tickets failed to load.');
+      setWorkloadError('Workload summary data is temporarily unavailable.');
+      setAttentionError('Tickets needing immediate attention could not be fetched.');
+    } finally {
+      setLoadingWorkload(false);
+      setLoadingQueued(false);
+      setLoadingAttention(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadDashboardData();
+  }, [loadDashboardData, refreshKey]);
+
+  // Real-time listener for near-real-time updates
+  const handleRealtimeUpdate = useCallback((context) => {
+    if (context && context.source === 'websocket') {
+      const payload = context.payload;
+      if (!payload) return;
+      const { action, ticket } = payload;
+      if (!ticket) return;
+
+      if (action === 'created') {
+        setQueuedTickets((prev) => {
+          const exists = prev.some((t) => t.id === ticket.id || t.ticket_ID === ticket.ticket_ID);
+          if (exists) return prev;
+          const formatted = {
+            ...ticket,
+            id: ticket.id || `TKT-${ticket.ticket_ID}`,
+            updated: 'Just now',
+          };
+          return [formatted, ...prev].slice(0, 6);
+        });
+
+        const tid = ticket.id || ticket.ticket_ID;
+        setNewTicketId(tid);
+        if (newTicketTimerRef.current) clearTimeout(newTicketTimerRef.current);
+        newTicketTimerRef.current = setTimeout(() => setNewTicketId(null), 15000);
+
+        setWorkloadMetrics((prev) => ({
+          ...prev,
+          queuedCount: prev.queuedCount + 1,
+        }));
+      }
+    }
+  }, []);
 
   useRealtimeRefresh({
     refresh: handleRealtimeUpdate,
@@ -388,189 +209,419 @@ export default function CSDashboard() {
     deferRefresh: false,
   });
 
-  const statItems = stats
-    ? [
-        { label: 'Unassigned Tickets', value: stats.unassigned, icon: <Inbox size={28} /> },
-        { label: 'Pending Tickets', value: stats.pending, icon: <Clock size={28} /> },
-        { label: 'Assigned Tickets', value: stats.assigned, icon: <CheckCircle size={28} /> },
-        { label: 'High Priority', value: stats.highPriority, icon: <AlertTriangle size={28} /> },
-        { label: 'SLA Breached', value: stats.slaBreached, icon: <AlertTriangle size={28} />, color: 'rose' },
-        { label: 'Escalated Tickets', value: stats.escalated, icon: <AlertTriangle size={28} />, color: 'amber' },
-      ]
-    : [];
+  // Contextual ticket details modal viewer with assignment dispatch
+  const handleViewTicket = useCallback(async (t) => {
+    setModalLoading(true);
+    try {
+      const ticketId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
+      const full = await getTicketDetails(ticketId);
+      setSelectedTicket({ ...t, ...full, description: full?.description || t.description || '' });
+    } catch {
+      setSelectedTicket(t);
+    } finally {
+      setModalLoading(false);
+    }
+  }, []);
+
+  // Assign employees to a ticket from the dashboard. Resolves true on success so
+  // AssignModal can close itself, or throws so the modal can show the error.
+  const handleAssignSave = useCallback(async (updated) => {
+    const priorityMap = { Low: 1, Medium: 2, High: 3, Critical: 4 };
+    const targetTicketId = updated.ticket_ID || Number(String(updated.id || '').replace(/\D/g, ''));
+
+    await acceptTicket({
+      ticketId: targetTicketId,
+      employeeIds: updated.assigned,
+      assignedByEmail: user?.email,
+      priorityId: priorityMap[updated.priority] ?? 1,
+    });
+
+    window.dispatchEvent(new Event('notifications:updated'));
+    loadDashboardData();
+    return true;
+  }, [user?.email, loadDashboardData]);
 
   return (
-    <div className="p-6">
-      {/* Hero Section */}
-      <div className="relative rounded-xl overflow-hidden mb-8 bg-linear-to-br from-[#252578] via-[#3535a0] to-[#1a1a5c] px-8 py-7 flex flex-col md:flex-row md:items-center gap-4 shadow-md">
-        <div
-          className="absolute inset-0 opacity-10"
-          style={{ backgroundImage: 'radial-gradient(circle at 80% 50%, #ffffff 0%, transparent 60%)' }}
-        />
-        <div className="relative z-10 flex-1">
-          <p className="text-white/70 text-sm font-medium mb-1">{dateStr}</p>
-          <h1 className="text-2xl md:text-3xl font-bold text-white mb-1">
-            Welcome back, {displayName}!
-            <span className="ml-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-400/20 border border-green-400/40 text-green-300 text-xs font-semibold align-middle">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-              Active
-            </span>
-          </h1>
-          <p className="text-white/70 text-sm">Monitor incoming tickets, assignments, and service queue status.</p>
+    <div className="space-y-6 w-full min-w-0 max-w-full">
+      {/* Pattern A Header */}
+      <DashboardHeader
+        greeting="Customer Service Traffic Dashboard"
+        userName={displayName}
+        subtitle="Manage incoming ticket queues, monitor assigned workload, and triage SLA risks."
+        badgeText="Active Service"
+        badgeVariant="emerald"
+      />
+
+      {/* ─── SECTION 1: CS WORKLOAD & SLA RISK METRICS ─────────────────────── */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-bold text-foreground">Traffic &amp; Workload Metrics</h2>
+            <p className="text-xs text-muted-foreground">Click any metric to navigate to the filtered queue or work list.</p>
+          </div>
+          <span className="text-[11px] text-muted-foreground bg-muted/40 px-2.5 py-1 rounded-md border border-border">
+            Read-Only Summary
+          </span>
         </div>
+
+        {workloadError ? (
+          <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive flex items-center justify-between">
+            <span>{workloadError}</span>
+            <Button variant="outline" size="sm" onClick={() => loadDashboardData()} className="h-7 text-xs">
+              <RefreshCw className="w-3.5 h-3.5 mr-1" /> Retry
+            </Button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+            {/* 1. Queued Tickets */}
+            <MetricCard
+              title="Queued Tickets"
+              value={workloadMetrics.queuedCount}
+              subtitle="Awaiting CS review"
+              icon={<Inbox className="w-5 h-5 text-accent" />}
+              loading={loadingWorkload}
+              onClick={() => navigate('/ticketing/cs/incoming')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+
+            {/* 2. Assigned / Monitored */}
+            <MetricCard
+              title="Assigned Workload"
+              value={workloadMetrics.assignedCount}
+              subtitle="Technicians assigned"
+              icon={<UserCheck className="w-5 h-5 text-primary" />}
+              loading={loadingWorkload}
+              onClick={() => navigate('/ticketing/cs/assigned')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+
+            {/* 3. At Risk (Approaching SLA Breach) - Non-color cues */}
+            <MetricCard
+              title="Approaching SLA"
+              value={workloadMetrics.atRiskCount}
+              subtitle="At Risk (warning)"
+              icon={<Clock className="w-5 h-5 text-amber-600" />}
+              variant="amber"
+              loading={loadingWorkload}
+              onClick={() => navigate('/ticketing/cs/incoming?sla=At+Risk')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+
+            {/* 4. Breached SLA */}
+            <MetricCard
+              title="SLA Breached"
+              value={workloadMetrics.breachedCount}
+              subtitle="Breached targets"
+              icon={<AlertTriangle className="w-5 h-5 text-rose-600" />}
+              variant="crimson"
+              loading={loadingWorkload}
+              onClick={() => navigate('/ticketing/cs/incoming?sla=Breached')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+
+            {/* 5. Pending Reassignments */}
+            <MetricCard
+              title="Pending Reassign"
+              value={workloadMetrics.pendingReassignCount}
+              subtitle="Requests awaiting action"
+              icon={<ShieldAlert className="w-5 h-5 text-amber-600" />}
+              variant="amber"
+              loading={loadingWorkload}
+              onClick={() => navigate('/ticketing/cs/incoming?status=Pending+Reassignment')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+
+            {/* 6. Critical Escalations */}
+            <MetricCard
+              title="Critical Priority"
+              value={workloadMetrics.escalatedCount}
+              subtitle="Requires priority triage"
+              icon={<AlertTriangle className="w-5 h-5 text-rose-600" />}
+              variant="crimson"
+              loading={loadingWorkload}
+              onClick={() => navigate('/ticketing/cs/incoming?priority=Critical')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+          </div>
+        )}
       </div>
 
-
-      {loading ? (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-            {[1,2,3,4,5,6].map(i => (
-              <div key={i} className="bg-white rounded-xl shadow-md p-4">
-                <div className="h-10 bg-gray-200 rounded-lg w-12 mb-3 animate-pulse" />
-                <div className="h-6 bg-gray-200 rounded w-16 mb-2 animate-pulse" />
-                <div className="h-4 bg-gray-200 rounded w-24 animate-pulse" />
-              </div>
-            ))}
+      {/* ─── SECTION 2: TICKETS NEEDING IMMEDIATE ATTENTION (TS059) ───────── */}
+      <div className="rounded-xl border border-border bg-card p-6 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600" />
+              <h2 className="text-base font-bold text-foreground">Tickets Needing Immediate Attention</h2>
+              <Badge variant="destructive" className="text-[10px]">Action Required</Badge>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              SLA breached, at-risk, and pending technician reassignment tickets requiring prompt CS traffic handling.
+            </p>
           </div>
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <div className="h-6 bg-gray-200 rounded w-48 mb-4 animate-pulse" />
-            <SkeletonLoader variant="ticket-card" />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate('/ticketing/cs/incoming?sla=Breached')}
+            className="text-xs gap-1.5 shrink-0"
+          >
+            <span>Open Incoming Queue</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+
+        {attentionError ? (
+          <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive flex items-center justify-between">
+            <span>{attentionError}</span>
+            <Button variant="outline" size="sm" onClick={() => loadDashboardData()} className="h-7 text-xs">
+              <RefreshCw className="w-3.5 h-3.5 mr-1" /> Retry
+            </Button>
+          </div>
+        ) : loadingAttention ? (
+          <div className="overflow-hidden rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[130px]">Ticket ID</TableHead>
+                  <TableHead>Issue / Subject</TableHead>
+                  <TableHead>Attention Reason</TableHead>
+                  <TableHead>Current SLA</TableHead>
+                  <TableHead className="w-[120px] text-right">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <DataTableSkeleton columns={5} rows={3} />
+              </TableBody>
+            </Table>
+          </div>
+        ) : attentionTickets.length === 0 ? (
+          <div className="rounded-lg border border-border/60 bg-muted/20 py-8 text-center text-xs text-muted-foreground">
+            <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
+            <p className="font-semibold text-foreground">No urgent tickets pending attention</p>
+            <p className="mt-0.5">All tickets are currently within acceptable SLA thresholds with zero pending reassignments.</p>
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[130px]">Ticket ID</TableHead>
+                  <TableHead>Issue / Subject</TableHead>
+                  <TableHead>Attention Reason</TableHead>
+                  <TableHead>Current SLA</TableHead>
+                  <TableHead className="w-[120px] text-right">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {attentionTickets.map((t) => (
+                  <TableRow
+                    key={t.id}
+                    onClick={() => handleViewTicket(t)}
+                    className="hover:bg-muted/40 transition-colors cursor-pointer"
+                  >
+                    <TableCell className="font-semibold text-primary text-xs whitespace-nowrap">
+                      {t.id}
+                    </TableCell>
+                    <TableCell>
+                      <div className="font-medium text-foreground text-xs truncate max-w-xs">{t.title}</div>
+                      <div className="text-[11px] text-muted-foreground mt-0.5">{t.customer}</div>
+                    </TableCell>
+                    <TableCell>
+                      {t.attentionType === 'reassign' ? (
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-md inline-flex">
+                          <ShieldAlert className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span>Reassignment Pending</span>
+                        </div>
+                      ) : t.attentionType === 'breached' ? (
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-1 rounded-md inline-flex">
+                          <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                          <span>SLA Breached</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-md inline-flex">
+                          <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span>Approaching Breach</span>
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <SlaStatusBadge ticket={t} />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleViewTicket(t);
+                        }}
+                        className="text-xs text-primary hover:text-primary gap-1"
+                        title="Triage this ticket"
+                      >
+                        <span>Triage</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
+
+      {/* ─── SECTION 3 & 4: QUEUED SUMMARY & ASSIGNED SUMMARY ─────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        {/* SECTION 3: Queued Tickets Summary */}
+        <div className="rounded-xl border border-border bg-card p-6 shadow-xs space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <Inbox className="w-4 h-4 text-primary" />
+                <h2 className="text-base font-bold text-foreground">Incoming Queued Tickets</h2>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">Tickets awaiting initial CS validation &amp; dispatch</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate('/ticketing/cs/incoming')}
+              className="text-xs gap-1"
+            >
+              <span>View Queue</span>
+              <ArrowRight className="w-3 h-3" />
+            </Button>
+          </div>
+
+          {queuedError ? (
+            <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive flex items-center justify-between">
+              <span>{queuedError}</span>
+              <Button variant="outline" size="sm" onClick={() => loadDashboardData()} className="h-7 text-xs">
+                Retry
+              </Button>
+            </div>
+          ) : loadingQueued ? (
+            <div className="space-y-2">
+              {Array.from({ length: 4 }).map((_, idx) => (
+                <div key={idx} className="p-3 rounded-lg border border-border/80 animate-pulse space-y-2">
+                  <div className="h-4 bg-muted rounded w-1/3" />
+                  <div className="h-3 bg-muted rounded w-3/4" />
+                  <div className="h-3 bg-muted rounded w-1/2" />
+                </div>
+              ))}
+            </div>
+          ) : queuedTickets.length === 0 ? (
+            <div className="py-8 text-center text-xs text-muted-foreground">Queue is empty.</div>
+          ) : (
+            <div className="space-y-2">
+              {queuedTickets.map((t) => (
+                <div
+                  key={t.id}
+                  onClick={() => handleViewTicket(t)}
+                  className="flex items-center justify-between p-3 rounded-lg border border-border/80 hover:bg-muted/40 transition-colors cursor-pointer"
+                >
+                  <div className="min-w-0 pr-3">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-xs text-primary">{t.id}</span>
+                      <Badge variant={getStatusBadgeVariant(t.status)}>{t.status}</Badge>
+                    </div>
+                    <p className="text-xs font-medium text-foreground truncate mt-1">{t.title}</p>
+                    <p className="text-[11px] text-muted-foreground">{t.customer || 'Customer'} • {t.updated}</p>
+                  </div>
+                  <div className="shrink-0 flex items-center gap-2">
+                    <Badge variant={t.priority === 'Critical' ? 'destructive' : t.priority === 'High' ? 'warning' : 'secondary'}>
+                      {t.priority}
+                    </Badge>
+                    <Eye className="w-4 h-4 text-muted-foreground" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* SECTION 4: Assigned / Monitored Tickets Summary */}
+        <div className="rounded-xl border border-border bg-card p-6 shadow-xs space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <UserCheck className="w-4 h-4 text-primary" />
+                <h2 className="text-base font-bold text-foreground">Assigned &amp; Monitored Tickets</h2>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">Summary of tickets actively handled or delegated by CS</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate('/ticketing/cs/assigned')}
+              className="text-xs gap-1"
+            >
+              <span>View Assigned</span>
+              <ArrowRight className="w-3 h-3" />
+            </Button>
+          </div>
+
+          {/* Counts by Status Breakdown */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            <div
+              onClick={() => navigate('/ticketing/cs/assigned?status=Open')}
+              className="p-3 bg-muted/30 border border-border rounded-lg text-center cursor-pointer hover:bg-muted/50 transition-colors"
+            >
+              <span className="text-[11px] text-muted-foreground font-medium">Open</span>
+              <p className="text-lg font-bold text-primary mt-0.5">{assignedStatusCounts.open}</p>
+            </div>
+            <div
+              onClick={() => navigate('/ticketing/cs/assigned?status=In+Progress')}
+              className="p-3 bg-muted/30 border border-border rounded-lg text-center cursor-pointer hover:bg-muted/50 transition-colors"
+            >
+              <span className="text-[11px] text-muted-foreground font-medium">In Progress</span>
+              <p className="text-lg font-bold text-amber-600 mt-0.5">{assignedStatusCounts.inProgress}</p>
+            </div>
+            <div
+              onClick={() => navigate('/ticketing/cs/assigned?status=On+Hold')}
+              className="p-3 bg-muted/30 border border-border rounded-lg text-center cursor-pointer hover:bg-muted/50 transition-colors"
+            >
+              <span className="text-[11px] text-muted-foreground font-medium flex items-center justify-center gap-1">
+                <PauseCircle className="w-3 h-3 text-muted-foreground" />
+                On Hold
+              </span>
+              <p className="text-lg font-bold text-slate-700 mt-0.5">{assignedStatusCounts.onHold}</p>
+            </div>
+            <div
+              onClick={() => navigate('/ticketing/cs/assigned?status=Resolved')}
+              className="p-3 bg-muted/30 border border-border rounded-lg text-center cursor-pointer hover:bg-muted/50 transition-colors"
+            >
+              <span className="text-[11px] text-muted-foreground font-medium">Resolved</span>
+              <p className="text-lg font-bold text-emerald-600 mt-0.5">{assignedStatusCounts.resolved}</p>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-2">
+            <div className="flex items-center justify-between text-xs font-semibold text-foreground">
+              <span>Traffic Routing Rules</span>
+              <Badge variant="outline" className="text-[10px]">Active</Badge>
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Assigned tickets undergo continuous SLA tracking. When a technician is assigned, tickets transition from Queued to Monitored status. Action triggers (assignment, hold, resolve) are performed from the dedicated Queue views.
+            </p>
+            <div className="pt-2 flex justify-end">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate('/ticketing/cs/assigned')}
+                className="text-xs text-primary hover:text-primary gap-1"
+              >
+                <span>Navigate to Assigned List</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </Button>
+            </div>
           </div>
         </div>
-      ) : (
-        <>
-          {error && (
-            <div className="mb-4 p-3 text-sm bg-yellow-50 text-yellow-800 rounded">{error}</div>
-          )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
-            {statItems.map((s) => (
-              <div key={s.label} className={`bg-white rounded-xl shadow-md p-5 flex items-center gap-4 ${
-                s.color === 'rose' ? 'border-l-4 border-l-rose-500' : s.color === 'amber' ? 'border-l-4 border-l-amber-500' : ''
-              }`}>
-                <div className={`w-14 h-14 rounded-lg flex items-center justify-center shrink-0 ${
-                  s.color === 'rose' ? 'bg-rose-50 text-rose-500' : s.color === 'amber' ? 'bg-amber-50 text-amber-500' : 'bg-[#f1f5f9] text-[#252578]'
-                }`}>
-                  {s.icon}
-                </div>
-                <div>
-                  <div className="text-4xl font-bold text-gray-800">{s.value}</div>
-                  <div className="text-sm font-medium text-gray-500">{s.label}</div>
-                </div>
-              </div>
-            ))}
-          </div>
+      </div>
 
-          <div className="flex flex-col gap-6">
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-gray-800">Recent Ticket Activities</h2>
-              <div className="text-sm text-gray-500">Showing {tickets.length} rows</div>
-            </div>
-
-            <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left" style={{ minWidth: '900px' }}>
-                <thead className="border-b border-gray-100 bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  <tr>
-                    <th className="px-5 py-4">Ticket ID</th>
-                    <th className="px-5 py-4">Title</th>
-                    <th className="px-5 py-4">Customer</th>
-                    <th className="px-5 py-4">Status</th>
-                    <th className="px-5 py-4">Priority</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 text-gray-700">
-                  {tickets.map((r, idx) => {
-                    const isNew = r.id === newTicketId || r.ticket_ID === newTicketId;
-                    return (
-                      <tr
-                        key={r.id + '-' + idx}
-                        onClick={() => handleViewTicket(r)}
-                        className={`${isNew ? 'animate-new-pulse' : (idx === 0 ? 'bg-blue-50/50' : '')} border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition-all`}
-                      >
-                        <td className="px-5 py-4 font-semibold text-[#252578] text-sm align-middle">
-                          <div className="flex items-center gap-1.5">
-                            <span>{r.id}</span>
-                            {isNew && (
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-green-100 text-green-800 text-[10px] font-semibold animate-bounce shrink-0">New</span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-5 py-4 text-sm font-medium text-gray-800 align-middle min-w-0"><span className="line-clamp-2">{r.title}</span></td>
-                        <td className="px-5 py-4 text-sm text-gray-600 align-middle min-w-0 truncate">{r.customer}</td>
-                        <td className="px-5 py-4 align-middle">
-                          <span className={`inline-flex whitespace-nowrap px-2.5 py-1 rounded-full text-xs font-semibold ${statusColors[r.status] ?? 'bg-gray-100 text-gray-700'}`}>{r.status}</span>
-                        </td>
-                        <td className="px-5 py-4 align-middle">
-                          <span className={`inline-flex whitespace-nowrap px-2.5 py-1 rounded-full text-xs font-semibold ${priorityColors[r.priority] ?? 'bg-gray-100 text-gray-700'}`}>{r.priority}</span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <div className="flex justify-between items-center mb-6">
-              <div>
-                <h2 className="text-lg font-bold text-gray-800">My Recent Tickets</h2>
-                <p className="text-sm text-gray-500">Latest submitted support tickets</p>
-              </div>
-              <button type="button" onClick={() => navigate('/cs/my-tickets')} className="text-sm font-semibold text-[#252578] flex items-center gap-1 hover:underline">
-                View All <ArrowRight />
-              </button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left">
-                <thead>
-                  <tr className="text-xs font-semibold text-gray-400 uppercase tracking-wider border-b pb-2">
-                    <th className="py-3 px-3 w-[20%]">Ticket ID</th>
-                    <th className="py-3 px-3 w-[50%]">Title</th>
-                    <th className="py-3 px-3 w-[30%]">Status</th>
-                    <th className="py-3 px-3 text-center w-[10%]">View</th>
-                  </tr>
-                </thead>
-                <tbody className="text-gray-700">
-                  {myRecentTickets.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="py-8 px-4 text-center text-gray-500">{loadingMyTickets ? 'Loading recent tickets...' : 'No tickets yet.'}</td>
-                    </tr>
-                  ) : (
-                    myRecentTickets.map((t) => (
-                      <tr key={t.id} className="border-b hover:bg-gray-50">
-                        <td className="py-3 px-3 font-semibold text-[#252578] align-middle">{t.id}</td>
-                        <td className="py-3 px-3 text-gray-800 align-middle">
-                          <div className="font-semibold text-gray-800">{t.title}</div>
-                          <div className="text-xs text-gray-500 mt-1">{t.equipment || 'General'}</div>
-                        </td>
-                        <td className="py-3 px-3 align-middle">
-                          <span className={`px-3 py-1 text-xs font-semibold rounded-full flex w-fit items-center gap-1.5 ${statusClass(t.status)}`}>
-                            <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                            {t.status}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 text-center align-middle">
-                          <button onClick={() => handleViewMyTicket(t)} aria-label={`View ${t.id}`} className="p-2 text-blue-500 hover:bg-blue-50 rounded-full transition-colors">
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                            </svg>
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-                </table>
-            </div>
-          </div>
-          </div>
-        </>
-      )}
-
+      {/* ─── TICKET DETAILS MODAL WITH ACTIVE ASSIGNMENT DISPATCH ────────────── */}
       {selectedTicket && (
         <CustomerTicketDetailModal
           ticket={selectedTicket}
@@ -580,41 +631,34 @@ export default function CSDashboard() {
           onResolve={null}
           allowReopen={false}
           customerName={selectedTicket.customer}
-          onAssign={handleOpenAssignModal}
-          onViewTicket={handleNavigateTicketHistory}
-        />
-      )}
-
-      {selectedMyTicket && (
-        <CustomerTicketDetailModal
-          ticket={selectedMyTicket}
-          onClose={() => setSelectedMyTicket(null)}
-          onDiscard={null}
-          onReopen={null}
-          onResolve={null}
-          allowReopen={false}
-          customerName={selectedMyTicket.customer}
-          onAssign={handleOpenAssignModal}
-          onViewTicket={handleNavigateTicketHistory}
+          onAssign={(t) => {
+            const ticketToAssign = t || selectedTicket;
+            setSelectedTicket(null);
+            setAssignModalTicket(ticketToAssign);
+          }}
+          onViewTicket={(t) => {
+            setSelectedTicket(null);
+            navigate(`/cs/history/${t.ticket_ID || Number(String(t.id).replace(/\D/g, ''))}`);
+          }}
         />
       )}
 
       {assignModalTicket && (
         <AssignModal
           ticket={assignModalTicket}
-          employees={employees.filter((e) => e.id !== assignModalTicket?.requested_by)}
-          departments={departments}
-          priorityOptions={priorityOptions}
+          employees={assignEmployees}
+          departments={assignDepartments}
+          priorityOptions={['Low', 'Medium', 'High', 'Critical']}
           onClose={() => setAssignModalTicket(null)}
-          onSave={handleSaveAssignment}
+          onSave={handleAssignSave}
         />
       )}
 
-      {(modalLoading || myTicketsModalLoading) && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-[1.5px]">
-          <div className="bg-white rounded-xl p-6 shadow-2xl flex flex-col items-center gap-4 max-w-xs w-full mx-4 border border-gray-100">
-            <div className="w-10 h-10 border-4 border-[#252578]/10 border-t-[#252578] rounded-full animate-spin" />
-            <p className="text-sm font-semibold text-[#252578]">Loading ticket details...</p>
+      {modalLoading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs">
+          <div className="bg-card border border-border rounded-xl p-6 shadow-xl flex flex-col items-center gap-3 max-w-xs w-full mx-4">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <p className="text-sm font-semibold text-foreground">Loading ticket details...</p>
           </div>
         </div>
       )}

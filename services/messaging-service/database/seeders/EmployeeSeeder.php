@@ -21,6 +21,15 @@ class EmployeeSeeder extends Seeder
                 'password_change_at' => now(),
             ],
             [
+                'email' => 'headofcs@gmail.com',
+                'password_hash' => Hash::make('12345678'),
+                'first_name' => 'Head of',
+                'last_name' => 'CS',
+                'role' => 'head of cs',
+                'department' => 'Customer Service',
+                'password_change_at' => now(),
+            ],
+            [
                 'email' => 'employee@gmail.com',
                 'password_hash' => Hash::make('12345678'),
                 'first_name' => 'Mark',

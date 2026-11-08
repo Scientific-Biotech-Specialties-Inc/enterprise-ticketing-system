@@ -19,11 +19,11 @@ class ClamAVScanner
     }
 
     /**
-     * Scan a file path.
-     * Returns true if clean, false if virus found.
+     * Scan a file path and return detailed result including detected threat name (TS084, TS085).
+     * Returns ['clean' => bool, 'threat' => ?string, 'raw' => string].
      * Throws exception on connection or system error.
      */
-    public function scan(string $filePath): bool
+    public function scanDetails(string $filePath): array
     {
         if (!file_exists($filePath)) {
             throw new Exception("File not found: " . $filePath);
@@ -73,11 +73,23 @@ class ClamAVScanner
 
             if (str_contains($response, 'FOUND')) {
                 Log::warning("Virus detected in file {$filePath}: {$response}");
-                return false;
+                $threat = 'Malware.Detected';
+                if (preg_match('/:\s*(.+?)\s+FOUND/i', $response, $matches)) {
+                    $threat = trim($matches[1]);
+                }
+                return [
+                    'clean' => false,
+                    'threat' => $threat,
+                    'raw' => $response,
+                ];
             }
 
             if (str_contains($response, 'OK')) {
-                return true;
+                return [
+                    'clean' => true,
+                    'threat' => null,
+                    'raw' => $response,
+                ];
             }
 
             // If we got an error from ClamAV
@@ -87,5 +99,16 @@ class ClamAVScanner
         } finally {
             fclose($socket);
         }
+    }
+
+    /**
+     * Scan a file path.
+     * Returns true if clean, false if virus found.
+     * Throws exception on connection or system error.
+     */
+    public function scan(string $filePath): bool
+    {
+        $details = $this->scanDetails($filePath);
+        return $details['clean'];
     }
 }

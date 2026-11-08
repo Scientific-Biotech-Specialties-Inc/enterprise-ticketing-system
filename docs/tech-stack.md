@@ -8,7 +8,7 @@ This document provides a comprehensive inventory of all programming languages, r
 
 | Layer | Technology | Version | Purpose |
 | :--- | :--- | :--- | :--- |
-| **Backend Runtime** | PHP | `8.2+` | Core server-side runtime for all 7 microservices |
+| **Backend Runtime** | PHP | `8.2+` | Core server-side runtime for all 8 microservices |
 | **Backend Framework** | Laravel Framework | `10.x / 11.x` | Enterprise MVC application framework |
 | **Identity / OAuth** | Laravel Passport | `11.x / 12.x` | OAuth2 server and JWT token issuer |
 | **WebSockets Server** | Laravel Reverb | `1.x` | High-performance real-time WebSocket server |

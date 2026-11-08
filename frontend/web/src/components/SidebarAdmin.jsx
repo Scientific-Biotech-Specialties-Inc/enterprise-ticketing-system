@@ -5,7 +5,6 @@ import SidebarBase from './SidebarBase';
 export default function SidebarAdmin({ collapsed, onHoverChange }) {
   const navItems = [
     { name: 'Dashboard', path: '/admin/dashboard', icon: <LayoutDashboard size={20} /> },
-    { name: 'Employee Management', path: '/admin/employees', icon: <Users size={20} /> },
     { name: 'Reports', path: '/admin/reports', icon: <BarChart3 size={20} /> },
   ];
 

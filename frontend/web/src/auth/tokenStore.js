@@ -1,26 +1,25 @@
 const TOKEN_STORAGE_KEY = 'access_token';
 
+// In-memory access token storage (OWASP XSS defense: tokens are kept strictly in memory, never in browser storage)
 let accessToken = null;
 
+// Immediately purge any legacy tokens left in browser storage
 try {
-  accessToken = sessionStorage.getItem(TOKEN_STORAGE_KEY) || localStorage.getItem(TOKEN_STORAGE_KEY);
+  sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  localStorage.removeItem(TOKEN_STORAGE_KEY);
 } catch {
-  accessToken = null;
+  // Ignore storage access errors
 }
 
 export function setToken(token) {
-  accessToken = token;
+  accessToken = token || null;
 
   try {
-    if (token) {
-      sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
-      localStorage.setItem(TOKEN_STORAGE_KEY, token);
-    } else {
-      sessionStorage.removeItem(TOKEN_STORAGE_KEY);
-      localStorage.removeItem(TOKEN_STORAGE_KEY);
-    }
+    // Defense-in-depth: Ensure access token is never persisted in browser storage
+    sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
   } catch {
-    // Ignore storage failures and keep the in-memory token.
+    // Ignore storage access errors
   }
 }
 
@@ -35,7 +34,7 @@ export function clearToken() {
     sessionStorage.removeItem(TOKEN_STORAGE_KEY);
     localStorage.removeItem(TOKEN_STORAGE_KEY);
   } catch {
-    // Ignore storage failures.
+    // Ignore storage access errors
   }
 }
 

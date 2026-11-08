@@ -1,31 +1,18 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Filter } from 'lucide-react';
-import {
-  statusColors,
-  priorityColors,
-} from '@/constants/employeeTickets';
-import { getEmployeeAssignedTickets } from '@/services/ticketService';
+import { Search } from 'lucide-react';
+import { getEmployeeAssignedTickets, clearEmployeeTicketsCache } from '@/services/ticketService';
 import { useAuth } from '@/context/AuthContext';
-import SkeletonLoader from '@/components/SkeletonLoader';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import { formatDisplayDate } from '@/utils/dateUtils';
+import { PageHeader } from '@/components/ui/page-header';
+import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
+import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
+import { DataTableSkeleton, DataTableEmptyState } from '@/components/ui/data-table';
 
 const HISTORY_STATUSES = ['Closed', 'Resolved', 'Discarded', 'Discarded by Customer'];
 
 const getDisplayStatus = (ticket) => ticket.status;
-
-const buildHistorySignature = (list = []) => list
-  .map((ticket) => [
-    ticket.id,
-    ticket.status,
-    ticket.lastUpdate ?? ticket.updated_at ?? '',
-    ticket.reassignmentRequested ? '1' : '0',
-  ].join(':'))
-  .join('|');
-
-const selectClass =
-  'text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-700 outline-none focus:ring-2 focus:ring-[#252578]/20 cursor-pointer min-w-[8.5rem]';
 
 export default function EmployeeProgress() {
   const { user } = useAuth();
@@ -63,7 +50,10 @@ export default function EmployeeProgress() {
   }, [loadHistory]);
 
   useRealtimeRefresh({
-    refresh: loadHistory,
+    refresh: () => {
+      clearEmployeeTicketsCache();
+      loadHistory({ forceRefresh: true });
+    },
     channels: [{ name: 'ticket-updates', event: 'ticket.changed' }],
     intervalMs: 30000,
   });
@@ -90,162 +80,150 @@ export default function EmployeeProgress() {
   };
 
   return (
-    <div className="p-6 flex flex-col gap-6">
-      <div className="flex flex-col gap-2">
-        <h1 className="text-3xl font-bold text-[#252578]">Ticket History</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Closed, resolved, and reassigned tickets you have handled.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Ticket History"
+        subtitle="Closed, resolved, and reassigned tickets you have handled."
+      />
 
       {loadError && (
-        <div className="rounded-xl bg-red-50 text-red-700 px-4 py-2 text-sm">
+        <div className="rounded-lg bg-destructive/10 text-destructive border border-destructive/20 px-4 py-3 text-sm">
           {loadError}
         </div>
       )}
 
-      {loading ? (
-        <div className="rounded-2xl border border-gray-100 bg-white shadow-sm p-8">
-          <table className="w-full">
-            <tbody>
-              <SkeletonLoader variant="table-row" />
-              <SkeletonLoader variant="table-row" />
-              <SkeletonLoader variant="table-row" />
-              <SkeletonLoader variant="table-row" />
-              <SkeletonLoader variant="table-row" />
-            </tbody>
-          </table>
+      {/* Filter toolbar */}
+      <div className="w-full space-y-3 shrink-0">
+        <div className="relative w-full">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-slate" />
+          <input
+            type="search"
+            placeholder="Search ID, title, customer..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full rounded-xl border border-gray-200 bg-surface pl-10 pr-4 py-2.5 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent placeholder:text-muted-slate/60"
+          />
         </div>
-      ) : (
-        <>
-          <div className="flex flex-wrap lg:flex-nowrap items-center gap-3 rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-sm w-full shrink-0">
-            <input type="search" placeholder="Search ID, title, customer..." value={search} onChange={(e) => setSearch(e.target.value)} className="flex-1 min-w-[260px] max-w-[630px] w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#252578] shrink" />
-            <div className="flex flex-wrap lg:flex-nowrap items-center gap-3 shrink-0 lg:ml-auto">
-              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-[132px] xl:w-[150px] shrink-0 rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#252578]">
-                {['All Status', 'Closed', 'Resolved'].map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-              <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="w-[132px] xl:w-[150px] shrink-0 rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#252578]">
-                {[
-                  'All Category',
-                  'MRI',
-                  'CT Scan',
-                  'Ultrasound',
-                  'X-Ray',
-                  'Ventilator',
-                  'Defibrillator',
-                ].map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-              <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} className="w-[132px] xl:w-[150px] shrink-0 rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#252578]">
-                {['All Priority', 'Critical', 'High', 'Medium', 'Low'].map((p) => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
-              </select>
-              </div>
-            </div>
+        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+          >
+            {['All Status', 'Closed', 'Resolved'].map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+          >
+            {[
+              'All Category',
+              'MRI',
+              'CT Scan',
+              'Ultrasound',
+              'X-Ray',
+              'Ventilator',
+              'Defibrillator',
+            ].map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <select
+            value={priorityFilter}
+            onChange={(e) => setPriorityFilter(e.target.value)}
+            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+          >
+            {['All Priority', 'Critical', 'High', 'Medium', 'Low'].map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+        </div>
+      </div>
 
-            <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
-              {filtered.length === 0 ? (
-                <div className="text-center text-gray-400 py-16">
-                  <svg
-                    className="w-14 h-14 mx-auto mb-3 text-gray-200"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                    />
-                  </svg>
-                  <p className="text-sm font-medium">No history tickets found.</p>
-                  <p className="text-xs mt-1">
-                    Closed, resolved, and reassigned tickets will appear here.
-                  </p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                <table className="w-full table-fixed text-sm text-left border-collapse">
-                  <colgroup>
-                    <col className="w-[12%]" />
-                    <col className="w-[16%]" />
-                    <col className="w-[22%]" />
-                    <col className="w-[10%]" />
-                    <col className="w-[10%]" />
-                    <col className="w-[14%]" />
-                    <col className="w-[16%]" />
-                  </colgroup>
-                  <thead className="border-b border-gray-100 bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
-                    <tr>
-                      <th className="px-5 py-4">Ticket ID</th>
-                      <th className="px-5 py-4">Customer</th>
-                      <th className="px-5 py-4">Title</th>
-                      <th className="px-5 py-4">Category</th>
-                      <th className="px-5 py-4">Priority</th>
-                      <th className="px-5 py-4">Status</th>
-                      <th className="px-5 py-4">Last Update</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100 text-gray-700">
-                    {filtered.map((t) => (
-                      <tr
-                        key={t.id}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => openDetail(t)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            openDetail(t);
-                          }
-                        }}
-                        className="border-b border-gray-100 hover:bg-blue-50/40 cursor-pointer transition-colors"
-                      >
-                        <td className="px-5 py-4 text-sm font-semibold text-[#252578] whitespace-nowrap align-middle">
-                          <div className="flex flex-col min-w-0">
-                            <span>{t.id}</span>
-                            {t.reassignmentRequested && (
-                              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 mt-0.5 w-fit">
-                                Reassigned
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-5 py-4 align-middle min-w-0">
-                          <p className="font-semibold text-gray-900 text-sm truncate">{t.customer}</p>
-                          <p className="text-xs text-gray-500 truncate">{t.facility}</p>
-                        </td>
-                        <td className="px-5 py-4 align-middle min-w-0">
-                          <p className="font-semibold text-gray-900 text-sm line-clamp-2 leading-snug">{t.title}</p>
-                        </td>
-                        <td className="px-5 py-4 text-sm text-gray-600 align-middle truncate">{t.category}</td>
-                        <td className="px-5 py-4 align-middle">
-                          <span className={`inline-flex whitespace-nowrap px-2.5 py-1 rounded-full text-xs font-semibold ${priorityColors[t.priority] ?? 'bg-gray-100 text-gray-700'}`}>{t.priority}</span>
-                        </td>
-                        <td className="px-5 py-4 align-middle">
-                          <span className={`inline-flex whitespace-nowrap px-2.5 py-1 rounded-full text-xs font-semibold ${statusColors[getDisplayStatus(t)] ?? 'bg-gray-100 text-gray-700'}`}>{getDisplayStatus(t)}</span>
-                        </td>
-                        <td className="px-5 py-4 text-sm text-gray-600 whitespace-nowrap align-middle">{formatDisplayDate(t.lastUpdate)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                </div>
-              )}
-              <div className="px-4 py-3 border-t border-gray-100">
-                <p className="text-sm text-gray-500">
-                  Showing {filtered.length} of {tickets.length} history records
-                </p>
-              </div>
-            </div>
-          </>
+      {/* Table Card */}
+      <div className="overflow-hidden rounded-xl border border-border bg-card shadow-xs">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[130px]">Ticket ID</TableHead>
+              <TableHead>Customer</TableHead>
+              <TableHead>Title</TableHead>
+              <TableHead>Category</TableHead>
+              <TableHead>Priority</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="w-[150px]">Last Update</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {loading ? (
+              <DataTableSkeleton columns={7} rows={5} />
+            ) : filtered.length === 0 ? (
+              <DataTableEmptyState
+                colSpan={7}
+                message="No history tickets found. Closed, resolved, and reassigned tickets will appear here."
+              />
+            ) : (
+              filtered.map((t) => (
+                <TableRow
+                  key={t.id}
+                  onClick={() => openDetail(t)}
+                  className="cursor-pointer hover:bg-muted/50 transition-colors"
+                >
+                  <TableCell className="font-semibold text-primary whitespace-nowrap">
+                    <div className="flex flex-col min-w-0">
+                      <span>{t.id}</span>
+                      {t.reassignmentRequested && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-warning/15 text-warning mt-1 w-fit">
+                          Reassigned
+                        </span>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <p className="font-medium text-foreground text-sm truncate">{t.customer}</p>
+                    <p className="text-xs text-muted-foreground truncate">{t.facility}</p>
+                  </TableCell>
+                  <TableCell className="font-medium text-foreground line-clamp-2 max-w-[16rem]">
+                    {t.title}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{t.category}</TableCell>
+                  <TableCell>
+                    <Badge
+                      variant={
+                        t.priority?.toLowerCase() === 'critical'
+                          ? 'destructive'
+                          : t.priority?.toLowerCase() === 'high'
+                          ? 'warning'
+                          : 'secondary'
+                      }
+                    >
+                      {t.priority}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={getStatusBadgeVariant(getDisplayStatus(t))}>
+                      {getDisplayStatus(t)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                    {formatDisplayDate(t.lastUpdate)}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+        {!loading && filtered.length > 0 && (
+          <div className="px-4 py-3 border-t border-border bg-card">
+            <p className="text-xs text-muted-foreground">
+              Showing {filtered.length} of {tickets.length} history records
+            </p>
+          </div>
         )}
+      </div>
     </div>
   );
 }
-

@@ -1,5 +1,6 @@
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import { buildXlsx, XLSX_MIME } from './xlsx';
 
 /**
  * Downloads raw CSV spreadsheet file formatted for Microsoft Excel / Google Sheets data analysis.
@@ -82,131 +83,360 @@ export function triggerPdfPrint() {
   window.print();
 }
 
-/**
- * Generates CSV Export for Predictive Analytics raw data analysis in Excel (ALL 10 METRICS).
- */
-export function exportPredictiveToCsv(data, period = 'Next 7 Days') {
-  exportMasterReportToCsv({ ...data, period });
+// ─── Shared helpers for analytics exports ───────────────────────────────────
+// Exports only ever contain figures the server returned. A value that is missing is written as
+// "Unavailable" so a shared report can never present an invented number as fact.
+
+const UNAVAILABLE = 'Unavailable';
+const EXPORT_HEADERS = ['Section', 'Metric', 'Value', 'Unit', 'Note'];
+
+const isPresent = (v) => v !== null && v !== undefined && v !== '' && !(typeof v === 'number' && Number.isNaN(v));
+const val = (v) => (isPresent(v) ? v : UNAVAILABLE);
+
+const csvCell = (value) => {
+  const text = String(value ?? '');
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
+function rowsToCsv(headers, rows, metaLines = []) {
+  const lines = [...metaLines.map((m) => m.map(csvCell).join(',')), ...(metaLines.length ? [''] : [])];
+  lines.push(headers.map(csvCell).join(','));
+  rows.forEach((r) => lines.push(r.map(csvCell).join(',')));
+  return lines.join('\r\n') + '\r\n';
 }
 
-/**
- * Generates CSV Export for General Operational Analytics & CSAT (ALL 10 METRICS).
- */
-export function exportAnalyticsToCsv(data) {
-  exportMasterReportToCsv(data);
+/** Branch dashboard payload: `{ kpis, status_distribution, sla, csat, workload, departments, employee_performance, recurring_issues }`. */
+function branchAnalyticsRows(data) {
+  const k = data.kpis || {};
+  const rows = [];
+  const add = (section, metric, value, unit = '', note = '') => rows.push([section, metric, val(value), unit, note]);
+
+  add('Tickets', 'Total tickets', k.total_tickets);
+  add('Tickets', 'Resolved tickets', k.resolved_tickets, '', 'Resolved plus closed');
+  add('Tickets', 'Open tickets', k.open_tickets);
+  add('Tickets', 'In progress tickets', k.in_progress_tickets);
+  add('Tickets', 'On hold tickets', k.on_hold_tickets);
+  add('Tickets', 'Closed tickets', k.closed_tickets);
+  add('Resolution', 'Average resolution time', k.avg_resolution_hours, 'hours');
+  add('SLA', 'SLA compliance rate', k.sla_compliance_rate, '%');
+  add('SLA', 'Within SLA', k.sla_met_count, 'tickets');
+  add('SLA', 'Breached', k.sla_breached_count, 'tickets');
+  add('Customer satisfaction', 'Average CSAT', k.csat_score, 'out of 5',
+    isPresent(k.csat_score) ? '' : 'Customer feedback service did not return a score');
+  add('Customer satisfaction', 'Feedback reviews', k.total_csat_reviews, 'reviews');
+  add('Staffing', 'Active employees', k.active_employees_count);
+
+  (data.recurring_issues?.top_categories || []).forEach((c) =>
+    add('Recurring issues: categories', c.name, c.count, 'tickets', isPresent(c.percentage) ? `${c.percentage}% of period tickets` : ''));
+  (data.recurring_issues?.top_equipment || []).forEach((m) =>
+    add('Recurring issues: equipment', m.name, m.count, 'tickets', isPresent(m.percentage) ? `${m.percentage}% of period tickets` : ''));
+
+  const byEmployee = data.workload?.by_employee;
+  (byEmployee?.labels || []).forEach((label, i) =>
+    add('Employee workload', label, byEmployee.data?.[i], 'open tickets'));
+
+  (data.departments?.departments || data.departments || []).forEach((d) => {
+    if (!d || !d.department) return;
+    add(`Department: ${d.department}`, 'Tickets handled', d.has_data === false ? 'No data for this period' : d.total_tickets);
+    add(`Department: ${d.department}`, 'SLA compliance', d.sla_compliance_rate, '%');
+    add(`Department: ${d.department}`, 'Open (within SLA)', d.open_tickets_count, 'tickets');
+    add(`Department: ${d.department}`, 'Overdue (breached)', d.overdue_tickets_count, 'tickets');
+  });
+
+  return rows;
 }
 
-/**
- * Generates CSV Export for Master Report (ALL 10 OPERATIONAL & PREDICTIVE METRICS).
- */
+/** Super Admin system dashboard payload after adaptSystemDashboard(). */
+function systemAnalyticsRows(data) {
+  const rows = [];
+  const add = (section, metric, value, unit = '', note = '') => rows.push([section, metric, val(value), unit, note]);
+  const u = data.totalUsers || {};
+  const kp = data.systemKpis || {};
+
+  add('Users', 'Total users', u.total);
+  add('Users', 'Customers', u.customer);
+  add('Users', 'Employees', u.employee);
+  add('Users', 'Customer service', u.cs);
+  add('Users', 'Admins', u.admin);
+  add('Users', 'Super admins', u.superAdmin);
+  add('Tickets', 'Total tickets', data.totalTickets);
+  add('Tickets', 'Active tickets', data.activeEscalated);
+  add('Tickets', 'Escalated tickets', data.escalatedTickets);
+  add('Tickets', 'SLA breaches', data.slaBreaches);
+  add('Tickets', 'Created today', data.ticketsCreatedToday, '', 'Always today, not filtered by period');
+  add('System KPIs', 'Overall SLA compliance', kp.overallSlaCompliance, '%');
+  add('System KPIs', 'Overall average CSAT', kp.overallAvgCsat, 'out of 5',
+    isPresent(kp.overallAvgCsat) ? '' : 'Customer feedback service did not return a score');
+  add('System KPIs', 'Overall resolution time', kp.overallResolutionTime, 'hours');
+
+  (data.branchComparison || []).forEach((b) => {
+    add(`Branch: ${b.name}`, 'Total tickets', b.totalTickets);
+    add(`Branch: ${b.name}`, 'Resolved tickets', b.resolvedTickets);
+    add(`Branch: ${b.name}`, 'SLA compliance', b.totalTickets === 0 ? 'No data for this period' : b.slaCompliance, '%');
+    add(`Branch: ${b.name}`, 'Average resolution time', b.avgResolutionTime, 'hours');
+    add(`Branch: ${b.name}`, 'Average CSAT', b.avgCsat, 'out of 5');
+  });
+
+  return rows;
+}
+
+/** One entry point for both dashboards. Returns Section / Metric / Value / Unit / Note rows. */
+export function buildAnalyticsExportRows(data) {
+  if (data?.kpis) return branchAnalyticsRows(data);
+  if (data?.systemKpis) return systemAnalyticsRows(data);
+  return [['Report', 'Dashboard data', UNAVAILABLE, '', 'No dashboard data was loaded when the export was requested']];
+}
+
+/** Predictive payload from `GET /admin-reports/predictive-insights`. */
+export function buildPredictiveExportRows(data) {
+  const rows = [];
+  const add = (section, metric, value, unit = '', note = '') => rows.push([section, metric, val(value), unit, note]);
+
+  if (!data || (!data.volume_forecast && !data.recurring_issues && !data.status)) {
+    return [['Forecast', 'Predictive data', UNAVAILABLE, '', 'The forecast was not available when the export was requested']];
+  }
+
+  const basis = data.historical_basis || {};
+  add('Basis', 'Model', basis.model);
+  add('Basis', 'Days of history used', basis.days_used, 'days', 'A forecast is an estimate, not a guarantee');
+  if (data.status === 'insufficient_data') {
+    add('Basis', 'Status', data.message || 'Not enough history for a reliable forecast', '', `At least ${basis.minimum_days_required ?? 14} days are needed`);
+  }
+
+  (data.volume_forecast || []).forEach((d) =>
+    add('Projected ticket volume', d.date, d.predicted_volume, 'tickets', `Range ${d.lower_bound ?? '?'} to ${d.upper_bound ?? '?'} (${d.day_of_week || ''})`.trim()));
+
+  const trendNote = (t) => {
+    const change = isPresent(t.change_percentage) ? `${Number(t.change_percentage) > 0 ? '+' : ''}${Number(t.change_percentage).toFixed(1)}% vs baseline` : '';
+    return [change, isPresent(t.baseline_frequency) ? `baseline ${t.baseline_frequency}` : ''].filter(Boolean).join(', ');
+  };
+  (data.recurring_issues?.categories || []).forEach((t) =>
+    add('Rising categories', t.item_name, t.recent_frequency, 'tickets (recent)', trendNote(t)));
+  (data.recurring_issues?.machines || []).forEach((t) =>
+    add('Rising equipment', t.item_name, t.recent_frequency, 'tickets (recent)', trendNote(t)));
+
+  return rows;
+}
+
+const todayStamp = () => new Date().toISOString().split('T')[0];
+
+/** CSV for the operational dashboards (Branch and System). */
+export function exportAnalyticsToCsv(data, period = '') {
+  const rows = buildAnalyticsExportRows(data);
+  const meta = [['Operational Analytics Report'], ['Generated', new Date().toISOString()], ...(period ? [['Period', period]] : [])];
+  downloadCsv(`Operational_Analytics_${todayStamp()}.csv`, rowsToCsv(EXPORT_HEADERS, rows, meta));
+}
+
+/** CSV for the predictive forecast. */
+export function exportPredictiveToCsv(data, period = '') {
+  const rows = buildPredictiveExportRows(data);
+  const meta = [['Predictive Analytics Report'], ['Generated', new Date().toISOString()], ...(period ? [['Period', period]] : [])];
+  downloadCsv(`Predictive_Analytics_${todayStamp()}.csv`, rowsToCsv(EXPORT_HEADERS, rows, meta));
+}
+
+/** Kept for existing callers: the master report is the operational analytics report. */
 export function exportMasterReportToCsv(data) {
-  const dateStr = new Date().toISOString().split('T')[0];
-  const filename = `Enterprise_Master_Analytics_Report_${dateStr}.csv`;
-
-  let csv = `ENTERPRISE MASTER ANALYTICS & PREDICTIVE REPORT\n`;
-  csv += `Generated Date,${dateStr}\n\n`;
-
-  // 1. Ticket Trends
-  csv += `--- 1. TICKET TRENDS ---\n`;
-  csv += `Status,Ticket Count\n`;
-  csv += `Open,${data?.trends?.open || 12}\n`;
-  csv += `In Progress,${data?.trends?.inProgress || 18}\n`;
-  csv += `Resolved,${data?.trends?.resolved || 15}\n`;
-  csv += `Closed,${data?.trends?.closed || 5}\n\n`;
-
-  // 2. SLA Compliance
-  csv += `--- 2. SLA COMPLIANCE ---\n`;
-  csv += `Metric,Value\n`;
-  csv += `Overall Compliance,${data?.sla?.overall_compliance || 92.5}%\n`;
-  csv += `SLA Met Count,${data?.sla?.sla_met || 45}\n`;
-  csv += `SLA Breached Count,${data?.sla?.sla_breached || 4}\n\n`;
-
-  // 3. Employee Performance
-  csv += `--- 3. EMPLOYEE PERFORMANCE ---\n`;
-  csv += `Employee Name,Department,Resolved Count,Avg Response Time,Avg Resolution Time,SLA Compliance %\n`;
-  const empList = data?.employees || [
-    { name: 'Alice Smith', dept: 'Support', resolved: 28, resp: '15 mins', res: '2.1 hrs', sla: '93%' },
-    { name: 'Bob Jones', dept: 'Infrastructure', resolved: 22, resp: '20 mins', res: '2.8 hrs', sla: '85%' },
-    { name: 'Charlie Brown', dept: 'Service', resolved: 35, resp: '10 mins', res: '1.5 hrs', sla: '96%' },
-  ];
-  empList.forEach((e) => {
-    csv += `"${e.name}","${e.dept}",${e.resolved},"${e.resp}","${e.res}","${e.sla}"\n`;
-  });
-  csv += `\n`;
-
-  // 4. Customer Satisfaction (CSAT)
-  csv += `--- 4. CUSTOMER SATISFACTION (CSAT) ---\n`;
-  csv += `Metric,Value\n`;
-  csv += `Average Score,${data?.csat?.average_score || 4.67} / 5.00\n`;
-  csv += `Satisfaction Percentage,${data?.csat?.satisfaction_percentage || 100}%\n`;
-  csv += `Total Reviews,${data?.csat?.total_reviews || 3}\n\n`;
-
-  // 5. Workload Distribution
-  csv += `--- 5. WORKLOAD DISTRIBUTION ---\n`;
-  csv += `Grouping Name,Ticket Count\n`;
-  const wlList = data?.workload || [
-    { name: 'Support Department', count: 75 },
-    { name: 'Infrastructure', count: 52 },
-    { name: 'Service Department', count: 35 },
-  ];
-  wlList.forEach((w) => {
-    csv += `"${w.name}",${w.count}\n`;
-  });
-  csv += `\n`;
-
-  // 6. Predictive Escalation Risk
-  csv += `--- 6. PREDICTIVE - ESCALATION RISK ---\n`;
-  csv += `Risk Level,Ticket Count,Percentage\n`;
-  const esc = data?.predictive?.escRisk?.[data?.period || 'Next 7 Days'] || { low: 45, medium: 28, high: 15, critical: 7 };
-  const escTotal = esc.low + esc.medium + esc.high + esc.critical;
-  const pct = (v) => Math.round((v / escTotal) * 100);
-  csv += `Low,${esc.low},${pct(esc.low)}%\n`;
-  csv += `Medium,${esc.medium},${pct(esc.medium)}%\n`;
-  csv += `High,${esc.high},${pct(esc.high)}%\n`;
-  csv += `Critical,${esc.critical},${pct(esc.critical)}%\n\n`;
-
-  // 7. Predictive Root Causes
-  csv += `--- 7. PREDICTIVE - ROOT CAUSES ---\n`;
-  csv += `Cause Name,Incident Count,Percentage,Trend\n`;
-  const rcList = data?.predictive?.rootCause?.[data?.period || 'Next 7 Days'] || [
-    { name: 'Calibration Required', count: 20, pct: 65, trend: 'up' },
-    { name: 'Machine Failure', count: 11, pct: 35, trend: 'up' },
-  ];
-  rcList.forEach((rc) => {
-    csv += `"${rc.name}",${rc.count},${rc.pct}%,${rc.trend}\n`;
-  });
-  csv += `\n`;
-
-  // 8. Predictive Volume Prediction
-  csv += `--- 8. PREDICTIVE - VOLUME PREDICTION ---\n`;
-  csv += `Period,Predicted Total Tickets,Peak Day\n`;
-  const predVal = data?.predictive?.predTotal?.[data?.period || 'Next 7 Days'] || 56;
-  const peakVal = data?.predictive?.peakDay?.[data?.period || 'Next 7 Days'] || 'Day 6';
-  csv += `"${data?.period || 'Next 7 Days'}",${predVal},"${peakVal}"\n\n`;
-
-  // 9. Predictive Equipment Risk
-  csv += `--- 9. PREDICTIVE - EQUIPMENT RISK ---\n`;
-  csv += `Equipment Name,Failure Rate %,Risk Level\n`;
-  const eqNames = data?.predictive?.equipment || ['MRI 3T Scanner', 'Bedside Monitor'];
-  const eqFails = data?.predictive?.equipFail?.[data?.period || 'Next 7 Days'] || [35, 65];
-  eqNames.forEach((name, i) => {
-    const fRate = eqFails[i] !== undefined ? eqFails[i] : 20;
-    const rLevel = fRate >= 20 ? 'Critical' : (fRate >= 12 ? 'High' : (fRate >= 5 ? 'Moderate' : 'Low'));
-    csv += `"${name}",${fRate}%,${rLevel}\n`;
-  });
-  csv += `\n`;
-
-  // 10. Predictive Recurring Issues
-  csv += `--- 10. PREDICTIVE - RECURRING ISSUES ---\n`;
-  csv += `Category,Frequency Count,Severity\n`;
-  const recCats = data?.predictive?.categories || ['Machine Failure', 'Calibration Required'];
-  const recFreqs = data?.predictive?.recFreq?.[data?.period || 'Next 7 Days'] || [11, 20];
-  recCats.forEach((cat, i) => {
-    const freq = recFreqs[i] !== undefined ? recFreqs[i] : 10;
-    const sev = freq >= 15 ? 'High' : 'Medium';
-    csv += `"${cat}",${freq},${sev}\n`;
-  });
-
-  downloadCsv(filename, csv);
+  exportAnalyticsToCsv(data);
 }
 
+/**
+ * Structured CSV Export with Header and Filter Metadata (TS061)
+ */
+export function exportStructuredCsv(filename, headers, rows, filterSummary = {}) {
+  const dateStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  let csv = `"ENTERPRISE SERVICE DESK REPORT"\n`;
+  csv += `"Generated At","${dateStr}"\n`;
+  if (filterSummary.reportType) csv += `"Report Type","${filterSummary.reportType}"\n`;
+  if (filterSummary.dateRange) csv += `"Date Range","${filterSummary.dateRange}"\n`;
+  if (filterSummary.branch) csv += `"Branch Scope","${filterSummary.branch}"\n`;
+  if (filterSummary.department) csv += `"Department","${filterSummary.department}"\n`;
+  csv += `\n`;
+
+  // Headers
+  csv += headers.map((h) => `"${String(h).replace(/"/g, '""')}"`).join(',') + '\n';
+
+  // Rows
+  rows.forEach((r) => {
+    const rowValues = headers.map((h) => {
+      const val = r[h] !== undefined ? r[h] : (r[h.toLowerCase().replace(/\s+/g, '_')] ?? '');
+      return `"${String(val).replace(/"/g, '""')}"`;
+    });
+    csv += rowValues.join(',') + '\n';
+  });
+
+  downloadCsv(filename.endsWith('.csv') ? filename : `${filename}.csv`, csv);
+}
+
+function downloadBytes(filename, bytes, mime) {
+  const blob = new Blob([bytes], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+const ensureXlsx = (filename) => filename.replace(/\.(xlsx|csv|pdf)$/i, '') + '.xlsx';
+
+/**
+ * Structured Excel export (spec 0029 AC-16): a genuine .xlsx workbook with a title, filter summary,
+ * a frozen filterable header row and real numeric cells.
+ */
+export function exportStructuredExcel(filename, reportTitle, headers, rows, filterSummary = {}) {
+  const generated = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const matrix = rows.map((r) =>
+    headers.map((h) => (r[h] !== undefined ? r[h] : (r[h.toLowerCase().replace(/\s+/g, '_')] ?? '')))
+  );
+
+  const bytes = buildXlsx({
+    sheetName: 'Report',
+    title: reportTitle,
+    meta: [
+      ['Generated At:', generated],
+      ['Branch Scope:', filterSummary.branch || 'All Branches'],
+      ['Date Range:', filterSummary.dateRange || 'Standard Period'],
+      ['Department:', filterSummary.department || 'All Departments'],
+    ],
+    headers,
+    rows: matrix,
+  });
+  downloadBytes(ensureXlsx(filename), bytes, XLSX_MIME);
+}
+
+/** Excel for the operational dashboards (Branch and System). */
+export function exportAnalyticsToExcel(data, period = 'Active Period') {
+  const rows = buildAnalyticsExportRows(data).map(([section, metric, value, unit, note]) => ({
+    Section: section, Metric: metric, Value: value, Unit: unit, Note: note,
+  }));
+  exportStructuredExcel(`Operational_Analytics_${todayStamp()}.xlsx`, 'Operational Analytics Report', EXPORT_HEADERS, rows, {
+    dateRange: period,
+    department: 'All Departments',
+  });
+}
+
+/** Excel for the predictive forecast. */
+export function exportPredictiveToExcel(data, period = '') {
+  const rows = buildPredictiveExportRows(data).map(([section, metric, value, unit, note]) => ({
+    Section: section, Metric: metric, Value: value, Unit: unit, Note: note,
+  }));
+  exportStructuredExcel(`Predictive_Analytics_${todayStamp()}.xlsx`, 'Predictive Analytics Report', EXPORT_HEADERS, rows, {
+    dateRange: period || 'Next 7 and 30 days',
+    department: 'Branch forecast',
+  });
+}
+
+/**
+ * Structured PDF Export using jsPDF with proper page layout & headers (TS061)
+ */
+export function exportStructuredPdf(filename, reportTitle, headers, rows, filterSummary = {}) {
+  const cleanFilename = filename.replace(/\.(pdf|csv|xlsx)$/i, '') + '.pdf';
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const dateStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+  const pageWidth = 297;
+  const pageHeight = 210;
+  const margin = 14;
+  let currentY = 18;
+
+  // Header Title
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(16);
+  doc.setTextColor(37, 37, 120); // Brand primary
+  doc.text(reportTitle, margin, currentY);
+
+  currentY += 6;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Generated on: ${dateStr} | Enterprise IT Service Desk`, margin, currentY);
+
+  // Filter Summary Box
+  currentY += 5;
+  doc.setDrawColor(226, 232, 240);
+  doc.setFillColor(248, 250, 252);
+  doc.roundedRect(margin, currentY, pageWidth - margin * 2, 12, 2, 2, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(30, 41, 59);
+  const filterText = `Filters: Branch Scope: [${filterSummary.branch || 'All'}] | Range: [${filterSummary.dateRange || 'All'}] | Dept: [${filterSummary.department || 'All'}]`;
+  doc.text(filterText, margin + 4, currentY + 7);
+
+  // Table Setup
+  currentY += 18;
+  const colWidth = (pageWidth - margin * 2) / headers.length;
+
+  // Draw Table Headers
+  doc.setFillColor(37, 37, 120);
+  doc.rect(margin, currentY, pageWidth - margin * 2, 8, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(255, 255, 255);
+
+  headers.forEach((h, idx) => {
+    doc.text(String(h), margin + idx * colWidth + 2, currentY + 5.5);
+  });
+
+  currentY += 8;
+
+  // Draw Rows
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(30, 41, 59);
+
+  let pageNum = 1;
+
+  rows.forEach((r, rowIdx) => {
+    if (currentY + 7 > pageHeight - 15) {
+      // Add page break
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7);
+      doc.setTextColor(148, 163, 184);
+      doc.text(`Page ${pageNum}`, pageWidth - margin - 15, pageHeight - 8);
+
+      doc.addPage();
+      pageNum++;
+      currentY = 16;
+
+      // Repeat Table Header
+      doc.setFillColor(37, 37, 120);
+      doc.rect(margin, currentY, pageWidth - margin * 2, 8, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(255, 255, 255);
+      headers.forEach((h, idx) => {
+        doc.text(String(h), margin + idx * colWidth + 2, currentY + 5.5);
+      });
+      currentY += 8;
+    }
+
+    // Row alternating background
+    if (rowIdx % 2 === 0) {
+      doc.setFillColor(248, 250, 252);
+      doc.rect(margin, currentY, pageWidth - margin * 2, 7, 'F');
+    }
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(30, 41, 59);
+
+    headers.forEach((h, colIdx) => {
+      const val = r[h] !== undefined ? r[h] : (r[h.toLowerCase().replace(/\s+/g, '_')] ?? '');
+      const text = String(val).substring(0, 32);
+      doc.text(text, margin + colIdx * colWidth + 2, currentY + 4.8);
+    });
+
+    currentY += 7;
+  });
+
+  // Footer page number
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(148, 163, 184);
+  doc.text(`Page ${pageNum}`, pageWidth - margin - 15, pageHeight - 8);
+
+  doc.save(cleanFilename);
+}

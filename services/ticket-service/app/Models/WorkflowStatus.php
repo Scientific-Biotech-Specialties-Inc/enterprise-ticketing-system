@@ -17,5 +17,25 @@ class WorkflowStatus extends Model
         'bg_color',
         'text_color',
         'order_position',
+        'is_system',
+        'requires_previous_fulfilled',
+        'prerequisite_status_id',
     ];
+
+    protected $casts = [
+        'is_system' => 'boolean',
+        'requires_previous_fulfilled' => 'boolean',
+        'order_position' => 'integer',
+        'prerequisite_status_id' => 'integer',
+    ];
+
+    public function prerequisite()
+    {
+        return $this->belongsTo(WorkflowStatus::class, 'prerequisite_status_id');
+    }
+
+    public function dependents()
+    {
+        return $this->hasMany(WorkflowStatus::class, 'prerequisite_status_id');
+    }
 }

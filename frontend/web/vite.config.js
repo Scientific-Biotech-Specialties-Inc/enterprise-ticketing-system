@@ -14,6 +14,12 @@ export default defineConfig({
     host: '0.0.0.0',
     port: process.env.VITE_PORT ? parseInt(process.env.VITE_PORT) : 5005,
     strictPort: true,
+    cors: true,
+    allowedHosts: true,
+    headers: {
+      // frame-ancestors is ignored inside a <meta> CSP tag, so it must be an HTTP header.
+      'Content-Security-Policy': "frame-ancestors 'self'",
+    },
     watch: {
       usePolling: true,
       interval: 100,
@@ -54,6 +60,18 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
         rewrite: (path) => path.replace(/^\/api\/ticketing\/analytics/, '/api')
+      },
+      '/api/ticketing/configuration': {
+        target: process.env.VITE_CONFIGURATION_SERVICE_URL || 'http://127.0.0.1:8009',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api\/ticketing\/configuration/, '/api')
+      },
+      '/api/configuration': {
+        target: process.env.VITE_CONFIGURATION_SERVICE_URL || 'http://127.0.0.1:8009',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api\/configuration/, '/api')
       },
       '/api/analytics': {
         target: process.env.VITE_ANALYTICS_SERVICE_URL || 'http://127.0.0.1:8010',

@@ -18,6 +18,10 @@ class Client extends Authenticatable
         'email',
     ];
 
+    protected $hidden = [
+        'credential',
+    ];
+
     protected $casts = [
         'status' => 'boolean',
     ];

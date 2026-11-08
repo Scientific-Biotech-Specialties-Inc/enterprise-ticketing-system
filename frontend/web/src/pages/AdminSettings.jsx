@@ -1,22 +1,33 @@
 import React from 'react';
 import { Settings, Construction } from 'lucide-react';
+import { PageHeader } from '@/components/ui/page-header';
+import { Badge } from '@/components/ui/badge';
 
 export default function AdminSettings() {
   return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-12 max-w-lg w-full">
-        <div className="w-16 h-16 rounded-2xl bg-violet-50 flex items-center justify-center mx-auto mb-6">
-          <Settings className="w-8 h-8 text-violet-500" />
+    <div className="space-y-6">
+      <PageHeader
+        pattern="B"
+        title="Admin Settings"
+        subtitle="Configure system preferences, notification settings, SLA thresholds, and integration options."
+      />
+      <div className="flex flex-col items-center justify-center min-h-[45vh] text-center">
+        <div className="bg-card rounded-xl shadow-xs border border-border p-12 max-w-lg w-full">
+          <div className="w-16 h-16 rounded-xl bg-accent/10 flex items-center justify-center mx-auto mb-6 text-accent">
+            <Settings className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-bold text-slate-dark mb-2">Settings</h2>
+          <div className="flex items-center justify-center gap-2 mb-4">
+            <Badge variant="amber" className="gap-1.5 py-1 px-3">
+              <Construction className="w-3.5 h-3.5" />
+              <span>Coming Soon</span>
+            </Badge>
+          </div>
+          <p className="text-slate-muted text-sm leading-relaxed">
+            Configure system preferences, notification settings, SLA thresholds, and integration options.
+            This feature is currently under development.
+          </p>
         </div>
-        <h2 className="text-2xl font-bold text-gray-800 mb-2">Settings</h2>
-        <div className="flex items-center justify-center gap-2 text-amber-600 bg-amber-50 rounded-xl px-4 py-2 mb-4">
-          <Construction className="w-4 h-4" />
-          <span className="text-sm font-medium">Coming Soon</span>
-        </div>
-        <p className="text-gray-500 text-sm leading-relaxed">
-          Configure system preferences, notification settings, SLA thresholds, and integration options.
-          This feature is currently under development.
-        </p>
       </div>
     </div>
   );

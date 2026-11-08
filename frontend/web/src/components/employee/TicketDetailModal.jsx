@@ -1,11 +1,15 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { AlertTriangle, Clock, Bell } from 'lucide-react';
 import { formatDisplayDate } from '@/utils/dateUtils';
 import { statusColors, priorityColors } from '@/constants/employeeTickets';
-import { updateEmployeeTicketOverride } from '@/services/ticketService';
+import { updateEmployeeTicketOverride, getInternalNotes, addInternalNote } from '@/services/ticketService';
 import ProofCompletionModal from './ProofCompletionModal';
 import ReassignmentDisapprovalBanner from './ReassignmentDisapprovalBanner';
-import { isReassignmentDenied } from '@/utils/reassignmentUtils';
+import { isReassignmentDenied, hasPendingReassignment } from '@/utils/reassignmentUtils';
 import InternalNotesSection from '@/components/InternalNotesSection';
+import InternalTicketMessageThread from '@/components/InternalTicketMessageThread';
+import TicketFeedbackSection from '@/components/feedback/TicketFeedbackSection';
+import { hasFeedbackBeenSubmitted } from '@/data/mockFeedbackData';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 
 const STATUS_OPTIONS = ['In Progress', 'Pending', 'Resolved'];
@@ -31,6 +35,8 @@ export default function TicketDetailModal({
 
   // Sub-modal state for Proof of Completion (Modal 2)
   const [showProofModal, setShowProofModal] = useState(false);
+  const [internalNotesList, setInternalNotesList] = useState(ticket?.internalNotes || []);
+  const [isAddingNote, setIsAddingNote] = useState(false);
 
   useEffect(() => {
     setStatusDraft(ticket?.status ?? '');
@@ -41,6 +47,21 @@ export default function TicketDetailModal({
     setShowStatusConfirm(false);
     setShowProofModal(false);
     setTimelineSortOrder('asc');
+    setInternalNotesList(ticket?.internalNotes || []);
+
+    // Use the numeric database ID; ticket.id is the display number (e.g. INC-OPS-202611-00042).
+    const ticketId = ticket?.ticket_ID || ticket?.id;
+    if (ticketId) {
+      getInternalNotes(ticketId)
+        .then((notes) => {
+          if (Array.isArray(notes)) {
+            setInternalNotesList(notes);
+          }
+        })
+        .catch((err) => {
+          console.warn('Could not load internal notes:', err);
+        });
+    }
   }, [ticket]);
 
   useLockBodyScroll(!!ticket);
@@ -162,44 +183,34 @@ export default function TicketDetailModal({
     setShowStatusConfirm(false);
   };
 
-  // Add Staff-Only Internal Note
-  const handleAddInternalNote = (noteText) => {
+  // Add Staff-Only Internal Note (TS028)
+  const handleAddInternalNote = async (noteText) => {
     const trimmed = (noteText || '').trim();
     if (!trimmed) return;
 
-    const timestamp = new Date().toISOString();
-    const update = {
-      internalNotes: [
-        {
-          id: `note-${Date.now()}`,
-          text: trimmed,
-          author: 'Staff Member',
-          timestamp,
-        }
-      ],
-      timeline: [
-        {
-          id: `note-timeline-${Date.now()}`,
-          type: 'internal_note',
-          text: `Added staff internal note: "${trimmed}"`,
-          timestamp,
-        }
-      ]
-    };
-
-    updateEmployeeTicketOverride(ticket.id, update);
-    
-    // Optimistic local state update
-    if (!ticket.internalNotes) ticket.internalNotes = [];
-    ticket.internalNotes.push({
-      id: `note-${Date.now()}`,
-      text: trimmed,
-      author: 'Staff Member',
-      timestamp,
-    });
-
-    setSuccessMessage('Internal note added successfully!');
+    setIsAddingNote(true);
     setErrorMessage('');
+    setSuccessMessage('');
+
+    // Use the numeric database ID; ticket.id is the display number (e.g. INC-OPS-202611-00042).
+    const ticketId = ticket?.ticket_ID || ticket?.id;
+    try {
+      const res = await addInternalNote(ticketId, trimmed);
+      const newNote = res?.note || {
+        id: `note-${Date.now()}`,
+        text: trimmed,
+        author: 'Staff Member',
+        timestamp: new Date().toISOString(),
+      };
+      setInternalNotesList((prev) => [...prev, newNote]);
+      setSuccessMessage('Internal note added successfully!');
+    } catch (err) {
+      const msg = err?.response?.data?.message || 'Failed to submit internal note. Please try again.';
+      setErrorMessage(msg);
+      throw err;
+    } finally {
+      setIsAddingNote(false);
+    }
   };
 
   return (
@@ -229,6 +240,27 @@ export default function TicketDetailModal({
                   Pending Reassignment
                 </span>
               )}
+              {(() => {
+                const rawSla = ticket.sla_status || ticket.slaStatus || (ticket.sla_breached ? 'Breached' : null);
+                const normalized = rawSla ? String(rawSla).toLowerCase().replace(/[\s_-]+/g, '') : '';
+                if (normalized === 'breached' || normalized === 'violated') {
+                  return (
+                    <span className="text-badge px-3 py-1 bg-rose-100 text-rose-800 rounded-full border border-rose-200 font-semibold inline-flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3 text-rose-600 shrink-0" />
+                      <span>SLA Breached</span>
+                    </span>
+                  );
+                }
+                if (normalized === 'atrisk') {
+                  return (
+                    <span className="text-badge px-3 py-1 bg-amber-100 text-amber-800 rounded-full border border-amber-200 font-semibold inline-flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-amber-600 shrink-0" />
+                      <span>SLA At Risk</span>
+                    </span>
+                  );
+                }
+                return null;
+              })()}
             </div>
             <p className="text-sm text-gray-500 mt-1">{ticket.equipment} · {ticket.category}</p>
           </div>
@@ -258,14 +290,39 @@ export default function TicketDetailModal({
             {/* Ticket Information Details */}
             <div className="grid grid-cols-2 gap-4">
               <div className="bg-gray-50 rounded-xl p-4 text-sm">
-                <p className="text-field-label uppercase text-gray-400 mb-0.5">Requestor</p>
-                <p className="text-field-value text-gray-800">{ticket.customer || 'Unknown Customer'}</p>
-                {ticket.facility && <p className="text-timestamp text-gray-500 mt-0.5">{ticket.facility}</p>}
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-dark mb-0.5">Requestor</p>
+                <p className="text-sm font-normal text-slate-600">{ticket.customer || 'Unknown Customer'}</p>
+                {ticket.facility && <p className="text-xs font-normal text-slate-400 mt-0.5">{ticket.facility}</p>}
               </div>
               <div className="bg-gray-50 rounded-xl p-4 text-sm">
-                <p className="text-field-label uppercase text-gray-400 mb-0.5">Date Filed</p>
-                <p className="text-field-value text-gray-800">{formatDisplayDate(ticket.date)}</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-dark mb-0.5">Date Filed</p>
+                <p className="text-sm font-normal text-slate-600">{formatDisplayDate(ticket.date)}</p>
               </div>
+              {(ticket.resolution_due_at || ticket.due_at || ticket.sla_due_date || ticket.sla?.resolution?.target) && (
+                <div className="col-span-2 bg-rose-50/50 border border-rose-100 rounded-xl p-4 text-sm">
+                  <p className="text-xs font-bold uppercase tracking-wider text-rose-900 mb-0.5 flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5 text-rose-600" />
+                    <span>SLA Resolution Target</span>
+                  </p>
+                  <p className="text-sm font-semibold text-rose-800">
+                    {formatDisplayDate(ticket.resolution_due_at || ticket.due_at || ticket.sla_due_date || ticket.sla?.resolution?.target)}
+                  </p>
+                </div>
+              )}
+              {(ticket.last_reminder_sent_at || ticket.lastReminderSentAt) && (
+                <div className="col-span-2 rounded-xl bg-indigo-50 border border-indigo-200 p-4 text-sm">
+                  <p className="text-xs font-bold uppercase tracking-wider text-indigo-950 mb-0.5 flex items-center gap-1.5">
+                    <Bell className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>CS Employee Reminder</span>
+                  </p>
+                  <p className="text-sm font-semibold text-indigo-800">
+                    Last sent: {formatDisplayDate(ticket.last_reminder_sent_at || ticket.lastReminderSentAt)}
+                  </p>
+                  <p className="text-xs text-indigo-700 mt-1 leading-relaxed">
+                    Customer Service dispatched a reminder prompt regarding this ticket. Please review and provide progress.
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* ────────────────────────────────────────────────────────
@@ -273,7 +330,14 @@ export default function TicketDetailModal({
                ──────────────────────────────────────────────────────── */}
             {!isAccepted ? (
               <div className="space-y-4">
-                <ReassignmentDisapprovalBanner ticket={ticket} />
+                <ReassignmentDisapprovalBanner
+                  ticket={ticket}
+                  onRequestReassignAgain={() => {
+                    if (typeof onRequestReassign === 'function') {
+                      onRequestReassign(ticket);
+                    }
+                  }}
+                />
                 {ticket.status === 'Pending Evaluation' ? (
                 <div className="border border-purple-100 rounded-2xl p-6 bg-purple-50/30 text-center space-y-3">
                   <h4 className="text-sm font-bold text-purple-800">Pending for Evaluation</h4>
@@ -281,12 +345,15 @@ export default function TicketDetailModal({
                     This ticket is currently awaiting evaluation. No action is required at this time.
                   </p>
                 </div>
-              ) : ticket.reassignmentRequested && !isReassignmentDenied(ticket) ? (
+              ) : hasPendingReassignment(ticket) ? (
                 <div className="border border-amber-100 rounded-2xl p-6 bg-amber-50/30 text-center space-y-3">
-                  <h4 className="text-sm font-bold text-amber-900">Reassignment Request Pending</h4>
+                  <h4 className="text-sm font-bold text-amber-900 flex items-center justify-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
+                    Reassignment Request Pending
+                  </h4>
                   <p className="text-xs text-amber-800 leading-relaxed max-w-md mx-auto">
                     You have requested reassignment for this ticket with the reason:<br/>
-                    <strong className="italic">&quot;{ticket.reassignmentReason || ticket.reassignment_reason}&quot;</strong><br/>
+                    <strong className="italic">&quot;{ticket.reassignmentReason || ticket.reassignment_reason || 'Awaiting review'}&quot;</strong><br/>
                     Awaiting CS coordinator review and action.
                   </p>
                 </div>
@@ -332,14 +399,21 @@ export default function TicketDetailModal({
               <div className="space-y-6">
                 
                 {/* Reassignment disapproved banner */}
-                <ReassignmentDisapprovalBanner ticket={ticket} />
+                <ReassignmentDisapprovalBanner
+                  ticket={ticket}
+                  onRequestReassignAgain={() => {
+                    if (typeof onRequestReassign === 'function') {
+                      onRequestReassign(ticket);
+                    }
+                  }}
+                />
 
                 {/* 1. Reassignment request pending banner (if reassignment requested post-accept) */}
-                {ticket.reassignmentRequested && !isReassignmentDenied(ticket) && (
+                {hasPendingReassignment(ticket) && (
                   <div className="flex items-center gap-3 bg-amber-50/70 border border-amber-100 rounded-xl p-3.5 text-xs text-amber-800">
                     <div className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
                     <div>
-                      <span className="font-bold">Reassignment Request Pending:</span> &quot;{ticket.reassignmentReason}&quot;
+                      <span className="font-bold">Reassignment Request Pending:</span> &quot;{ticket.reassignmentReason || ticket.reassignment_reason || 'Awaiting review'}&quot;
                     </div>
                   </div>
                 )}
@@ -501,9 +575,28 @@ export default function TicketDetailModal({
 
                 {/* 4. Staff-Only Internal Notes */}
                 <InternalNotesSection
-                  notes={ticket.internalNotes}
+                  notes={internalNotesList}
                   onAddNote={handleAddInternalNote}
+                  isAdding={isAddingNote}
                 />
+
+                {/* Internal Ticket Message Thread */}
+                {isInternal && (ticket.id || ticket.ticket_ID) && (
+                  <div className="pt-2">
+                    <InternalTicketMessageThread
+                      ticketId={ticket.ticket_ID || ticket.id}
+                      ticket={ticket}
+                      isClosed={ticket.status === 'Closed' || Number(ticket.ticket_status_ID) === 4}
+                    />
+                  </div>
+                )}
+
+                {/* Customer Satisfaction Feedback */}
+                {(ticket.status === 'Resolved' || ticket.status === 'Closed' || hasFeedbackBeenSubmitted(ticket.id || ticket.ticket_ID)) && (
+                  <div className="pt-2">
+                    <TicketFeedbackSection ticket={ticket} readOnly={true} />
+                  </div>
+                )}
 
                 {/* 5. Chronological History Timeline */}
                 <div className="space-y-3 text-left">
@@ -521,24 +614,36 @@ export default function TicketDetailModal({
                     </button>
                   </div>
                   <div className="relative pl-6 space-y-4 border-l border-gray-200 ml-3 py-1.5">
-                    {sortedTimelineEvents.map((evt, idx) => (
-                      <div key={evt.id || idx} className="relative text-field-value">
-                        {/* Circle dot marker */}
-                        <div className="absolute -left-[30px] top-1 w-2.5 h-2.5 rounded-full border-2 border-white bg-[#252578] shadow" />
-                        <div className="flex justify-between items-center text-timestamp text-gray-400 mb-0.5">
-                          <span className="text-timestamp uppercase tracking-wide text-[#252578]">
-                            {evt.type === 'system' ? 'System' : evt.type || 'Update'}
-                          </span>
-                          <span className="text-timestamp">{formatDisplayDate(evt.timestamp)}</span>
+                    {sortedTimelineEvents.map((evt, idx) => {
+                      const isReminder = evt.type === 'reminder';
+                      return (
+                        <div key={evt.id || idx} className="relative text-field-value">
+                          {/* Circle dot marker */}
+                          <div className={`absolute -left-[30px] top-1 w-2.5 h-2.5 rounded-full border-2 border-white shadow ${
+                            isReminder ? 'bg-indigo-600 ring-2 ring-indigo-200' : 'bg-[#252578]'
+                          }`} />
+                          <div className="flex justify-between items-center text-timestamp text-gray-400 mb-0.5">
+                            <span className={`text-timestamp uppercase tracking-wide flex items-center gap-1 font-bold ${
+                              isReminder ? 'text-indigo-600' : 'text-[#252578]'
+                            }`}>
+                              {isReminder && <Bell className="w-3 h-3 text-indigo-600 inline" />}
+                              {isReminder ? 'CS Reminder' : evt.type === 'system' ? 'System' : evt.type || 'Update'}
+                            </span>
+                            <span className="text-timestamp">{formatDisplayDate(evt.timestamp)}</span>
+                          </div>
+                          <p
+                            className={`text-field-value p-2.5 rounded-lg border break-words whitespace-pre-wrap max-w-full overflow-hidden ${
+                              isReminder
+                                ? 'text-indigo-950 bg-indigo-50/80 border-indigo-200 font-medium'
+                                : 'text-gray-700 bg-gray-50/50 border-gray-100/50'
+                            }`}
+                            style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                          >
+                            {evt.text}
+                          </p>
                         </div>
-                        <p
-                          className="text-field-value text-gray-700 bg-gray-50/50 p-2 rounded-lg border border-gray-100/50 break-words whitespace-pre-wrap max-w-full overflow-hidden"
-                          style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
-                        >
-                          {evt.text}
-                        </p>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
 

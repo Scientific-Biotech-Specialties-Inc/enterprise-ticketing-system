@@ -10,44 +10,162 @@ class GeminiService
     protected string $apiKey;
     protected string $model;
     protected string $baseUrl;
+    protected int $timeout;
+    protected RagService $ragService;
 
-    public function __construct()
+    public function __construct(?RagService $ragService = null)
     {
         $this->apiKey = config('services.gemini.api_key') ?? env('GEMINI_API_KEY', '');
-        $this->model = config('services.gemini.model') ?? env('GEMINI_MODEL', 'gemini-3.5-flash-lite');
+        $this->model = config('services.gemini.model') ?? env('GEMINI_MODEL', 'gemini-3.5-flash');
+        // Spec 0036 (AC-10): at most 15 seconds, then escalate to a manual ticket.
+        $this->timeout = max(1, min((int) config('services.gemini.timeout', 15), 15));
         $this->baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models';
+        $this->ragService = $ragService ?? app(RagService::class);
     }
 
     /**
-     * Generate support response from Google Gemini with graceful manual fallback.
+     * Generate support response from Google Gemini with grounded RAG on published articles
+     * and automatic fallback to ticket creation when no published articles match.
      *
      * @param array $messages Array of {role: string, content: string}
      * @param string|null $conversationId
-     * @return array {content: string, escalate: bool, ticket_data: array|null}
+     * @return array {content: string, escalate: bool, ticket_data: array|null, rag_matched: bool, rag_sources: array}
      */
     public function generateResponse(array $messages, ?string $conversationId = null): array
     {
+        $requestStartTime = hrtime(true);
+
+        // 1. Extract the latest customer query
+        $lastUserQuery = '';
+        foreach (array_reverse($messages) as $m) {
+            if (($m['role'] ?? '') === 'user' && !empty($m['content'])) {
+                $lastUserQuery = trim($m['content']);
+                break;
+            }
+        }
+
+        $isGreeting = $this->isGreetingOnly($lastUserQuery);
+
+        // TS050 Safety Guardrail: Detect dangerous high-voltage electrical or heavy machinery physical internal repair
+        if (!empty($lastUserQuery) && $this->detectHazardousRepairIntent($lastUserQuery)) {
+            Log::warning('TS050 Safety Guardrail triggered: Dangerous high-voltage or heavy machinery repair inquiry intercepted.', [
+                'query' => $lastUserQuery,
+            ]);
+            $title = $this->deriveTitleFromMessages($messages) ?: 'Urgent: High-Voltage / Machinery Physical Inspection Needed';
+            $dangerNotice = "⚠️ SAFETY HAZARD ALERT: For your safety, do not attempt to service, disassemble, or touch live high-voltage electrical components, open electrical cabinets, or bypass safety interlocks on heavy machinery.\n\nPhysical intervention on high-voltage and industrial machinery must strictly be handled by certified service engineers with proper lockout/tagout procedures. I have escalated this issue directly to a high-priority technician dispatch ticket.";
+
+            return [
+                'content' => $dangerNotice,
+                'reply' => $dangerNotice,
+                'escalate' => true,
+                'is_fallback' => true,
+                'fallback' => true,
+                'safety_alert' => true,
+                'ticket_data' => [
+                    'title' => $title,
+                    'description' => $lastUserQuery . " [SAFETY ESCALATION: Hazardous high-voltage or heavy equipment repair inquiry]",
+                    'priority' => 'High',
+                    'suggested_category' => 'Hardware',
+                    'category_confidence' => 0.95,
+                ],
+                'ticket_title' => $title,
+                'ticket_description' => $lastUserQuery . " [SAFETY ESCALATION: Hazardous high-voltage or heavy equipment repair inquiry]",
+                'rag_matched' => false,
+                'rag_sources' => [],
+                'rag_duration_ms' => 0.0,
+                'total_duration_ms' => round((hrtime(true) - $requestStartTime) / 1e6, 2),
+            ];
+        }
+
+        // 2. Perform RAG retrieval strictly over Published articles
+        $ragResult = [
+            'chunks' => [],
+            'duration_ms' => 0.0,
+            'matched' => false,
+        ];
+
+        if (!empty($lastUserQuery) && !$isGreeting) {
+            // Spec 0036 (AC-8): threshold from KB_MIN_SCORE. If the query cannot be embedded we do not
+            // fall back to any other vector space; the customer goes straight to the manual ticket path.
+            try {
+                $ragResult = $this->ragService->retrieve($lastUserQuery, 5);
+            } catch (\App\Exceptions\EmbeddingFailedException $e) {
+                Log::warning('RAG query embedding failed. Escalating to manual ticket creation.', ['reason' => $e->getMessage()]);
+                return $this->fallbackToManual($messages, 'Query embedding failed: ' . $e->getMessage());
+            }
+
+            // =========================================================================
+            // FALLBACK PATH: No Published article matched customer query
+            // =========================================================================
+            if (!$ragResult['matched']) {
+                $title = $this->deriveTitleFromMessages($messages);
+                Log::info('RAG query yielded no published matches. Triggering ticket creation fallback path.', [
+                    'query' => $lastUserQuery,
+                    'derived_title' => $title,
+                    'rag_duration_ms' => $ragResult['duration_ms'],
+                ]);
+
+                $replyText = "I searched our approved Knowledge Base and official documentation, but could not find any published articles or procedures matching your specific issue.\n\nTo ensure you receive accurate, manufacturer-approved technical assistance, I have prepared a support ticket request so our certified technical engineering team can inspect and resolve this for you directly.";
+                return [
+                    'content' => $replyText,
+                    'reply' => $replyText,
+                    'escalate' => true,
+                    'is_fallback' => true,
+                    'fallback' => true,
+                    'ticket_data' => [
+                        'title' => $title,
+                        'description' => !empty($lastUserQuery) ? $lastUserQuery : 'Customer inquiry required technical assistance beyond published documentation.',
+                    ],
+                    'ticket_title' => $title,
+                    'ticket_description' => !empty($lastUserQuery) ? $lastUserQuery : 'Customer inquiry required technical assistance beyond published documentation.',
+                    'rag_matched' => false,
+                    'rag_sources' => [],
+                    'rag_duration_ms' => $ragResult['duration_ms'],
+                    'total_duration_ms' => round((hrtime(true) - $requestStartTime) / 1e6, 2),
+                ];
+            }
+        }
+
+        // 3. Fallback to manual if Gemini API key is missing
         if (empty($this->apiKey)) {
             Log::warning('GEMINI_API_KEY is not configured in services.gemini. Falling back to manual ticket creation.');
             return $this->fallbackToManual($messages, 'AI assistant is not configured with an API key.');
         }
 
         try {
-            $url = "{$this->baseUrl}/{$this->model}:generateContent?key={$this->apiKey}";
+            $url = "{$this->baseUrl}/{$this->model}:generateContent";
 
+            // 4. Construct System Instruction with Published Article Sources Grounding
             $systemInstruction = "You are an expert enterprise technical support AI assistant for an industrial, equipment, and IT ticketing platform. " .
                 "Your objective is to guide customers through clear, step-by-step diagnostic and troubleshooting actions for their machines, hardware, or software problems.\n\n" .
                 "Key Guidelines:\n" .
                 "1. Keep troubleshooting steps concise and direct (maximum 3 to 4 short bullet points, under 150 words total). Avoid unnecessary filler text.\n" .
-                "2. If the user indicates that basic troubleshooting failed, or if the issue involves dangerous high-voltage electrical, jammed heavy machinery, broken hardware, or requires an on-site technician dispatch, you MUST recommend escalating to a support ticket.\n" .
-                "3. When escalating, append a structured JSON block at the very end of your response exactly like this:\n" .
+                "2. Base your guidance strictly on the approved published documentation provided below. If multiple articles or procedures are provided, prioritize the most recently updated procedure and provide the numbered troubleshooting steps in chronological order. Never invent, hallucinate, or reference draft or archived procedures.\n" .
+                "3. If the user indicates that basic troubleshooting failed, or if the issue involves dangerous high-voltage electrical, jammed heavy machinery, broken hardware, or requires an on-site technician dispatch, you MUST recommend escalating to a support ticket.\n" .
+                "4. When escalating, append a structured JSON block at the very end of your response exactly like this:\n" .
                 "```json\n" .
                 "{\n" .
                 '  "escalate": true,' . "\n" .
                 '  "ticket_title": "Concise natural summary of the problem (e.g. CGI Machine Paper Jam Error, NEVER include numbers or bullets like 1. or 2.)",' . "\n" .
-                '  "ticket_description": "Detailed summary of the problem and troubleshooting attempted"' . "\n" .
+                '  "ticket_description": "Detailed human-readable summary of the problem and troubleshooting attempted",' . "\n" .
+                '  "suggested_category": "Classified category name or null if not confident (e.g. Hardware, Software, Network)",' . "\n" .
+                '  "category_confidence": 0.85,' . "\n" .
+                '  "suggested_machine": "Specific machine name or serial number mentioned by user or null if not identified",' . "\n" .
+                '  "machine_confidence": 0.90' . "\n" .
                 "}\n" .
                 "```";
+
+            if (!empty($ragResult['chunks'])) {
+                $systemInstruction .= "\n\n=== APPROVED PUBLISHED KNOWLEDGE BASE SOURCES ===\n";
+                foreach ($ragResult['chunks'] as $idx => $chunk) {
+                    $num = $idx + 1;
+                    $updatedStr = !empty($chunk['article_updated_at']) ? " | Last Updated: " . date('Y-m-d H:i', strtotime($chunk['article_updated_at'])) : "";
+                    $systemInstruction .= "Source {$num}: [{$chunk['article_title']} | {$chunk['article_category']}" . (!empty($chunk['article_machine']) ? " | {$chunk['article_machine']}" : "") . "{$updatedStr}]\n" .
+                        $chunk['content'] . "\n\n";
+                }
+                $systemInstruction .= "=== END APPROVED SOURCES ===\n";
+                $systemInstruction .= "INSTRUCTION: Directly cite or summarize the approved steps from the sources above to resolve the user's issue.";
+            }
 
             // Limit conversation window to latest 8 messages to prevent latency degradation in long chats
             $recentMessages = count($messages) > 8 ? array_slice($messages, -8) : $messages;
@@ -82,14 +200,15 @@ class GeminiService
                 ],
                 'contents' => $contents,
                 'generationConfig' => [
-                    'temperature' => 0.3,
+                    'temperature' => 0.2,
                     'maxOutputTokens' => 600,
                 ]
             ];
 
             $response = Http::withHeaders([
                 'Content-Type' => 'application/json',
-            ])->timeout(12)->post($url, $payload);
+                'x-goog-api-key' => $this->apiKey,
+            ])->connectTimeout(5)->timeout($this->timeout)->post($url, $payload);
 
             if (!$response->successful()) {
                 Log::error('Gemini API request failed', [
@@ -106,7 +225,34 @@ class GeminiService
                 return $this->fallbackToManual($messages, 'Empty response from Gemini.');
             }
 
-            return $this->parseResponse($rawText, $messages);
+            $totalDurationMs = round((hrtime(true) - $requestStartTime) / 1e6, 2);
+
+            // Latency target audit: verify total request time is under 5 seconds (5000ms)
+            if ($totalDurationMs > 5000.0) {
+                Log::warning('Chatbot response exceeded 5-second target threshold', [
+                    'total_duration_ms' => $totalDurationMs,
+                    'rag_duration_ms' => $ragResult['duration_ms'],
+                ]);
+            } else {
+                Log::info('Chatbot response delivered within 5-second target', [
+                    'total_duration_ms' => $totalDurationMs,
+                    'rag_duration_ms' => $ragResult['duration_ms'],
+                ]);
+            }
+
+            $parsed = $this->parseResponse($rawText, $messages);
+            $parsed['rag_matched'] = $ragResult['matched'];
+            $parsed['rag_sources'] = array_map(fn ($c) => [
+                'title' => $c['article_title'],
+                'category' => $c['article_category'],
+                'machine' => $c['article_machine'],
+                'score' => $c['score'],
+                'updated_at' => $c['article_updated_at'] ?? null,
+            ], $ragResult['chunks']);
+            $parsed['rag_duration_ms'] = $ragResult['duration_ms'];
+            $parsed['total_duration_ms'] = $totalDurationMs;
+
+            return $parsed;
 
         } catch (\Throwable $e) {
             Log::error('GeminiService exception: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
@@ -132,11 +278,15 @@ class GeminiService
             $parsed = json_decode($jsonStr, true);
             if (json_last_error() === JSON_ERROR_NONE && !empty($parsed)) {
                 $rawTitle = $parsed['ticket_title'] ?? '';
-                $cleanTitle = preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $rawTitle);
+                $cleanTitle = preg_replace('/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $rawTitle);
                 $cleanTitle = trim($cleanTitle);
                 $ticketData = [
                     'title' => !empty($cleanTitle) ? ucfirst($cleanTitle) : $this->deriveTitleFromMessages($messages),
                     'description' => $parsed['ticket_description'] ?? 'Submitted via AI Support Assistant.',
+                    'category' => !empty($parsed['suggested_category']) && strtolower($parsed['suggested_category']) !== 'null' ? trim($parsed['suggested_category']) : null,
+                    'category_confidence' => isset($parsed['category_confidence']) ? (float) $parsed['category_confidence'] : 0.85,
+                    'machine' => !empty($parsed['suggested_machine']) && strtolower($parsed['suggested_machine']) !== 'null' ? trim($parsed['suggested_machine']) : null,
+                    'machine_confidence' => isset($parsed['machine_confidence']) ? (float) $parsed['machine_confidence'] : 0.85,
                 ];
             }
         } else {
@@ -152,6 +302,10 @@ class GeminiService
                 $ticketData = [
                     'title' => $this->deriveTitleFromMessages($messages),
                     'description' => 'Automated troubleshooting suggested technician dispatch for this issue.',
+                    'category' => null,
+                    'category_confidence' => 0.0,
+                    'machine' => null,
+                    'machine_confidence' => 0.0,
                 ];
             }
         }
@@ -176,19 +330,27 @@ class GeminiService
             }
         }
 
-        $cleanedMsg = preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $lastUserMsg);
+        $cleanedMsg = preg_replace('/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $lastUserMsg);
         $title = !empty($cleanedMsg) ? ucfirst(mb_substr(trim($cleanedMsg), 0, 60)) : 'Technical Support Request';
 
+        $replyText = "Our automated AI support assistant is temporarily unavailable. " .
+            "Please proceed to create a support ticket directly below, and our technical engineering team will review and resolve your issue shortly.";
+
         return [
-            'content' => "Our automated AI support assistant is temporarily unavailable. " .
-                "Please proceed to create a support ticket directly below, and our technical engineering team will review and resolve your issue shortly.",
+            'content' => $replyText,
+            'reply' => $replyText,
             'escalate' => true,
+            'is_fallback' => true,
             'ticket_data' => [
                 'title' => $title,
                 'description' => !empty($lastUserMsg) ? $lastUserMsg : 'Submitted via manual support ticket.',
             ],
+            'ticket_title' => $title,
+            'ticket_description' => !empty($lastUserMsg) ? $lastUserMsg : 'Submitted via manual support ticket.',
             'fallback' => true,
             'reason' => $reason,
+            'rag_matched' => false,
+            'rag_sources' => [],
         ];
     }
 
@@ -221,7 +383,7 @@ class GeminiService
                 }
 
                 // Strip question numbers like "1.", "1)", "1 -", "Q1:", "Machine:"
-                $content = preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $content);
+                $content = preg_replace('/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $content);
                 $content = trim($content);
 
                 if (!empty($content) && mb_strlen($content) >= 3) {
@@ -231,5 +393,171 @@ class GeminiService
             }
         }
         return 'Equipment Technical Support Request';
+    }
+
+    public function isGreetingOnly(string $text): bool
+    {
+        $greetings = [
+            'hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening',
+            'good day', 'greetings', 'help', 'test', 'support', 'hi there', 'hello there'
+        ];
+        $cleaned = trim(preg_replace('/[^\w\s]/', '', strtolower($text)));
+        return in_array($cleaned, $greetings, true);
+    }
+
+    /**
+     * TS050 Safety Guardrails: Identify dangerous high-voltage electrical or heavy machinery physical internal repair.
+     */
+    public function detectHazardousRepairIntent(string $query): bool
+    {
+        $q = strtolower(trim($query));
+        $dangerKeywords = [
+            'high voltage',
+            'high-voltage',
+            'live wire',
+            'live wiring',
+            'electric shock',
+            'electrocution',
+            'open transformer',
+            'touch transformer',
+            'bypass interlock',
+            'bypass safety interlock',
+            'repair capacitor',
+            'discharge capacitor',
+            'heavy machinery gear repair',
+            'internal gear assembly',
+            'hydraulic press repair',
+            'running roller bypass',
+            'reach inside gear',
+            'service live power board',
+        ];
+
+        foreach ($dangerKeywords as $keyword) {
+            if (str_contains($q, $keyword)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Classify whether a ticket issue belongs to IT (software/digital) or Service (hardware/machinery).
+     */
+    public function classifyDepartment(string $title, string $description): array
+    {
+        // Try Gemini if API key is present
+        if (!empty($this->apiKey)) {
+            try {
+                $url = "{$this->baseUrl}/{$this->model}:generateContent";
+                $systemInstruction = "You are an enterprise hospital and clinic IT/Service desk triage assistant.\n"
+                    . "Your job is to classify incoming support tickets into one of two departments:\n"
+                    . "1. 'IT': For software, applications, portals, account access, login/passwords, network/WiFi/internet, database, EHR/EMR, UI bugs, server errors, digital system timeouts, or operating system issues. Software issues DO NOT require physical equipment/hardware.\n"
+                    . "2. 'Service': For physical medical machines, hardware breakdown, scanning equipment (MRI, CT, X-Ray), bedside monitors, sensors, physical cables, motors, physical damage, calibration, power supplies, or mechanical failures. Hardware issues REQUIRE physical equipment selection.\n\n"
+                    . "You must output strictly a raw JSON object with no markdown formatting:\n"
+                    . "{\"department\": \"IT\" or \"Service\", \"is_software\": true or false, \"confidence\": 0.90, \"reasoning\": \"1 concise sentence explaining the classification to the customer.\"}";
+
+                $payload = [
+                    'systemInstruction' => [
+                        'parts' => [['text' => $systemInstruction]]
+                    ],
+                    'contents' => [
+                        [
+                            'role' => 'user',
+                            'parts' => [['text' => "Ticket Title: {$title}\nDescription: {$description}"]]
+                        ]
+                    ],
+                    'generationConfig' => [
+                        'temperature' => 0.1,
+                        'maxOutputTokens' => 200,
+                    ]
+                ];
+
+                $response = Http::withHeaders(['Content-Type' => 'application/json', 'x-goog-api-key' => $this->apiKey])
+                    ->timeout(6)
+                    ->post($url, $payload);
+
+                if ($response->successful()) {
+                    $raw = $response->json('candidates.0.content.parts.0.text') ?? '';
+                    if (preg_match('/\{[\s\S]*\}/', $raw, $m)) {
+                        $data = json_decode($m[0], true);
+                        if (is_array($data) && isset($data['department'])) {
+                            $dept = strtoupper(trim($data['department'])) === 'IT' ? 'IT' : 'Service';
+                            $isSoftware = $dept === 'IT' || (!empty($data['is_software']) && $data['is_software'] === true);
+                            if ($isSoftware) $dept = 'IT';
+                            return [
+                                'department' => $dept,
+                                'department_id' => $dept === 'IT' ? 2 : 1,
+                                'is_software' => $dept === 'IT',
+                                'requires_equipment' => $dept !== 'IT',
+                                'confidence' => isset($data['confidence']) ? (float) $data['confidence'] : 0.9,
+                                'reasoning' => $data['reasoning'] ?? ($dept === 'IT'
+                                    ? 'This issue relates to software or digital systems. Physical equipment selection is optional.'
+                                    : 'This issue involves physical hardware or machinery inspection. Equipment selection is required.'),
+                                'source' => 'gemini'
+                            ];
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Gemini department classification failed, falling back to heuristics: ' . $e->getMessage());
+            }
+        }
+
+        // Resilient heuristic classification fallback
+        return $this->heuristicClassifyDepartment($title, $description);
+    }
+
+    /**
+     * Resilient keyword based heuristic classification when AI is unavailable or offline.
+     */
+    public function heuristicClassifyDepartment(string $title, string $description): array
+    {
+        $text = strtolower($title . ' ' . $description);
+
+        $softwareKeywords = [
+            'software', 'app', 'application', 'login', 'logout', 'password', 'auth', 'account', 'user',
+            'portal', 'permission', 'role', 'bug', 'glitch', 'crash', 'freeze', 'freezing', 'ui', 'interface',
+            'network', 'wifi', 'wi-fi', 'internet', 'connection', 'timeout', 'database', 'sql', 'query',
+            'sync', 'syncing', 'update', 'upgrade', 'install', 'installation', 'browser', 'chrome', 'license',
+            'api', 'slow system', 'page error', '404', '500', 'code', 'script', 'export', 'import', 'csv',
+            'pdf generation', 'email notification', 'reset password', 'credential', 'dashboard'
+        ];
+
+        $hardwareKeywords = [
+            'machine', 'hardware', 'scanner', 'mri', 'ct scan', 'xray', 'x-ray', 'monitor', 'bedside',
+            'sensor', 'cable', 'cord', 'power supply', 'outlet', 'smoke', 'burnt', 'leak', 'water',
+            'noise', 'vibration', 'motor', 'fan', 'broken', 'cracked', 'physical', 'lens', 'pump',
+            'valve', 'calibration', 'cartridge', 'tray', 'arm', 'wheel', 'plug', 'battery', 'overheating'
+        ];
+
+        $softwareScore = 0;
+        foreach ($softwareKeywords as $word) {
+            if (str_contains($text, $word)) {
+                $softwareScore++;
+            }
+        }
+
+        $hardwareScore = 0;
+        foreach ($hardwareKeywords as $word) {
+            if (str_contains($text, $word)) {
+                $hardwareScore++;
+            }
+        }
+
+        $isSoftware = ($softwareScore >= $hardwareScore && $softwareScore > 0) || ($softwareScore > 0 && $hardwareScore === 0);
+        $dept = $isSoftware ? 'IT' : 'Service';
+
+        return [
+            'department' => $dept,
+            'department_id' => $dept === 'IT' ? 2 : 1,
+            'is_software' => $dept === 'IT',
+            'requires_equipment' => $dept !== 'IT',
+            'confidence' => $isSoftware ? 0.85 : 0.80,
+            'reasoning' => $dept === 'IT'
+                ? 'Your problem description indicates a software or digital system issue. Physical equipment is optional.'
+                : 'Your problem description indicates physical machinery or hardware maintenance. Equipment selection is required.',
+            'source' => 'heuristic'
+        ];
     }
 }

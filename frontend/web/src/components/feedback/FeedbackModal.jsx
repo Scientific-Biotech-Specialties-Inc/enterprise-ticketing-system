@@ -1,15 +1,54 @@
 import React, { useState, useEffect, useRef } from 'react';
 import EmployeeFeedbackCard from './EmployeeFeedbackCard';
+import StarRating from './StarRating';
 import ThankYouScreen from './ThankYouScreen';
-import { getEmployeeById, saveFeedback } from '@/data/mockFeedbackData';
+import { getEmployeeById, getTicketEmployees, saveFeedback, updateFeedback } from '@/data/mockFeedbackData';
+import { getCategoryFeedbackQuestions } from '@/services/configurationService';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 
-export default function FeedbackModal({ ticket, onClose }) {
+export default function FeedbackModal({ ticket, onClose, existingFeedback = null, mode = 'create' }) {
+  useLockBodyScroll(true);
+  const isEditMode = mode === 'edit' || Boolean(existingFeedback);
   const [step, setStep] = useState('form');
-  const [ratings, setRatings] = useState({});
-  const [comments, setComments] = useState({});
-  const [overallComment, setOverallComment] = useState('');
+  const [ratings, setRatings] = useState(existingFeedback?.ratings || {});
+  const [comments, setComments] = useState(existingFeedback?.comments || {});
+  const [overallComment, setOverallComment] = useState(existingFeedback?.overallComment || existingFeedback?.comment || '');
+  const [questionAnswers, setQuestionAnswers] = useState(existingFeedback?.questionAnswers || existingFeedback?.question_answers || {});
+  const [questionsSnapshot, setQuestionsSnapshot] = useState(existingFeedback?.categoryQuestionsSnapshot || []);
+  const [questionsLoading, setQuestionsLoading] = useState(!existingFeedback?.categoryQuestionsSnapshot?.length);
   const [validationError, setValidationError] = useState('');
   const modalRef = useRef(null);
+
+  // Derive ticket category
+  const ticketCategory = ticket?.category || ticket?.department?.name || ticket?.department || 'IT';
+
+  // Fetch enabled questions for category at form open time and freeze snapshot in state
+  useEffect(() => {
+    if (existingFeedback?.categoryQuestionsSnapshot?.length > 0) {
+      setQuestionsSnapshot(existingFeedback.categoryQuestionsSnapshot);
+      setQuestionsLoading(false);
+      return;
+    }
+    let isMounted = true;
+    async function fetchQuestions() {
+      try {
+        setQuestionsLoading(true);
+        const res = await getCategoryFeedbackQuestions(ticketCategory);
+        if (isMounted && res?.questions && Array.isArray(res.questions)) {
+          // Freeze snapshot for this session
+          setQuestionsSnapshot(Object.freeze([...res.questions]));
+        }
+      } catch (err) {
+        console.warn('Failed to fetch category feedback questions, using defaults:', err);
+      } finally {
+        if (isMounted) setQuestionsLoading(false);
+      }
+    }
+    fetchQuestions();
+    return () => {
+      isMounted = false;
+    };
+  }, [ticketCategory, existingFeedback]);
 
   useEffect(() => {
     modalRef.current?.focus();
@@ -20,7 +59,7 @@ export default function FeedbackModal({ ticket, onClose }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose, step]);
 
-  const employees = (ticket.assignedEmployees || []).map((id) => getEmployeeById(id)).filter(Boolean);
+  const employees = getTicketEmployees(ticket);
 
   const handleRatingChange = (employeeId, rating) => {
     setRatings((prev) => ({ ...prev, [employeeId]: rating }));
@@ -29,6 +68,10 @@ export default function FeedbackModal({ ticket, onClose }) {
 
   const handleCommentChange = (employeeId, comment) => {
     setComments((prev) => ({ ...prev, [employeeId]: comment }));
+  };
+
+  const handleQuestionAnswerChange = (questionId, value) => {
+    setQuestionAnswers((prev) => ({ ...prev, [questionId]: value }));
   };
 
   const allRated = employees.every((emp) => ratings[emp.id] && ratings[emp.id] > 0);
@@ -42,9 +85,32 @@ export default function FeedbackModal({ ticket, onClose }) {
     }
     setIsSubmitting(true);
     try {
-      await saveFeedback(ticket.id, ratings, comments, overallComment, ticket.customer_id || ticket.customer);
+      if (isEditMode) {
+        await updateFeedback(
+          ticket.id,
+          ratings,
+          comments,
+          overallComment,
+          ticket.customer_id || ticket.customer,
+          questionAnswers,
+          questionsSnapshot
+        );
+      } else {
+        await saveFeedback(
+          ticket.id,
+          ratings,
+          comments,
+          overallComment,
+          ticket.customer_id || ticket.customer,
+          questionAnswers,
+          questionsSnapshot
+        );
+      }
     } catch (err) {
       console.error('Failed to submit feedback:', err);
+      setValidationError('Failed to save feedback. Please check your network and try again.');
+      setIsSubmitting(false);
+      return;
     } finally {
       setIsSubmitting(false);
       setStep('thankyou');
@@ -83,9 +149,13 @@ export default function FeedbackModal({ ticket, onClose }) {
         <div className="border-b border-gray-150 px-7 py-6 sm:px-8 shrink-0 bg-white">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-xl font-bold text-gray-900 tracking-tight">How was your support experience?</h2>
+              <h2 className="text-xl font-bold text-gray-900 tracking-tight">
+                {isEditMode ? 'Edit Your Support Feedback' : 'How was your support experience?'}
+              </h2>
               <p className="mt-1.5 text-sm text-gray-500 leading-relaxed">
-                Your feedback helps us recognize excellent support and improve our customer service.
+                {isEditMode
+                  ? 'Update your ratings and remarks within the 48-hour editing window.'
+                  : 'Your feedback helps us recognize excellent support and improve our customer service.'}
               </p>
             </div>
             <button
@@ -102,6 +172,9 @@ export default function FeedbackModal({ ticket, onClose }) {
           <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
             <span className="inline-flex items-center px-2.5 py-1 rounded-lg font-bold text-[#252578] bg-blue-50 border border-blue-100">
               {ticket.id}
+            </span>
+            <span className="inline-flex items-center px-2.5 py-1 rounded-lg font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200">
+              {ticketCategory} Category
             </span>
             {(ticket.title || ticket.subject) && (
               <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-gray-700 bg-gray-100 font-medium max-w-xs truncate">
@@ -136,20 +209,69 @@ export default function FeedbackModal({ ticket, onClose }) {
             )}
           </div>
 
-          <div className="pt-2">
-            <label className="text-sm font-bold text-gray-800 block mb-2">Overall Experience (Optional)</label>
-            <textarea
-              value={overallComment}
-              onChange={(e) => setOverallComment(e.target.value)}
-              placeholder="Is there anything else you'd like to share about your overall support experience?"
-              rows={4}
-              maxLength={1000}
-              className="w-full resize-none rounded-xl border border-gray-200 bg-gray-50/60 p-4 text-sm text-gray-800 outline-none transition-colors focus:border-[#252578]/40 focus:bg-white focus:ring-2 focus:ring-[#252578]/15 placeholder:text-gray-400"
-            />
-            <div className="mt-1.5 flex justify-end">
-              <span className="text-xs text-gray-400 font-medium">{overallComment.length}/1000</span>
+          {/* TS104 Category-Scoped Questions */}
+          {questionsSnapshot && questionsSnapshot.length > 0 && (
+            <div className="rounded-2xl border border-gray-150 bg-gray-50/40 p-5 sm:p-6 space-y-5">
+              <div className="border-b border-gray-200/80 pb-3">
+                <h3 className="text-sm font-bold text-gray-900 tracking-tight">Service Quality Evaluation</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Please share your perspective on the following category-specific questions:</p>
+              </div>
+
+              <div className="space-y-4">
+                {questionsSnapshot.map((q) => {
+                  const val = questionAnswers[q.id];
+                  return (
+                    <div key={q.id} className="rounded-xl border border-gray-200 bg-white p-4 shadow-xs space-y-3">
+                      <p className="text-sm font-semibold text-gray-800 leading-snug">{q.text}</p>
+
+                      {q.responseType === 'Star Rating' && (
+                        <div className="pt-1">
+                          <StarRating
+                            value={val || 0}
+                            onChange={(r) => handleQuestionAnswerChange(q.id, r)}
+                          />
+                        </div>
+                      )}
+
+                      {q.responseType === 'Multiple Choice' && (
+                        <div className="flex items-center gap-2 flex-wrap pt-1">
+                          {(q.options || ['Yes', 'No']).map((opt) => {
+                            const isSelected = val === opt;
+                            return (
+                              <button
+                                key={opt}
+                                type="button"
+                                onClick={() => handleQuestionAnswerChange(q.id, opt)}
+                                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer select-none border ${
+                                  isSelected
+                                    ? 'bg-[#252578] text-white border-[#252578] shadow-xs'
+                                    : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100 hover:border-gray-300'
+                                }`}
+                              >
+                                {opt}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {q.responseType === 'Free Text' && (
+                        <textarea
+                          value={val || ''}
+                          onChange={(e) => handleQuestionAnswerChange(q.id, e.target.value)}
+                          placeholder="Type your response here..."
+                          rows={2}
+                          maxLength={500}
+                          className="w-full resize-none rounded-xl border border-gray-200 bg-gray-50/50 p-3 text-xs text-gray-800 outline-none transition-colors focus:border-[#252578]/40 focus:bg-white focus:ring-2 focus:ring-[#252578]/15 placeholder:text-gray-400"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
+
         </div>
 
         <div className="border-t border-gray-150 px-7 py-5 sm:px-8 shrink-0 bg-gray-50/50">
@@ -170,7 +292,9 @@ export default function FeedbackModal({ ticket, onClose }) {
               disabled={!allRated || isSubmitting}
               className="rounded-xl bg-[#252578] px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1f1f66] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer shadow-xs"
             >
-              {isSubmitting ? 'Submitting...' : 'Submit Feedback'}
+              {isSubmitting
+                ? (isEditMode ? 'Saving Changes...' : 'Submitting...')
+                : (isEditMode ? 'Save Changes' : 'Submit Feedback')}
             </button>
           </div>
         </div>

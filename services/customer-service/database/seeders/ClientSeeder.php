@@ -13,6 +13,12 @@ class ClientSeeder extends Seeder
     {
         $customers = [
             [
+                'client_name' => 'Customer Example',
+                'address' => 'QC',
+                'contact_number' => '09123456780',
+                'email' => 'customer@example.com',
+            ],
+            [
                 'client_name' => 'Customer One',
                 'address' => 'QC',
                 'contact_number' => '09123456781',

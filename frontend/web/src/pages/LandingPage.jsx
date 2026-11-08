@@ -1,269 +1,1098 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/context/AuthContext';
 import sbsiLogo from '@/assets/SBSI.png';
 import heroBg from '@/assets/SBSI-bg.png';
 
+/* ── Inline SVG Icon Components (matching lucide style) ── */
+const ArrowRightIcon = ({ size = 18 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+);
+const CheckCircleIcon = ({ size = 15, color = 'currentColor' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+);
+const TicketIcon = ({ size = 24, color = 'currentColor' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/></svg>
+);
+const LockIcon = ({ size = 10 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+);
+const SparklesIcon = ({ size = 12, color = 'currentColor' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>
+);
+const ShieldCheckIcon = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></svg>
+);
+const ClockIcon = ({ size = 24 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+);
+const HeadphonesIcon = ({ size = 24 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/></svg>
+);
+const BarChartIcon = ({ size = 24 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" x2="12" y1="20" y2="10"/><line x1="18" x2="18" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="16"/></svg>
+);
+const MessageSquareIcon = ({ size = 24 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+);
+const ZapIcon = ({ size = 24 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+);
+
+/* ══════════════════════════════════════════════════════════════════════
+   STYLES — ONE UI DESIGN SYSTEM ENFORCEMENT
+   Brand Primary: #252578 | Brand Accent: #2E85D8 | Brand Deep: #3A3A85
+   Brand Deep Border: #4E4E91 | Dark Slate: #1E293B | Muted Slate: #8D8B8F
+   ══════════════════════════════════════════════════════════════════════ */
 const styles = `
-.lp-wrap {
-  font-family: 'Poppins', 'Montserrat', sans-serif;
-  background: #07071a;
-  color: #fff;
+/* Reset */
+.lp-container * { box-sizing: border-box; margin: 0; padding: 0; }
+
+.lp-container {
+  font-family: 'Poppins', 'Montserrat', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: #f8f9fa;
+  color: #1e293b;
+  min-height: 100vh;
   overflow-x: hidden;
+  scroll-behavior: smooth;
 }
-.nav {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  z-index: 100;
-  background: rgba(14, 14, 46, 0.7);
-  backdrop-filter: blur(16px);
-  border-bottom: 0.5px solid rgba(255, 255, 255, 0.08);
-}
-.nav-inner {
-  max-width: 1300px;
-  height: 64px;
+
+.lp-section-container {
+  max-width: 1400px;
   margin: 0 auto;
-  padding: 0 32px;
+  padding: 0 24px;
+}
+
+/* ── NAVIGATION BAR ── */
+.lp-nav {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%;
+  height: 64px;
+  z-index: 1000;
+  background-color: rgba(37, 37, 120, 0.95);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255,255,255,0.12);
+}
+.lp-nav-inner {
+  max-width: 1400px;
+  height: 100%;
+  margin: 0 auto;
+  padding: 0 24px;
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
-.nav-logo img {
-  height: 60px;
-  object-fit: contain;
-}
-.btn-login {
+.lp-nav-logo { display: flex; align-items: center; text-decoration: none; cursor: pointer; }
+.lp-logo-img { height: 42px; object-fit: contain; transition: transform 0.2s ease; }
+.lp-logo-img:hover { transform: scale(1.03); }
+
+.lp-nav-right { display: flex; align-items: center; gap: 16px; }
+.lp-nav-links { display: flex; align-items: center; gap: 6px; }
+.lp-nav-link {
+  color: rgba(255,255,255,0.75);
+  font-size: 13.5px;
+  font-weight: 500;
   text-decoration: none;
+  cursor: pointer;
+  padding: 6px 14px;
   border-radius: 8px;
-  padding: 9px 22px;
-  background: #2e85d8;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+  background: none;
+}
+.lp-nav-link:hover { color: #fff; background: rgba(255,255,255,0.12); }
+.lp-nav-link.is-active {
+  color: #fff;
+  background-color: #3a3a85;
+  border-color: #4e4e91;
+  font-weight: 600;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.18);
+}
+.lp-nav-divider { width: 1px; height: 24px; background-color: rgba(255,255,255,0.18); }
+.lp-btn-login {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #2e85d8;
   color: #fff;
   font-size: 13px;
   font-weight: 600;
+  padding: 8px 22px;
+  border-radius: 8px;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.12);
   border: none;
   cursor: pointer;
 }
-.hero {
+.lp-btn-login:hover {
+  background-color: #1e1e66;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(46,133,216,0.35);
+}
+
+/* ── SECTION 1: HERO ── */
+.lp-hero {
   position: relative;
-  width: 100%;
   min-height: 100vh;
   display: flex;
   align-items: center;
+  justify-content: center;
   overflow: hidden;
+  padding-top: 64px;
 }
-.hero-bg {
+.lp-hero-bg {
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
+  width: 100%; height: 100%;
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
+  z-index: 1;
 }
-.hero-overlay {
+.lp-hero-overlay {
   position: absolute;
   inset: 0;
-  background: linear-gradient(
-    to right,
-    rgba(14, 14, 46, 0.90) 0%,
-    rgba(14, 14, 46, 0.60) 30%,
-    rgba(14, 14, 46, 0.60) 70%,
-    rgba(14, 14, 46, 0.90) 100%
-  );
-}
-.hero-content {
-  position: relative;
+  background: linear-gradient(180deg, rgba(37,37,120,0.52) 0%, rgba(25,25,85,0.42) 45%, rgba(14,14,46,0.68) 100%);
   z-index: 2;
-  max-width: 1440px;
+}
+.lp-hero-content {
+  position: relative;
+  z-index: 3;
+  max-width: 1000px;
   margin: 0 auto;
-  padding: 100px 40px 60px;
+  padding: 80px 24px 60px;
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
 }
-.hero-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 28px;
-  padding: 6px 16px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 0.5px solid rgba(255, 255, 255, 0.18);
-  border-radius: 20px;
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 12px;
-}
-.badge-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #4ade80;
-}
-.hero h1 {
-  max-width: 900px;
-  margin-left: auto;
-  margin-right: auto;
-  font-size: clamp(38px, 6vw, 72px);
-  font-weight: 800;
-  line-height: 1.2;
-  letter-spacing: -0.001em;
-}
-.hero-divider {
-  width: 250px;
-  height: 4px;
-  margin: 24px 0;
-  background: #2e85d8;
-  border-radius: 2px;
-}
-.hero p {
-  max-width: 550px;
-  margin-bottom: 40px;
-  color: rgba(255, 255, 255, 0.65);
-  font-size: 15px;
-  line-height: 1.8;
-}
-.hero-ctas {
-  display: flex;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-.cta-primary {
-  display: inline-flex;
-  align-items: center;
-  padding: 16px 48px;
-  font-size: 16px;
-  background: #2e85d8;
+.lp-hero-title {
   color: #fff;
+  font-size: clamp(34px, 5.5vw, 64px);
+  font-weight: 800;
+  line-height: 1.18;
+  letter-spacing: -0.02em;
+  margin-bottom: 20px;
+  text-shadow: 0 3px 12px rgba(0,0,0,0.5);
+}
+.lp-hero-divider {
+  width: 180px; height: 4px;
+  background-color: #2e85d8;
+  border-radius: 2px;
+  margin-bottom: 24px;
+  box-shadow: 0 2px 8px rgba(46,133,216,0.6);
+}
+.lp-hero-desc {
+  color: rgba(255,255,255,0.95);
+  font-size: clamp(15px, 2vw, 18px);
+  line-height: 1.7;
+  max-width: 680px;
+  margin-bottom: 36px;
+  font-weight: 400;
+  text-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.lp-cta-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 40px;
+  font-size: 15px;
   font-weight: 600;
-  border-radius: 10px;
+  color: #fff;
+  background-color: #2e85d8;
+  border-radius: 9999px;
   text-decoration: none;
+  box-shadow: 0 4px 16px rgba(46,133,216,0.5);
+  transition: all 0.25s ease;
   border: none;
   cursor: pointer;
 }
-footer {
-  padding: 32px 40px;
-  background: #07071a;
-  border-top: 1.5px solid rgba(255, 255, 255, 0.05);
+.lp-cta-primary:hover {
+  background-color: #252578;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(37,37,120,0.5);
 }
-.footer-inner {
-  max-width: 1300px;
+
+/* ── SHARED SECTION HEADERS ── */
+.lp-section-head { margin-bottom: 32px; }
+.lp-eyebrow {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #2e85d8;
+  margin-bottom: 8px;
+}
+.lp-section-title {
+  font-size: clamp(26px, 3.5vw, 36px);
+  font-weight: 800;
+  color: #1e293b;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  margin-bottom: 10px;
+}
+.lp-section-subtitle {
+  color: #8d8b8f;
+  font-size: 15px;
+  max-width: 680px;
+  line-height: 1.6;
+}
+.text-center .lp-section-subtitle { margin: 0 auto; }
+
+/* ── SECTION 2: TICKETING SYSTEM SHOWCASE ── */
+.lp-slides-section {
+  padding: 96px 0;
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+}
+.lp-carousel-card {
+  position: relative;
+  max-width: 1060px;
   margin: 0 auto;
+  background: #f8f9fa;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  padding: 28px 36px;
+  box-shadow: 0 4px 20px -2px rgba(0,0,0,0.05);
+  overflow: hidden;
+}
+.lp-slide-content {
+  display: grid;
+  grid-template-columns: 1fr 0.88fr;
+  gap: 28px;
+  align-items: center;
+}
+.lp-slide-text { display: flex; flex-direction: column; }
+.lp-slide-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.lp-pill-dot { width: 5px; height: 5px; border-radius: 50%; }
+.lp-slide-name {
+  font-size: clamp(20px, 2.2vw, 24px);
+  font-weight: 800;
+  color: #1e293b;
+  letter-spacing: -0.01em;
+  margin-bottom: 4px;
+}
+.lp-slide-tagline { font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 8px; }
+.lp-slide-desc { font-size: 12.5px; color: #64748b; line-height: 1.55; margin-bottom: 14px; }
+.lp-capabilities-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.lp-capability-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #334155;
+}
+.lp-slide-metrics {
+  display: flex;
+  gap: 18px;
+  padding: 8px 0;
+  margin-bottom: 16px;
+  border-top: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+}
+.lp-metric-box { display: flex; flex-direction: column; }
+.lp-metric-val { font-size: 18px; font-weight: 800; color: #1e293b; }
+.lp-metric-lbl { font-size: 10px; color: #8d8b8f; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+.lp-slide-action { display: flex; align-items: center; gap: 12px; }
+.lp-slide-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border-radius: 7px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+  transition: all 0.2s ease;
+  border: none;
+  cursor: pointer;
+}
+.lp-slide-btn:hover { transform: translateY(-1px); filter: brightness(1.1); }
+.lp-sso-note { font-size: 11px; color: #8d8b8f; font-weight: 500; }
+
+/* Mock Window */
+.lp-slide-visual { display: flex; justify-content: center; }
+.lp-mock-window {
+  position: relative;
+  width: 100%;
+  max-width: 380px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  box-shadow: 0 12px 24px -8px rgba(0,0,0,0.06);
+  overflow: hidden;
+}
+.lp-mock-topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 6px 12px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
 }
-.footer-inner img {
-  height: 32px;
-  object-fit: contain;
-  opacity: 0.65;
+.lp-mock-dots { display: flex; gap: 4px; }
+.lp-mock-dot { width: 8px; height: 8px; border-radius: 50%; }
+.lp-mock-dot.red { background: #ef4444; }
+.lp-mock-dot.yellow { background: #f59e0b; }
+.lp-mock-dot.green { background: #10b981; }
+.lp-mock-address {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: #64748b;
+  background: #fff;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid #e2e8f0;
 }
-.footer-copy {
-  color: rgba(255, 255, 255, 0.35);
+.lp-mock-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+.lp-mock-canvas { padding: 12px; }
+.lp-mock-stats-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.lp-mock-stat-chip {
+  flex: 1;
+  background: #f8fafc;
+  border: 1px solid #f1f5f9;
+  border-radius: 6px;
+  padding: 4px 8px;
+  display: flex;
+  flex-direction: column;
+}
+.lp-m-chip-lbl { font-size: 8.5px; color: #8d8b8f; text-transform: uppercase; font-weight: 600; }
+.lp-m-chip-val { font-size: 11px; font-weight: 700; }
+.lp-mock-chart-container {
+  background: #fff;
+  border: 1px solid #f1f5f9;
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 8px;
+}
+.lp-mock-chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.lp-mock-chart-title { font-size: 10.5px; font-weight: 700; color: #1e293b; }
+.lp-mock-chart-trend { font-size: 9.5px; font-weight: 600; }
+.lp-mock-chart-svg { width: 100%; height: 65px; }
+.lp-mock-feed { display: flex; flex-direction: column; gap: 4px; }
+.lp-mock-feed-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px;
+  background: #f8fafc;
+  border-radius: 4px;
+  font-size: 9.5px;
+}
+.lp-mock-feed-left {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lp-mock-feed-dot { width: 4px; height: 4px; border-radius: 50%; flex-shrink: 0; }
+.lp-mock-feed-title { color: #334155; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lp-mock-feed-status {
+  padding: 1px 6px;
+  border-radius: 9999px;
+  font-size: 9px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.status-approved { background: #ecfdf5; color: #10b981; }
+.status-pending { background: #fffbeb; color: #f59e0b; }
+.lp-mock-lens-badge {
+  position: absolute;
+  bottom: 8px; right: 8px;
+  background: rgba(255,255,255,0.96);
+  backdrop-filter: blur(8px);
+  border: 1px solid;
+  border-radius: 9999px;
+  padding: 3px 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #1e293b;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+/* ── SECTION 3: FEATURES CARDS ── */
+.lp-cards-section {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 96px 0;
+  background: #f8f9fa;
+  position: relative;
+}
+.lp-system-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 20px;
+  margin-top: 24px;
+}
+.lp-sys-card {
+  position: relative;
+  background: #fff;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 20px;
+  padding: 28px 22px;
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 16px;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.04);
+}
+.lp-sys-ambient-blob {
+  position: absolute;
+  top: -20px; right: -20px;
+  width: 80px; height: 80px;
+  border-radius: 50%;
+  background: var(--card-glow);
+  filter: blur(24px);
+  pointer-events: none;
+  z-index: 0;
+  transition: transform 0.4s ease;
+}
+.lp-sys-card:hover {
+  transform: translateY(-8px);
+  border-color: var(--bottom-accent);
+  box-shadow: 0 16px 32px -6px rgba(0,0,0,0.1);
+}
+.lp-sys-card:hover .lp-sys-ambient-blob { transform: scale(2.4); }
+.lp-sys-icon-box {
+  position: relative;
+  z-index: 1;
+  width: 52px; height: 52px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+.lp-sys-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+.lp-sys-title { font-size: 17px; font-weight: 700; color: #1e293b; line-height: 1.3; }
+.lp-sys-desc { font-size: 13px; color: #64748b; line-height: 1.6; }
+.lp-sys-action-link {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid currentColor;
+  background: rgba(255,255,255,0.85);
+  margin-top: auto;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+.lp-sys-action-link:hover {
+  background-color: var(--bottom-accent);
+  color: #fff !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  transform: translateY(-1px);
+}
+.lp-sys-bottom-accent {
+  position: absolute;
+  bottom: 0; left: 0;
+  width: 100%; height: 5px;
+  background-color: var(--bottom-accent);
+}
+
+/* ── FOOTER ── */
+.lp-footer {
+  background-color: #101036;
+  border-top: 3px solid #2e85d8;
+  color: #fff;
+  padding: 64px 0 32px;
+}
+.lp-footer-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+.lp-footer-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr 1.1fr;
+  gap: 40px;
+  margin-bottom: 48px;
+}
+.lp-footer-brand-col { display: flex; flex-direction: column; gap: 16px; }
+.lp-footer-logo-link { display: inline-block; text-decoration: none; cursor: pointer; }
+.lp-footer-logo { height: 56px; object-fit: contain; transition: opacity 0.2s ease; }
+.lp-footer-logo:hover { opacity: 0.9; }
+.lp-footer-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 9999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #fff;
+  width: fit-content;
+  backdrop-filter: blur(8px);
+}
+.lp-footer-badge-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background-color: #10b981;
+  box-shadow: 0 0 8px #10b981;
+}
+.lp-footer-col { display: flex; flex-direction: column; }
+.lp-footer-col-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fff;
+  margin-bottom: 20px;
+}
+.lp-footer-list {
+  list-style: none;
+  padding: 0; margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.lp-footer-link-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
-  font-weight: 400;
+  color: #a7a7c8;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
 }
-@media (max-width: 768px) {
-  .nav-inner {
-    padding: 0 16px;
-  }
-  .nav-logo img {
-    height: 45px;
-  }
-  .hero-content {
-    padding: 120px 16px 48px;
-  }
-  footer {
-    padding: 32px 16px;
-  }
-  .footer-inner {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 16px;
-    text-align: left;
-  }
-  .footer-inner img {
-    height: 28px;
-  }
-  .footer-copy {
-    font-size: 12px;
-    line-height: 1.5;
-  }
+.lp-footer-link-item:hover { color: #fff; transform: translateX(3px); }
+.lp-footer-link-accent { color: #2e85d8; font-weight: 600; }
+.lp-footer-link-accent:hover { color: #60a5fa; }
+.lp-footer-security-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #a7a7c8;
 }
+.lp-footer-sec-icon { color: #10b981; flex-shrink: 0; }
+.lp-footer-bottom {
+  border-top: 1px solid rgba(255,255,255,0.09);
+  padding-top: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  width: 100%;
+  font-size: 12px;
+  color: rgba(167,167,200,0.7);
+}
+.lp-footer-copy { font-weight: 400; text-align: center; width: 100%; }
+
+/* ── ANIMATIONS ── */
 @keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
-.hero-content > * {
-  animation: fadeInUp 0.8s ease-out forwards;
+.lp-hero-content > * { animation: fadeInUp 0.8s ease-out forwards; }
+.lp-hero-title { animation-delay: 0.1s; }
+.lp-hero-divider { animation-delay: 0.3s; }
+.lp-hero-desc { animation-delay: 0.5s; }
+.lp-hero-ctas { animation-delay: 0.7s; }
+
+/* ── RESPONSIVE ── */
+@media (max-width: 1200px) {
+  .lp-system-cards-grid { grid-template-columns: repeat(3, 1fr); }
 }
-.hero h1 { animation-delay: 0.2s; }
-.hero-divider { animation-delay: 0.4s; }
-.hero p { animation-delay: 0.6s; }
-.hero-ctas { animation-delay: 0.8s; }
+@media (max-width: 900px) {
+  .lp-slide-content { grid-template-columns: 1fr; gap: 24px; }
+  .lp-system-cards-grid { grid-template-columns: repeat(2, 1fr); }
+  .lp-footer-grid { grid-template-columns: repeat(2, 1fr); gap: 32px; }
+  .lp-nav-links { gap: 4px; }
+  .lp-nav-link { padding: 5px 10px; font-size: 12.5px; }
+}
+@media (max-width: 640px) {
+  .lp-nav-links { display: none; }
+  .lp-nav-divider { display: none; }
+  .lp-slides-section { padding: 56px 0; }
+  .lp-cards-section { min-height: auto; padding: 56px 0; }
+  .lp-carousel-card { padding: 24px 18px; }
+  .lp-capabilities-grid { grid-template-columns: 1fr; }
+  .lp-system-cards-grid { grid-template-columns: 1fr; }
+  .lp-footer-grid { grid-template-columns: 1fr; gap: 28px; }
+  .lp-footer-bottom { flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 12px; }
+}
 `;
 
+/* ═════════════════════════════════════════════════════════════════════
+   TICKETING SYSTEM DATA
+   ═════════════════════════════════════════════════════════════════════ */
+const ticketingSystem = {
+  id: 'ts',
+  slug: 'ts',
+  title: 'Ticketing System',
+  shortTitle: 'Support & SLA',
+  fullName: 'Enterprise Ticketing System',
+  acronym: 'TS',
+  category: 'Enterprise Helpdesk & SLA Support',
+  accentColor: '#F59E0B',
+  lightBg: '#FFFBEB',
+  tagline: 'Enterprise Helpdesk, Support Queuing & SLA Resolution',
+  detailedDesc:
+    'A centralized engine for internal and client support requests. Resolve issues efficiently with priority-based queuing, automated SLA escalation, and full knowledge base integration.',
+  keyFeatures: [
+    'Automated Priority-Based Ticket Routing',
+    'Live SLA Breach Countdown Timers',
+    'Centralized Knowledge Base Integration',
+    'Customer Satisfaction (CSAT) Metrics',
+  ],
+  metrics: [
+    { val: '18 mins', lbl: 'Avg First Response' },
+    { val: '99.4%', lbl: 'SLA Adherence Rate' },
+    { val: '4.9 / 5', lbl: 'Customer Rating' },
+  ],
+  badgeText: 'Helpdesk Engine',
+  chartTitle: 'Ticket Volume Resolution & Response Times',
+  chartPathFill: 'M 0 115 L 0 70 Q 95 50 190 40 T 380 25 L 380 120 L 0 120 Z',
+  chartPathStroke: 'M 0 70 Q 95 50 190 40 T 380 25',
+  recentItems: [
+    { title: 'Reagent Analyzer Firmware Calibration #TS-892', status: 'Resolved', statusClass: 'status-approved' },
+    { title: 'User Access Permission Escalation #TS-893', status: 'In Progress', statusClass: 'status-pending' },
+    { title: 'Laboratory Network Interface Diagnostic', status: 'Resolved', statusClass: 'status-approved' },
+  ],
+};
+
+/* Feature cards for Section 3 — ticketing-specific */
+const featureCards = [
+  {
+    id: 'ticket-mgmt',
+    title: 'Ticket Management',
+    desc: 'Submit, track, and manage support tickets with automated priority assignment and real-time status updates across all stages.',
+    icon: TicketIcon,
+    accentColor: '#F59E0B',
+    lightBg: '#FFFBEB',
+    shortTitle: 'Tickets',
+  },
+  {
+    id: 'sla-tracking',
+    title: 'SLA Monitoring',
+    desc: 'Live SLA countdown timers, breach alerts, and escalation workflows ensure every ticket meets service level commitments.',
+    icon: ClockIcon,
+    accentColor: '#EF4444',
+    lightBg: '#FEF2F2',
+    shortTitle: 'SLA',
+  },
+  {
+    id: 'support-channels',
+    title: 'Multi-Channel Support',
+    desc: 'Centralized helpdesk combining email, portal submissions, and internal requests into a single unified queue.',
+    icon: HeadphonesIcon,
+    accentColor: '#2E85D8',
+    lightBg: '#EFF6FF',
+    shortTitle: 'Support',
+  },
+  {
+    id: 'analytics',
+    title: 'Analytics & Reports',
+    desc: 'Comprehensive dashboards with resolution times, CSAT scores, team performance, and trend analysis for data-driven decisions.',
+    icon: BarChartIcon,
+    accentColor: '#8B5CF6',
+    lightBg: '#F5F3FF',
+    shortTitle: 'Analytics',
+  },
+  {
+    id: 'communication',
+    title: 'Real-Time Messaging',
+    desc: 'Built-in messaging system for seamless communication between customers and support teams with full conversation history.',
+    icon: MessageSquareIcon,
+    accentColor: '#10B981',
+    lightBg: '#ECFDF5',
+    shortTitle: 'Messaging',
+  },
+];
+
+/* ═════════════════════════════════════════════════════════════════════
+   COMPONENT
+   ═════════════════════════════════════════════════════════════════════ */
 export default function LandingPage() {
   const navigate = useNavigate();
+  const { isAuthenticated, isLoading } = useAuth();
+  const [activeSection, setActiveSection] = useState('hero');
 
+  /* Redirect authenticated customers immediately and lock Back/Forward history when logged out */
   useEffect(() => {
-    const styleTag = document.createElement('style');
-    styleTag.textContent = styles;
-    document.head.appendChild(styleTag);
-    return () => styleTag.remove();
+    if (!isLoading && isAuthenticated) {
+      navigate('/customer-dashboard', { replace: true });
+      return undefined;
+    }
+
+    // Truncate forward history (disables Forward button after logout) and block Back/Forward into dashboard
+    // Capture this page's URL now: inside popstate, window.location already points at the entry
+    // the user went back to, so re-pushing it would send them (and Forward) to the wrong page.
+    const guardUrl = window.location.href;
+    const guardState = window.history.state;
+    window.history.pushState(guardState, '', guardUrl);
+    const handlePopState = (e) => {
+      e.stopImmediatePropagation();
+      window.history.pushState(guardState, '', guardUrl);
+    };
+    window.addEventListener('popstate', handlePopState, true);
+    return () => {
+      window.removeEventListener('popstate', handlePopState, true);
+    };
+  }, [isLoading, isAuthenticated, navigate]);
+
+  /* Inject scoped styles */
+  useEffect(() => {
+    const tag = document.createElement('style');
+    tag.textContent = styles;
+    document.head.appendChild(tag);
+    return () => tag.remove();
   }, []);
 
+  /* Intersection Observer for active nav highlight */
+  useEffect(() => {
+    const sections = ['hero', 'systems', 'features'];
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) setActiveSection(entry.target.id);
+        });
+      },
+      { root: null, rootMargin: '-20% 0px -60% 0px', threshold: 0 }
+    );
+    sections.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) observer.observe(el);
+    });
+    return () => observer.disconnect();
+  }, []);
+
+  const scrollTo = (sectionId) => {
+    setActiveSection(sectionId);
+    const el = document.getElementById(sectionId);
+    if (el) el.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const ts = ticketingSystem;
+
   return (
-    <div className="lp-wrap">
-      <nav className="nav">
-        <div className="nav-inner">
-          <div className="nav-logo">
-            <img src={sbsiLogo} alt="SBSI" />
-          </div>
-          <div className="nav-ctas">
-            <button type="button" className="btn-login" onClick={() => navigate('/customer')}>
-              Log in
-            </button>
+    <div className="lp-container">
+      {/* ── TOP NAVIGATION BAR ── */}
+      <header className="lp-nav">
+        <div className="lp-nav-inner">
+          <button className="lp-nav-logo" onClick={() => scrollTo('hero')} aria-label="SBSI Home">
+            <img src={sbsiLogo} alt="Scientific Biotech Specialties, Inc." className="lp-logo-img" />
+          </button>
+          <div className="lp-nav-right">
+            <nav className="lp-nav-links" aria-label="Main Navigation">
+              <button className={`lp-nav-link${activeSection === 'hero' ? ' is-active' : ''}`} onClick={() => scrollTo('hero')}>Home</button>
+              <button className={`lp-nav-link${activeSection === 'systems' ? ' is-active' : ''}`} onClick={() => scrollTo('systems')}>System</button>
+              <button className={`lp-nav-link${activeSection === 'features' ? ' is-active' : ''}`} onClick={() => scrollTo('features')}>Features</button>
+            </nav>
+            <div className="lp-nav-divider" />
+            <button className="lp-btn-login" onClick={() => navigate('/customer', { replace: true })}>Log in</button>
           </div>
         </div>
-      </nav>
+      </header>
 
-      <section className="hero">
-        <div className="hero-bg" style={{ backgroundImage: `url(${heroBg})` }} />
-        <div className="hero-overlay" />
-        <div className="hero-content">
-          <div className="hero-badge">
-            <span className="badge-dot" />
-            ISO 9001:2015 Certified
-          </div>
-          <h1>25 Years of Innovating Diagnostics Solutions</h1>
-          <div className="hero-divider" />
-          <p>
-            A unified platform for managing contracts, expenses,
-            productivity, and support — built for the business finance
-            and marketing industry.
+      {/* ── SECTION 1: HERO ── */}
+      <section id="hero" className="lp-hero">
+        <div className="lp-hero-bg" style={{ backgroundImage: `url(${heroBg})` }} />
+        <div className="lp-hero-overlay" />
+        <div className="lp-hero-content">
+          <h1 className="lp-hero-title">25 Years of Innovating Diagnostics Solutions</h1>
+          <div className="lp-hero-divider" />
+          <p className="lp-hero-desc">
+            A unified platform for managing contracts, expenses, productivity and support — built for the business finance and marketing industry.
           </p>
-          <div className="hero-ctas">
-            <button type="button" className="cta-primary" onClick={() => navigate('/customer')}>
-              Get started
+          <div className="lp-hero-ctas">
+            <button className="lp-cta-primary" onClick={() => navigate('/customer', { replace: true })}>
+              <span>Get Started</span>
+              <ArrowRightIcon size={18} />
             </button>
           </div>
         </div>
       </section>
 
-      <footer>
-        <div className="footer-inner">
-          <img src={sbsiLogo} alt="SBSI Logo" />
-          <span className="footer-copy">
-            &copy; 2026 Scientific Biotech Specialties, Inc. All rights reserved.
-          </span>
+      {/* ── SECTION 2: TICKETING SYSTEM SHOWCASE ── */}
+      <section id="systems" className="lp-slides-section">
+        <div className="lp-section-container">
+          <div className="lp-section-head">
+            <span className="lp-eyebrow">Enterprise Ecosystem</span>
+            <h2 className="lp-section-title">Enterprise Ticketing System</h2>
+            <p className="lp-section-subtitle">
+              Integrated helpdesk and SLA management connecting your support operations with centralized identity authority and single sign-on.
+            </p>
+          </div>
+
+          <div className="lp-carousel-card">
+            <div className="lp-slide-content" style={{ '--slide-theme': ts.accentColor }}>
+              {/* Left Column */}
+              <div className="lp-slide-text">
+                <div className="lp-slide-pill" style={{ backgroundColor: ts.lightBg, color: ts.accentColor }}>
+                  <span className="lp-pill-dot" style={{ backgroundColor: ts.accentColor }} />
+                  <span>{ts.acronym} • {ts.category}</span>
+                </div>
+                <h3 className="lp-slide-name">{ts.fullName}</h3>
+                <p className="lp-slide-tagline">{ts.tagline}</p>
+                <p className="lp-slide-desc">{ts.detailedDesc}</p>
+
+                <div className="lp-capabilities-grid">
+                  {ts.keyFeatures.map((feat, i) => (
+                    <div key={i} className="lp-capability-item">
+                      <CheckCircleIcon size={15} color={ts.accentColor} />
+                      <span>{feat}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="lp-slide-metrics">
+                  {ts.metrics.map((stat, i) => (
+                    <div key={i} className="lp-metric-box">
+                      <span className="lp-metric-val">{stat.val}</span>
+                      <span className="lp-metric-lbl">{stat.lbl}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="lp-slide-action">
+                  <button className="lp-slide-btn" style={{ backgroundColor: ts.accentColor }} onClick={() => navigate('/customer', { replace: true })}>
+                    <span>Access {ts.acronym} Module</span>
+                    <ArrowRightIcon size={15} />
+                  </button>
+                  <span className="lp-sso-note">SSO Authorized • RBAC Governed</span>
+                </div>
+              </div>
+
+              {/* Right Column: Mock Window */}
+              <div className="lp-slide-visual">
+                <div className="lp-mock-window">
+                  <div className="lp-mock-topbar">
+                    <div className="lp-mock-dots">
+                      <span className="lp-mock-dot red" />
+                      <span className="lp-mock-dot yellow" />
+                      <span className="lp-mock-dot green" />
+                    </div>
+                    <div className="lp-mock-address">
+                      <LockIcon size={10} />
+                      <span>sbsi.internal/{ts.slug}</span>
+                    </div>
+                    <div className="lp-mock-badge" style={{ backgroundColor: ts.lightBg, color: ts.accentColor }}>
+                      {ts.badgeText}
+                    </div>
+                  </div>
+                  <div className="lp-mock-canvas">
+                    <div className="lp-mock-stats-row">
+                      <div className="lp-mock-stat-chip">
+                        <span className="lp-m-chip-lbl">Status</span>
+                        <span className="lp-m-chip-val" style={{ color: ts.accentColor }}>Live • Operational</span>
+                      </div>
+                      <div className="lp-mock-stat-chip">
+                        <span className="lp-m-chip-lbl">Audit Coverage</span>
+                        <span className="lp-m-chip-val" style={{ color: '#10b981' }}>100% Verified</span>
+                      </div>
+                    </div>
+                    <div className="lp-mock-chart-container">
+                      <div className="lp-mock-chart-header">
+                        <span className="lp-mock-chart-title">{ts.chartTitle}</span>
+                        <span className="lp-mock-chart-trend" style={{ color: ts.accentColor }}>+18.4% vs last period</span>
+                      </div>
+                      <svg className="lp-mock-chart-svg" viewBox="0 0 380 120" preserveAspectRatio="none">
+                        <defs>
+                          <linearGradient id="grad-ts" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor={ts.accentColor} stopOpacity="0.32" />
+                            <stop offset="100%" stopColor={ts.accentColor} stopOpacity="0.0" />
+                          </linearGradient>
+                        </defs>
+                        <line x1="0" y1="30" x2="380" y2="30" stroke="#f1f5f9" strokeWidth="1" />
+                        <line x1="0" y1="65" x2="380" y2="65" stroke="#f1f5f9" strokeWidth="1" />
+                        <line x1="0" y1="100" x2="380" y2="100" stroke="#f1f5f9" strokeWidth="1" />
+                        <path d={ts.chartPathFill} fill="url(#grad-ts)" />
+                        <path d={ts.chartPathStroke} fill="none" stroke={ts.accentColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                        <circle cx="95" cy="48" r="4" fill={ts.accentColor} stroke="#fff" strokeWidth="2" />
+                        <circle cx="190" cy="32" r="4" fill={ts.accentColor} stroke="#fff" strokeWidth="2" />
+                        <circle cx="285" cy="52" r="4" fill={ts.accentColor} stroke="#fff" strokeWidth="2" />
+                        <circle cx="370" cy="24" r="5" fill={ts.accentColor} stroke="#fff" strokeWidth="2" />
+                      </svg>
+                    </div>
+                    <div className="lp-mock-feed">
+                      {ts.recentItems.map((item, idx) => (
+                        <div key={idx} className="lp-mock-feed-item">
+                          <div className="lp-mock-feed-left">
+                            <span className="lp-mock-feed-dot" style={{ backgroundColor: ts.accentColor }} />
+                            <span className="lp-mock-feed-title">{item.title}</span>
+                          </div>
+                          <span className={`lp-mock-feed-status ${item.statusClass}`}>{item.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="lp-mock-lens-badge" style={{ borderColor: ts.accentColor }}>
+                    <SparklesIcon size={12} color={ts.accentColor} />
+                    <span>Real-Time One UI Engine</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── SECTION 3: TICKETING FEATURES ── */}
+      <section id="features" className="lp-cards-section">
+        <div className="lp-section-container">
+          <div className="lp-section-head text-center" style={{ textAlign: 'center' }}>
+            <span className="lp-eyebrow">Comprehensive Features</span>
+            <h2 className="lp-section-title">Everything your support team needs</h2>
+            <p className="lp-section-subtitle" style={{ margin: '0 auto' }}>
+              Powerful ticketing capabilities designed to streamline your helpdesk operations from end to end.
+            </p>
+          </div>
+
+          <div className="lp-system-cards-grid">
+            {featureCards.map((card) => {
+              const Icon = card.icon;
+              return (
+                <div
+                  key={card.id}
+                  className="lp-sys-card"
+                  style={{ '--bottom-accent': card.accentColor, '--card-glow': card.lightBg }}
+                >
+                  <div className="lp-sys-ambient-blob" />
+                  <div className="lp-sys-icon-box" style={{ backgroundColor: card.lightBg, color: card.accentColor }}>
+                    <Icon size={24} color={card.accentColor} />
+                  </div>
+                  <div className="lp-sys-body">
+                    <h4 className="lp-sys-title">{card.title}</h4>
+                    <p className="lp-sys-desc">{card.desc}</p>
+                  </div>
+                  <div className="lp-sys-bottom-accent" />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* ── FOOTER ── */}
+      <footer className="lp-footer">
+        <div className="lp-footer-container">
+          <div className="lp-footer-grid">
+            {/* Column 1: Brand */}
+            <div className="lp-footer-brand-col">
+              <button className="lp-footer-logo-link" onClick={() => scrollTo('hero')} aria-label="SBSI Home">
+                <img src={sbsiLogo} alt="Scientific Biotech Specialties, Inc." className="lp-footer-logo" />
+              </button>
+              <div className="lp-footer-badge">
+                <span className="lp-footer-badge-dot" />
+                <span>ISO 9001:2015 Certified Enterprise</span>
+              </div>
+            </div>
+
+            {/* Column 2: Ticketing System */}
+            <div className="lp-footer-col">
+              <h4 className="lp-footer-col-title">Ticketing System</h4>
+              <ul className="lp-footer-list">
+                <li><button className="lp-footer-link-item" onClick={() => navigate('/customer', { replace: true })}>Submit a Ticket</button></li>
+                <li><button className="lp-footer-link-item" onClick={() => navigate('/customer', { replace: true })}>Track My Tickets</button></li>
+                <li><button className="lp-footer-link-item" onClick={() => navigate('/customer', { replace: true })}>SLA Dashboard</button></li>
+                <li><button className="lp-footer-link-item" onClick={() => navigate('/customer', { replace: true })}>Knowledge Base</button></li>
+              </ul>
+            </div>
+
+            {/* Column 3: Navigation */}
+            <div className="lp-footer-col">
+              <h4 className="lp-footer-col-title">Navigation</h4>
+              <ul className="lp-footer-list">
+                <li><button className="lp-footer-link-item" onClick={() => scrollTo('hero')}>Home Overview</button></li>
+                <li><button className="lp-footer-link-item" onClick={() => scrollTo('systems')}>Ticketing System</button></li>
+                <li><button className="lp-footer-link-item" onClick={() => scrollTo('features')}>Platform Features</button></li>
+                <li><button className="lp-footer-link-item lp-footer-link-accent" onClick={() => navigate('/customer', { replace: true })}>Access Portal</button></li>
+              </ul>
+            </div>
+
+            {/* Column 4: Security */}
+            <div className="lp-footer-col">
+              <h4 className="lp-footer-col-title">Security & Authority</h4>
+              <ul className="lp-footer-list">
+                <li className="lp-footer-security-item">
+                  <ShieldCheckIcon size={16} />
+                  <span>OAuth2 / OpenID Connect SSO</span>
+                </li>
+                <li className="lp-footer-security-item">
+                  <span className="lp-footer-sec-icon"><LockIcon size={16} /></span>
+                  <span>Role-Based Access Control (RBAC)</span>
+                </li>
+                <li className="lp-footer-security-item">
+                  <CheckCircleIcon size={16} color="#10b981" />
+                  <span>Comprehensive Audit Trail</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <div className="lp-footer-bottom">
+            <span className="lp-footer-copy">
+              © 2026 Scientific Biotech Specialties, Inc. (SBSI). All rights reserved.
+            </span>
+          </div>
         </div>
       </footer>
     </div>

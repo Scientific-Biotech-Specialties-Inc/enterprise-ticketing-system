@@ -1,7 +1,10 @@
-/vendor/
+vendor/
 node_modules/
 npm-debug.log
 yarn-error.log
+*.log
+storage/logs/*.log
+services/*/storage/logs/*.log
 
 # Laravel 4 specific
 bootstrap/compiled.php
@@ -15,12 +18,27 @@ public/hot
 public_html/storage
 public_html/hot
 
+# Cryptographic Keys, Certificates, and Secrets
+*.key
+*.pub
+*.pem
+*.crt
+*.cert
+*.der
+*.p12
+*.pfx
 storage/*.key
 services/*/storage/*.key
+services/*/storage/*.pub
+services/*/storage/*.pem
 services/*/storage/oauth-*.key
 services/*/storage/auth-module-*.key
-*.key
+**/auth-module-public.key
+**/auth-module-private.key
+**/oauth-public.key
+**/oauth-private.key
 .env
+
 Homestead.yaml
 Homestead.json
 /.vagrant
@@ -32,3 +50,8 @@ Homestead.json
 .env.production
 .phpactor.json
 auth.json
+
+# Agent tasks and scratch
+.agents/tasks/
+scratch/
+.claude/

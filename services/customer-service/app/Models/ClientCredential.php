@@ -23,9 +23,11 @@ class ClientCredential extends Model
         'password_change_at',
     ];
 
-    // Never expose the password hash in API responses
+    // Never expose password hash or internal lockout counters in API responses
     protected $hidden = [
         'password_hash',
+        'failed_login_count',
+        'locked_until',
     ];
 
     protected $casts = [

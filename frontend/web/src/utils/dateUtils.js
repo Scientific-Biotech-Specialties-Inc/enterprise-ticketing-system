@@ -1,10 +1,32 @@
 export const parseUTCDate = (dateStr) => {
   if (!dateStr) return null;
-  const str = String(dateStr);
-  if (!str.includes('T') && !str.includes('Z') && str.includes(' ')) {
-    return new Date(str.replace(' ', 'T') + 'Z');
+  if (dateStr instanceof Date) return isNaN(dateStr.getTime()) ? null : dateStr;
+  const str = String(dateStr).trim();
+  if (!str) return null;
+
+  // Check if string already has an explicit timezone indicator (Z or +HH:mm or -HH:mm)
+  const hasExplicitTimezone = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(str);
+
+  // If it's standard SQL or ISO format without timezone, backend sends it as UTC.
+  // Parse as UTC by appending 'Z' so local browser timezone conversion works accurately.
+  if (!hasExplicitTimezone) {
+    // SQL format: "YYYY-MM-DD HH:mm:ss" or ISO without Z: "YYYY-MM-DDTHH:mm:ss(.sss)?"
+    const sqlOrIsoRegex = /^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)$/;
+    const match = str.match(sqlOrIsoRegex);
+    if (match) {
+      const utcStr = `${match[1]}T${match[2]}Z`;
+      const d = new Date(utcStr);
+      if (!isNaN(d.getTime())) return d;
+    }
   }
-  return new Date(str);
+
+  // Fallback to native Date parsing (handles formats with timezone, RFC 2822, localized strings, etc.)
+  const direct = new Date(str);
+  if (!isNaN(direct.getTime())) {
+    return direct;
+  }
+
+  return null;
 };
 
 export const formatDisplayDate = (dateStr) => {
@@ -23,7 +45,7 @@ export const formatDisplayDate = (dateStr) => {
 export const formatRelativeTime = (dateStr) => {
   if (!dateStr) return '';
   const date = parseUTCDate(dateStr);
-  if (isNaN(date.getTime())) return dateStr;
+  if (!date || isNaN(date.getTime())) return dateStr;
 
   const now = new Date();
   const diffMs = now - date;

@@ -44,11 +44,16 @@ class MessageUpdated implements ShouldBroadcastNow
     public function broadcastWith(): array
     {
         return [
-            'id' => $this->message->id,
-            'ticket_id' => $this->message->ticket_id,
+            'id' => (string)($this->message->id ?? $this->message->_id),
+            '_id' => (string)($this->message->id ?? $this->message->_id),
+            'ticket_id' => (int)$this->message->ticket_id,
             'message' => $this->message->message,
             'edit_history' => $this->message->edit_history ?? [],
-            'updated_at' => $this->message->updated_at ? $this->message->updated_at->toIso8601String() : now()->toIso8601String(),
+            'is_edited' => (bool)($this->message->is_edited ?? true),
+            'edited' => (bool)($this->message->edited ?? true),
+            'edited_at' => $this->message->edited_at ?? now()->toIso8601String(),
+            'created_at' => $this->message->created_at ? \Illuminate\Support\Carbon::parse($this->message->created_at)->toIso8601String() : null,
+            'updated_at' => $this->message->updated_at ? \Illuminate\Support\Carbon::parse($this->message->updated_at)->toIso8601String() : now()->toIso8601String(),
         ];
     }
 }

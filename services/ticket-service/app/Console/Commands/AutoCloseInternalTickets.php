@@ -2,17 +2,27 @@
 
 namespace App\Console\Commands;
 
+use App\Services\TicketConfigurationService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
 class AutoCloseInternalTickets extends Command
 {
     protected $signature = 'tickets:auto-close-internal';
-    protected $description = 'Auto-close internal tickets that have been resolved for more than 48 hours';
+    protected $description = 'Auto-close internal tickets that have been resolved beyond the configured auto-close window';
 
     public function handle()
     {
-        $cutoff = now()->subHours(48);
+        $windowConfig = TicketConfigurationService::getWindowConfig();
+
+        if (!($windowConfig['autoCloseEnabled'] ?? true)) {
+            $this->info('Auto-close is disabled by administrative operational policy. No tickets closed.');
+            return;
+        }
+
+        $autoCloseDays = (int) ($windowConfig['autoCloseWindowDays'] ?? 2);
+        $autoCloseHours = $autoCloseDays * 24;
+        $cutoff = now()->subHours($autoCloseHours);
 
         $tickets = DB::table('tickets')
             ->whereNotNull('requested_by')
@@ -22,7 +32,7 @@ class AutoCloseInternalTickets extends Command
 
         $count = 0;
         foreach ($tickets as $ticket) {
-            DB::transaction(function () use ($ticket, &$count) {
+            DB::transaction(function () use ($ticket, &$count, $autoCloseDays, $autoCloseHours) {
                 $now = now();
                 DB::table('tickets')->where('ticket_ID', $ticket->ticket_ID)->update([
                     'ticket_status_ID' => 4,
@@ -37,7 +47,7 @@ class AutoCloseInternalTickets extends Command
                     'actor_type' => 'system',
                     'details' => json_encode([
                         'status' => 'Closed',
-                        'remarks' => 'Auto-closed after 48 hours of inactivity.',
+                        'remarks' => "Auto-closed after {$autoCloseDays} day(s) ({$autoCloseHours} hours) of inactivity following resolution.",
                     ]),
                     'created_at' => $now,
                 ]);
@@ -45,6 +55,6 @@ class AutoCloseInternalTickets extends Command
             });
         }
 
-        $this->info("Auto-closed {$count} internal ticket(s).");
+        $this->info("Auto-closed {$count} internal ticket(s) resolved more than {$autoCloseDays} day(s) ago.");
     }
 }

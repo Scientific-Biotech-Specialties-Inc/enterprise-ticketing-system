@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { requestReassignment } from '@/services/ticketService';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 
 export default function ReassignmentModal({
   ticket,
   onClose,
   onReassignSuccess,
 }) {
+  useLockBodyScroll(Boolean(ticket));
   const [reason, setReason] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');

@@ -1,0 +1,12 @@
+{
+    "name": "ticketing/auth",
+    "description": "Unified Authentication Core for Enterprise Ticketing Microservices",
+    "type": "library",
+    "license": "proprietary",
+    "autoload": {
+        "psr-4": {
+            "Ticketing\\Auth\\": "src/"
+        }
+    }
+}
+

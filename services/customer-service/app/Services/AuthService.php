@@ -79,6 +79,21 @@
 
                 if ($failedLoginCount >= self::MAX_FAILED_LOGIN) {
                     $credential->locked_until = Carbon::now()->addMinutes(self::LOCK_MINUTES);
+                    // Dispatch security alert on failed login threshold breach (AC-1, AC-3)
+                    SystemAlertDispatcher::dispatchIssue(
+                        category: 'failed_login_spike',
+                        severity: 'high',
+                        service: 'customer-service',
+                        title: "Failed Login Spike ({$email})",
+                        message: "Repeated failed login attempts ({$failedLoginCount}) detected for customer {$email}.",
+                        context: [
+                            'email' => $email,
+                            'failed_count' => $failedLoginCount,
+                            'account_locked' => true,
+                        ],
+                        ip: request()?->ip(),
+                        userAgent: request()?->userAgent()
+                    );
                 }
 
                 $credential->save();
@@ -96,13 +111,42 @@
             }
 
             $isFirstLogin = $credential->password_change_at === null;
+            $clientIp = request()?->ip() ?? '127.0.0.1';
+            $ipCacheKey = "auth:known_ip:" . md5($email . ':' . $clientIp);
+
+            // Detect unusual login from unfamiliar IP address (AC-1)
+            if ($credential->last_login_at && !Cache::has($ipCacheKey)) {
+                SystemAlertDispatcher::dispatchIssue(
+                    category: 'unusual_login',
+                    severity: 'medium',
+                    service: 'customer-service',
+                    title: "Unusual Login Detected ({$email})",
+                    message: "Customer {$email} logged in from a new IP address ({$clientIp}).",
+                    context: [
+                        'email' => $email,
+                        'ip_address' => $clientIp,
+                        'previous_login' => $credential->last_login_at?->toIso8601String(),
+                    ],
+                    ip: $clientIp,
+                    userAgent: request()?->userAgent()
+                );
+            }
+            Cache::put($ipCacheKey, true, 86400 * 30);
 
             $credential->failed_login_count = 0;
             $credential->locked_until = null;
             $credential->last_login_at = Carbon::now();
             $credential->save();
 
-            // OTP on first login is disabled — users go straight to the change-password screen.
+            // TS009: When first login, send OTP to customer's email
+            if ($isFirstLogin) {
+                try {
+                    $this->sendFirstLoginOtp($client->email, $client->client_name);
+                    Log::info('AuthService.login:first_login_otp_dispatched', ['email' => $client->email]);
+                } catch (\Throwable $e) {
+                    Log::warning('AuthService.login:first_login_otp_failed: ' . $e->getMessage());
+                }
+            }
 
             Log::info('AuthService.login:after_credential_save', ['duration_ms' => (microtime(true)-$start)*1000]);
 
@@ -118,6 +162,7 @@
             RefreshToken::create([
                 'client_id' => $client->id,
                 'token_hash' => $hash,
+                'is_revoked' => false,
                 'expires_at' => $expiresAt,
             ]);
 
@@ -164,6 +209,22 @@
 
                 if ($failedLoginCount >= self::MAX_FAILED_LOGIN) {
                     $employee->locked_until = Carbon::now()->addMinutes(self::LOCK_MINUTES);
+                    // Dispatch security alert on failed login threshold breach (AC-1, AC-3)
+                    SystemAlertDispatcher::dispatchIssue(
+                        category: 'failed_login_spike',
+                        severity: 'high',
+                        service: 'customer-service',
+                        title: "Failed Login Spike ({$email})",
+                        message: "Repeated failed login attempts ({$failedLoginCount}) detected for staff account {$email}.",
+                        context: [
+                            'email' => $email,
+                            'failed_count' => $failedLoginCount,
+                            'role' => $employee->role,
+                            'account_locked' => true,
+                        ],
+                        ip: request()?->ip(),
+                        userAgent: request()?->userAgent()
+                    );
                 }
 
                 $employee->save();
@@ -179,17 +240,53 @@
             }
 
             $isFirstLogin = $employee->password_change_at === null;
+            $empIp = request()?->ip() ?? '127.0.0.1';
+            $empIpKey = "auth:known_ip:emp:" . md5($email . ':' . $empIp);
+
+            // Detect unusual employee login from unfamiliar IP address (AC-1)
+            if ($employee->last_login_at && !Cache::has($empIpKey)) {
+                SystemAlertDispatcher::dispatchIssue(
+                    category: 'unusual_login',
+                    severity: 'medium',
+                    service: 'customer-service',
+                    title: "Unusual Staff Login Detected ({$email})",
+                    message: "Staff member {$email} ({$employee->role}) logged in from a new IP address ({$empIp}).",
+                    context: [
+                        'email' => $email,
+                        'role' => $employee->role,
+                        'ip_address' => $empIp,
+                        'previous_login' => $employee->last_login_at?->toIso8601String(),
+                    ],
+                    ip: $empIp,
+                    userAgent: request()?->userAgent()
+                );
+            }
+            Cache::put($empIpKey, true, 86400 * 30);
 
             $employee->failed_login_count = 0;
             $employee->locked_until = null;
             $employee->last_login_at = Carbon::now();
-            $employee->last_seen_at = Carbon::now();
-            $employee->is_active = $employee->role !== 'customer service';
-            $employee->save();
+            // TS106: Automatically set availability status to Active upon login (non-blocking best-effort)
+            try {
+                $employee->is_active = true;
+                $employee->save();
+                Log::info("Employee status automatically set to Active upon login (TS106)", [
+                    'emp_id' => $employee->emp_id,
+                    'email' => $employee->email,
+                    'role' => $employee->role,
+                ]);
+            } catch (\Throwable $e) {
+                Log::error("Failed to set employee active status on login (best-effort): " . $e->getMessage(), [
+                    'emp_id' => $employee->emp_id,
+                ]);
+            }
 
-            // OTP on first login is disabled — users go straight to the change-password screen.
-
-            $this->syncEmployeePresence($employee);
+            // Non-blocking presence sync & real-time status event broadcast
+            try {
+                $this->syncEmployeePresence($employee);
+            } catch (\Throwable $e) {
+                Log::warning("Failed to sync employee presence on login: " . $e->getMessage());
+            }
 
             $accessToken = $employee->createToken('employee')->accessToken;
             $rawRefresh = Str::random(80);
@@ -199,6 +296,7 @@
             RefreshToken::create([
                 'employee_id' => $employee->emp_id,
                 'token_hash' => $hash,
+                'is_revoked' => false,
                 'expires_at' => $expiresAt,
             ]);
 
@@ -215,12 +313,12 @@
 
         public function logoutEmployee(Employee $employee): void
         {
-            if ($employee->role === 'customer service') {
+            if (in_array($employee->role, ['customer service', 'head of cs', 'head of customer service', 'cs'])) {
                 return;
             }
 
-            $employee->is_active = false;
-            $employee->last_seen_at = Carbon::now();
+            // Logout clears presence only (spec 0035); is_active is the account flag and is left untouched.
+            $employee->last_seen_at = null;
             $employee->save();
 
             Cache::store('redis')->forget($this->employeePresenceKey($employee->emp_id));
@@ -288,20 +386,20 @@
 
         private function syncEmployeePresence(Employee $employee): void
         {
-            if ($employee->role === 'customer service') {
-                return;
+            try {
+                Cache::store('redis')->put(
+                    $this->employeePresenceKey($employee->emp_id),
+                    [
+                        'is_active' => true,
+                        'last_seen_at' => Carbon::now()->toISOString(),
+                    ],
+                    now()->addDay()
+                );
+
+                EmployeeStatusChanged::dispatch($employee->refresh());
+            } catch (\Throwable $e) {
+                Log::warning("Failed to sync employee presence to Redis: " . $e->getMessage());
             }
-
-            Cache::store('redis')->put(
-                $this->employeePresenceKey($employee->emp_id),
-                [
-                    'is_active' => true,
-                    'last_seen_at' => Carbon::now()->toISOString(),
-                ],
-                60
-            );
-
-            EmployeeStatusChanged::dispatch($employee->refresh());
         }
 
         private function employeePresenceKey(int $employeeId): string
@@ -414,7 +512,7 @@
             ];
         }
 
-        private function sendFirstLoginOtp($email, $name)
+        public function sendFirstLoginOtp($email, $name)
         {
             $otp = (string) random_int(100000, 999999);
             $expiresAt = Carbon::now()->addMinutes(self::PASSWORD_RESET_OTP_MINUTES);
@@ -475,7 +573,13 @@
                 ? $user->password_change_at === null
                 : optional($user->credential)->password_change_at === null;
 
-            // OTP verification on first-login password change is disabled.
+            // TS009: Verify OTP on first login if code is provided
+            if ($isFirstLogin && !empty($otp)) {
+                $verifyResult = $this->verifyPasswordResetOtp($user->email, $otp);
+                if (!$verifyResult['success']) {
+                    return $verifyResult;
+                }
+            }
 
             $currentPasswordHash = $user instanceof Employee
                 ? $user->password_hash
@@ -488,6 +592,7 @@
                 ];
             }
 
+            // TS009: Reject reuse of default credential
             if (Hash::check($newPassword, $currentPasswordHash)) {
                 return [
                     'success' => false,
@@ -510,8 +615,12 @@
                     $user->credential->save();
                 }
 
-                // OTP cleanup skipped (OTP flow is disabled).
+                if ($isFirstLogin) {
+                    PasswordResetOtp::where('email', $user->email)->update(['used_at' => Carbon::now()]);
+                }
             });
+
+            Log::info("Password successfully changed for user {$user->email}" . ($isFirstLogin ? ' (first login completed)' : ''));
 
             return [
                 'success' => true,

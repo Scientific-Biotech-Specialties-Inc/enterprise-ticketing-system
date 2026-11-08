@@ -25,12 +25,17 @@ class TicketNotificationController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
+        $isClientRecipient = $recipientType === 'client';
+
         $notifications = DB::table('notifications')
             ->where('recipient_id', $recipientId)
             ->where('recipient_type', $recipientType)
+            // Customers never receive reassignment notifications (internal handling).
+            ->when($isClientRecipient, fn ($q) => $q->where('title', 'not like', '%reassign%')->where('message', 'not like', '%reassign%'))
             ->orderBy('created_at', 'desc')
             ->get()
             ->map(function ($n) {
+                $n->is_read = (bool) $n->is_read;
                 if (!empty($n->created_at)) {
                     $n->created_at = \Carbon\Carbon::parse($n->created_at)->toISOString();
                 }
@@ -43,6 +48,7 @@ class TicketNotificationController extends Controller
         $unreadCount = DB::table('notifications')
             ->where('recipient_id', $recipientId)
             ->where('recipient_type', $recipientType)
+            ->when($isClientRecipient, fn ($q) => $q->where('title', 'not like', '%reassign%')->where('message', 'not like', '%reassign%'))
             ->where('is_read', false)
             ->count();
 

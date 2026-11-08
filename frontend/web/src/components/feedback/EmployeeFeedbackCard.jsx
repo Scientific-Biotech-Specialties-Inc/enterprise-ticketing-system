@@ -13,7 +13,15 @@ const AVATAR_COLORS = [
 ];
 
 function getAvatarColor(id) {
-  return AVATAR_COLORS[(id - 1) % AVATAR_COLORS.length];
+  if (typeof id === 'number' && !isNaN(id)) {
+    return AVATAR_COLORS[Math.abs(id - 1) % AVATAR_COLORS.length];
+  }
+  const str = String(id || '1');
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash + str.charCodeAt(i)) % AVATAR_COLORS.length;
+  }
+  return AVATAR_COLORS[hash];
 }
 
 function getInitials(name) {

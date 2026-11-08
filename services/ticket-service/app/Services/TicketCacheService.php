@@ -25,6 +25,11 @@ class TicketCacheService
                 '*cs_dashboard_recent_*',
                 '*customer_dashboard_recent_*',
                 '*customer_dashboard_counts_*',
+                '*ticket_attachments_data_*',
+                '*admin_dashboard_metrics_*',
+                '*admin_reports_metrics_*',
+                '*admin_emp_perf_*',
+                '*admin_dept_perf_*',
             ];
 
             $driver = config('database.redis.client', 'phpredis');
@@ -41,6 +46,9 @@ class TicketCacheService
                         }
                         if (!empty($keys)) {
                             foreach ($keys as $key) {
+                                try {
+                                    $client->del($key);
+                                } catch (\Throwable $e) {}
                                 $this->forgetCleanKey($key, $prefix);
                             }
                         }
@@ -55,6 +63,9 @@ class TicketCacheService
                         $keys = $response[1];
                         if (!empty($keys)) {
                             foreach ($keys as $key) {
+                                try {
+                                    $redis->del($key);
+                                } catch (\Throwable $e) {}
                                 $this->forgetCleanKey($key, $prefix);
                             }
                         }

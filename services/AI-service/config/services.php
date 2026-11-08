@@ -33,8 +33,22 @@ return [
 
     'gemini' => [
         'api_key' => env('GEMINI_API_KEY'),
-        'model' => env('GEMINI_MODEL', 'gemini-3.5-flash-lite'),
+        'model' => env('GEMINI_MODEL', 'gemini-3.5-flash'),
+        // Chat request timeout in seconds. Spec 0036 (AC-10) caps it at 15.
+        'timeout' => min((int) env('GEMINI_TIMEOUT_SECONDS', 15), 15),
     ],
 
+    // Spec 0036: Knowledge Base embedding and retrieval settings.
+    'kb' => [
+        'embedding_model' => env('KB_EMBEDDING_MODEL', 'gemini-embedding-001'),
+        'embedding_dims' => (int) env('KB_EMBEDDING_DIMS', 768),
+        'embedding_timeout' => (int) env('KB_EMBEDDING_TIMEOUT_SECONDS', 20),
+        'min_score' => (float) env('KB_MIN_SCORE', 0.55),
+    ],
+
+    'clamav' => [
+        'host' => env('CLAMAV_HOST', 'clamav'),
+        'port' => (int) env('CLAMAV_PORT', 3310),
+    ],
 
 ];

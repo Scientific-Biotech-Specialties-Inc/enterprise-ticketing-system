@@ -46,6 +46,12 @@ const getCookie = (name) => {
 
 axiosInstance.interceptors.request.use(
   (config) => {
+    // If the request URL is already an absolute API path (starts with /api/) or full URL (http/https),
+    // clear baseURL so Axios does not erroneously prepend API_BASE_URL (/api/ticketing/customer)
+    if (config.url && (config.url.startsWith('/api/') || config.url.startsWith('http://') || config.url.startsWith('https://'))) {
+      config.baseURL = '';
+    }
+
     const method = (config.method || 'get').toLowerCase();
     const xsrfToken = getCookie('XSRF-TOKEN');
 
@@ -95,14 +101,33 @@ axiosInstance.interceptors.response.use(
         return axiosInstance(originalRequest);
       }
 
-      // Only clear session & dispatch logout if the request was to a core session endpoint
-      const isCoreSessionUrl = requestUrl.includes('/me') || requestUrl.includes('/profile') || requestUrl.includes('/user');
-      if (isCoreSessionUrl) {
-        tokenStore.clearToken();
-        localStorage.removeItem('user');
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new Event('auth:unauthorized'));
+      // Fail-closed principle: if token refresh fails on unauthorized, clear auth state and trigger unauthorized handler
+      tokenStore.clearToken();
+      sessionStorage.removeItem('user');
+      try {
+        const raw = localStorage.getItem('user');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          const role = (typeof parsed.role === 'object' ? parsed.role?.name : parsed.role) || '';
+          const roleLower = String(role).toLowerCase();
+          const dept = (typeof parsed.department === 'object' ? parsed.department?.name : parsed.department) || '';
+          const deptLower = String(dept).toLowerCase();
+          const isStaff =
+            roleLower.includes('admin') ||
+            roleLower.includes('employee') ||
+            roleLower.includes('cs') ||
+            roleLower.includes('customer service') ||
+            deptLower.includes('admin') ||
+            deptLower.includes('employee') ||
+            deptLower.includes('cs') ||
+            deptLower.includes('customer service');
+          if (!isStaff) {
+            localStorage.removeItem('user');
+          }
         }
+      } catch {}
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('auth:unauthorized'));
       }
     }
 

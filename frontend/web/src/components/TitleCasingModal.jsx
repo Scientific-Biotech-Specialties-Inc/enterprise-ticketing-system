@@ -1,4 +1,5 @@
 import React from 'react';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 
 /**
  * Modal shown when a user enters a ticket title with non-standard casing (e.g., "OmICRon BlOOd pREssURE").
@@ -13,6 +14,7 @@ export default function TitleCasingModal({
   confirmText = 'Apply & Continue',
   cancelText = 'Edit Title',
 }) {
+  useLockBodyScroll(isOpen);
   if (!isOpen) return null;
 
   return (
