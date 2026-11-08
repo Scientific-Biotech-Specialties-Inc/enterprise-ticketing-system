@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ResolvesVerifiedPrincipal;
 use App\Services\SLAService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -12,6 +13,8 @@ use Illuminate\Support\Facades\Log;
 
 class TicketReminderController extends Controller
 {
+    use ResolvesVerifiedPrincipal;
+
     protected SLAService $slaService;
 
     public function __construct(SLAService $slaService)
@@ -26,33 +29,16 @@ class TicketReminderController extends Controller
      */
     public function sendReminder(Request $request, int $ticketId): JsonResponse
     {
-        // 1. Authorize: CS, Admin, Super Admin
-        $userRole = strtolower(trim((string) (
-            $request->header('X-User-Role')
-            ?? $request->input('user_role')
-            ?? $request->attributes->get('auth_role')
-            ?? ''
-        )));
-
-        // Also check decoded token / user object from request if available
-        $userObj = $request->input('user') ?? $request->attributes->get('auth_user');
-        if (is_array($userObj) && !empty($userObj['role'])) {
-            $userRole = strtolower(trim((string) $userObj['role']));
+        // 1. Authorize: CS, Admin, Super Admin. Spec 0034: sender id and role come only from
+        // the verified user, never from headers or the request body.
+        $principal = $this->verifiedPrincipal($request);
+        if (!$principal) {
+            return response()->json(['status' => 'error', 'message' => 'Unauthenticated.'], 401);
         }
 
-        // Allow 'cs', 'customer support', 'admin', 'superadmin', 'super_admin'
-        $isCsOrAdmin = in_array(str_replace([' ', '_', '-'], '', $userRole), ['cs', 'customersupport', 'customerservice', 'admin', 'superadmin']);
-
-        // In development or when gateway passes authenticated employee token
-        $empId = (int) ($request->header('X-User-ID') ?? $request->input('emp_id') ?? $request->input('sender_id') ?? 1);
-        if (!$isCsOrAdmin) {
-            // Check employees table if role isn't explicitly in header
-            $dbRole = DB::table('employees')->where('emp_id', $empId)->value('role');
-            if ($dbRole) {
-                $cleanDbRole = strtolower(str_replace([' ', '_', '-'], '', $dbRole));
-                $isCsOrAdmin = in_array($cleanDbRole, ['cs', 'customersupport', 'customerservice', 'admin', 'superadmin']);
-            }
-        }
+        $userRole = strtolower(trim((string) ($principal['role'] ?? '')));
+        $isCsOrAdmin = $principal['type'] === 'staff'
+            && in_array(str_replace([' ', '_', '-'], '', $userRole), ['cs', 'customersupport', 'customerservice', 'admin', 'superadmin'], true);
 
         if (!$isCsOrAdmin) {
             return response()->json([
@@ -60,6 +46,8 @@ class TicketReminderController extends Controller
                 'message' => 'Unauthorized. Only Customer Service and Administrators can send ticket reminders.',
             ], 403);
         }
+
+        $empId = $principal['id'];
 
         // 2. Fetch ticket with status and assigned employee
         $ticket = DB::table('tickets as t')
@@ -167,7 +155,7 @@ class TicketReminderController extends Controller
             $assignedEmp = DB::table('employees')->where('emp_id', $assignedEmpId)->first();
             if ($assignedEmp && !empty($assignedEmp->email)) {
                 $configServiceUrl = env('CONFIGURATION_SERVICE_URL', 'http://configuration-service:8000');
-                Http::timeout(5)->post("{$configServiceUrl}/api/email/dispatch", [
+                Http::timeout(5)->withHeaders(['X-Internal-Token' => (string) env('INTERNAL_TOKEN', '')])->post("{$configServiceUrl}/api/email/dispatch", [
                     'to' => $assignedEmp->email,
                     'subject' => "[Reminder] Action Pending: Ticket #{$ticketId} - {$ticketTitle}",
                     'html' => "<p>Hello {$assignedEmp->first_name},</p><p>Customer Service has sent a reminder regarding <strong>Ticket #{$ticketId}: {$ticketTitle}</strong>.</p><p><strong>Current SLA Status:</strong> {$slaStatus}</p>" . ($dueAt ? "<p><strong>Due Date:</strong> {$dueAt}</p>" : "") . ($customMessage !== '' ? "<p><strong>Message:</strong> \"{$customMessage}\"</p>" : "") . "<p><a href=\"" . env('APP_URL', 'http://localhost:5006') . "/employee/history/{$ticketId}\">Click here to view the ticket</a>.</p>",

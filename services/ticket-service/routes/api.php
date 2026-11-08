@@ -30,10 +30,6 @@ Route::middleware('auth.subsystem')->get('/user', function (Request $request) {
 // ─── Core Ticket Public / Common Endpoints ────────────────────────────────────
 Route::get('/ticket-form-options', [TicketController::class, 'formOptions']);
 Route::get('/cs/filter-options', [TicketDashboardController::class, 'csFilterOptions']);
-Route::post('/tickets/draft', [TicketDraftController::class, 'saveDraft']);
-Route::get('/tickets/drafts', [TicketDraftController::class, 'listDrafts']);
-Route::get('/tickets/drafts/{id}', [TicketDraftController::class, 'getDraft']);
-Route::delete('/tickets/drafts/{id}', [TicketDraftController::class, 'deleteDraft']);
 Route::get('/branches', [BranchPriorityController::class, 'publicBranches']);
 
 // ─── Dashboards & Feed Endpoints ─────────────────────────────────────────────
@@ -48,6 +44,12 @@ Route::match(['get', 'post'], '/tickets/check-sla-alerts', function (\App\Servic
 });
 
 Route::middleware('auth.subsystem')->group(function () {
+    // ─── Customer Ticket Drafts (spec 0034: verified customer token only) ────
+    Route::post('/tickets/draft', [TicketDraftController::class, 'saveDraft']);
+    Route::get('/tickets/drafts', [TicketDraftController::class, 'listDrafts']);
+    Route::get('/tickets/drafts/{id}', [TicketDraftController::class, 'getDraft']);
+    Route::delete('/tickets/drafts/{id}', [TicketDraftController::class, 'deleteDraft']);
+
     // ─── Customer Dashboard (Strictly Token Authenticated) ────────────────────
     Route::get('/customer-dashboard', [TicketDashboardController::class, 'customerDashboard']);
     Route::get('/customer/filter-options', [TicketDashboardController::class, 'customerFilterOptions']);

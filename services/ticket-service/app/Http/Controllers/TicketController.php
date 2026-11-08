@@ -118,9 +118,9 @@ class TicketController extends Controller
             'problem_category_ID' => ['required', 'integer', 'exists:problem_categories,problem_category_ID'],
             'priority_ID' => ['nullable', 'integer', 'exists:ticket_priorities,priority_ID'],
             'branch_id' => ['nullable', 'string', 'max:64', 'exists:branches,slug'],
-            'title' => ['required', 'string', 'max:255', $this->ticketService->validateProperCasing()],
-            'description' => ['required', 'string'],
-            'attachments' => ['nullable', 'array'],
+            'title' => ['required', 'string', 'max:255', $this->ticketService->rejectMarkup(), $this->ticketService->validateProperCasing()],
+            'description' => ['required', 'string', $this->ticketService->rejectMarkup()],
+            'attachments' => ['nullable', 'array', 'max:' . \App\Services\TicketConfigurationService::getMaxFileCount()],
             'attachments.*' => ['integer'],
             'origin' => ['nullable', 'string', 'max:50'],
             'conversation_id' => ['nullable', 'string', 'max:64'],
@@ -155,8 +155,14 @@ class TicketController extends Controller
         // TS027: Link ticket to chatbot conversation if originating from AI escalation
         if (!empty($validated['conversation_id'])) {
             try {
-                \Illuminate\Support\Facades\Http::timeout(3)->post('http://AI-service:8000/api/tickets', [
+                // Spec 0034: the AI service verifies the caller, so pass on the customer's own token.
+                $linkClient = \Illuminate\Support\Facades\Http::timeout(3);
+                if ($callerToken = ($request->bearerToken() ?: $request->cookie('access_token'))) {
+                    $linkClient = $linkClient->withToken((string) $callerToken);
+                }
+                $linkClient->post('http://AI-service:8000/api/tickets', [
                     'conversation_id' => $validated['conversation_id'],
+                    'ticket_id' => $result['ticket_id'] ?? null,
                 ]);
             } catch (\Throwable $e) {
                 \Illuminate\Support\Facades\Log::warning("Could not link conversation {$validated['conversation_id']} to ticket: " . $e->getMessage());
@@ -199,18 +205,26 @@ class TicketController extends Controller
             $request->merge(['attachments' => []]);
         }
 
+        // Equipment is required for Service (department 1) and optional for IT (department 2).
+        $internalDeptId = $request->input('department_id') ? (int) $request->input('department_id') : null;
+        if ($request->has('machine_ID') && in_array($request->input('machine_ID'), ['', 'null'], true)) {
+            $request->merge(['machine_ID' => null]);
+        }
+
         $validated = $request->validate([
-            'machine_ID' => ['required', 'integer', 'exists:machines,machine_ID'],
+            'machine_ID' => $internalDeptId === 2
+                ? ['nullable', 'integer', 'exists:machines,machine_ID']
+                : ['required', 'integer', 'exists:machines,machine_ID'],
             'problem_category_ID' => ['required', 'integer', 'exists:problem_categories,problem_category_ID'],
             'priority_ID' => ['nullable', 'integer', 'exists:ticket_priorities,priority_ID'],
             'branch_id' => ['nullable', 'string', 'max:64', 'exists:branches,slug'],
-            'title' => ['required', 'string', 'max:255', $this->ticketService->validateProperCasing()],
-            'description' => ['required', 'string'],
-            'attachments' => ['nullable', 'array'],
+            'title' => ['required', 'string', 'max:255', $this->ticketService->rejectMarkup(), $this->ticketService->validateProperCasing()],
+            'description' => ['required', 'string', $this->ticketService->rejectMarkup()],
+            'attachments' => ['nullable', 'array', 'max:' . \App\Services\TicketConfigurationService::getMaxFileCount()],
             'attachments.*' => ['integer'],
         ]);
 
-        $deptId = $request->input('department_id') ? (int) $request->input('department_id') : null;
+        $deptId = $internalDeptId;
 
         try {
             $result = $this->ticketService->createInternalTicket($validated, $user, $deptId);
@@ -262,11 +276,11 @@ class TicketController extends Controller
             'assigned_to' => ['nullable', 'integer', 'exists:employees,emp_id'],
             'assigned_by_email' => ['nullable', 'email'],
             'proof_rejected' => ['nullable', 'boolean'],
-            'rejection_reason' => ['nullable', 'string'],
-            'escalation_reason' => ['nullable', 'string', 'max:1000'],
-            'reason' => ['nullable', 'string', 'max:1000'],
-            'title' => ['nullable', 'string', 'max:255', $this->ticketService->validateProperCasing()],
-            'description' => ['nullable', 'string'],
+            'rejection_reason' => ['nullable', 'string', new \App\Rules\NoMarkup()],
+            'escalation_reason' => ['nullable', 'string', 'max:1000', new \App\Rules\NoMarkup()],
+            'reason' => ['nullable', 'string', 'max:1000', new \App\Rules\NoMarkup()],
+            'title' => ['nullable', 'string', 'max:255', $this->ticketService->rejectMarkup(), $this->ticketService->validateProperCasing()],
+            'description' => ['nullable', 'string', $this->ticketService->rejectMarkup()],
             'problem_category_ID' => ['nullable', 'integer', 'exists:problem_categories,problem_category_ID'],
             'machine_ID' => ['nullable', 'integer', 'exists:machines,machine_ID'],
         ]);
@@ -698,6 +712,12 @@ class TicketController extends Controller
         }
 
         $noteText = trim((string) ($request->input('note') ?? $request->input('internal_note') ?? $request->input('text') ?? ''));
+        if (\App\Rules\NoMarkup::contains($noteText)) {
+            return response()->json([
+                'message' => 'The note must not contain HTML or script markup.',
+                'errors' => ['note' => ['The note must not contain HTML or script markup.']]
+            ], 422);
+        }
         if (empty($noteText)) {
             return response()->json([
                 'message' => 'The note field is required and cannot be empty.',

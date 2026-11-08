@@ -68,7 +68,6 @@ class AuditLoggingService
                     ]),
                     'created_at' => $timestamp,
                 ]);
-            }
         } catch (\Throwable $e) {
             Log::warning('Could not write to ticket_audit_logs: ' . $e->getMessage());
         }
@@ -98,5 +97,37 @@ class AuditLoggingService
         }
 
         return $logRecord;
+    }
+
+    /**
+     * Record a non destructive article change (metadata edit, file replacement)
+     * in the independent kb_audit_logs table.
+     *
+     * Failures are logged and swallowed so an audit write never blocks the edit itself.
+     */
+    public function logArticleChange(
+        int $articleId,
+        string $title,
+        string $action,
+        string $actor = 'Super Admin',
+        string $actorRole = 'Super Admin',
+        array $details = [],
+        ?string $ipAddress = null
+    ): ?KbAuditLog {
+        try {
+            return KbAuditLog::create([
+                'article_id' => $articleId,
+                'article_title' => mb_substr($title, 0, 255),
+                'action' => mb_substr($action, 0, 50),
+                'actor' => mb_substr($actor, 0, 100),
+                'actor_role' => mb_substr($actorRole, 0, 50),
+                'module' => 'Knowledge Base',
+                'details' => array_merge(['article_id' => $articleId, 'title' => $title, 'action' => $action], $details),
+                'ip_address' => $ipAddress,
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning("Could not write kb_audit_logs entry ({$action}) for article #{$articleId}: " . $e->getMessage());
+            return null;
+        }
     }
 }

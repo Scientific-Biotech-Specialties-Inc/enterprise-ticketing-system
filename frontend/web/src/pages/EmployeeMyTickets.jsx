@@ -99,10 +99,10 @@ export default function EmployeeMyTickets({ roleContext }) {
     }
   }, [roleContext]);
 
-  const loadTickets = useCallback(async ({ forceRefresh = false } = {}) => {
-    setLoading(true);
+  const loadTickets = useCallback(async ({ forceRefresh = false, source = 'manual' } = {}) => {
+    // Realtime ticks (websocket/poll) refresh silently instead of flashing the skeleton.
+    if (source !== 'websocket' && source !== 'poll') setLoading(true);
     setError('');
-
     try {
       let mapped = [];
       try {
@@ -579,6 +579,7 @@ export default function EmployeeMyTickets({ roleContext }) {
       </div>
 
       <TicketModal
+        showDepartmentSelector
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSubmit={handleCreateTicket}

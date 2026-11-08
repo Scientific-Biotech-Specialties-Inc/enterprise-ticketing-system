@@ -35,6 +35,18 @@ class TicketService
     }
 
     /**
+     * Validation rule: reject HTML/script markup in free-text fields (stored XSS defence in depth).
+     */
+    public function rejectMarkup(): \Closure
+    {
+        return function ($attribute, $value, $fail) {
+            if (is_string($value) && preg_match('/<[\/!?a-z]/i', $value)) {
+                $fail("The {$attribute} must not contain HTML or script markup.");
+            }
+        };
+    }
+
+    /**
      * Proper casing validation rule closure.
      */
     public function validateProperCasing(): \Closure
@@ -239,7 +251,7 @@ class TicketService
         }
 
         $clientId = (int) $user->id;
-        $rawTitle = strip_tags($validated['title']);
+        $rawTitle = trim(strip_tags((string) $validated['title']));
         $cleanedTitle = preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $rawTitle);
         $finalTitle = !empty(trim($cleanedTitle)) ? trim($cleanedTitle) : $rawTitle;
 
@@ -362,15 +374,15 @@ class TicketService
         $this->notificationService->dispatchAlert(
             'new_ticket',
             'New Ticket Created',
-            "New Ticket {$ticketRef}: \"" . $validated['title'] . "\" has been created by {$clientName}.",
+            "New Ticket {$ticketRef}: \"" . $finalTitle . "\" has been created by {$clientName}.",
             $ticketId,
-            ['ticket_id' => $ticketId, 'title' => $validated['title']]
+            ['ticket_id' => $ticketId, 'title' => $finalTitle]
         );
 
         $this->notificationService->notifyCustomer(
             $customerId,
             'Ticket Created',
-            "Your ticket {$ticketRef}: \"" . $validated['title'] . "\" has been created successfully. Our team will review it shortly.",
+            "Your ticket {$ticketRef}: \"" . $finalTitle . "\" has been created successfully. Our team will review it shortly.",
             $ticketId
         );
 
@@ -379,9 +391,9 @@ class TicketService
         $this->notificationService->sendCustomerEmail(
             $customerId,
             'Ticket Created',
-            "Your ticket {$ticketNumber}: \"" . $validated['title'] . "\" has been created successfully.",
+            "Your ticket {$ticketNumber}: \"" . $finalTitle . "\" has been created successfully.",
             $ticketId,
-            $validated['title'],
+            $finalTitle,
             $categoryName,
             $priorityName
         );
@@ -402,7 +414,7 @@ class TicketService
             'details' => json_encode([
                 'machine_ID' => $validated['machine_ID'] ?? null,
                 'problem_category_ID' => $validated['problem_category_ID'],
-                'title' => strip_tags($validated['title']),
+                'title' => $finalTitle,
             ]),
             'is_system' => 0,
             'is_internal' => 0,
@@ -412,7 +424,7 @@ class TicketService
         $statusName = DB::table('ticket_statuses')->where('ticket_status_ID', $statusId)->value('status_name') ?? 'Open';
         $this->notificationService->broadcastTicketChange('created', $ticketId, [
             'status' => $statusName,
-            'title' => $validated['title'],
+            'title' => $finalTitle,
             'customer_id' => $customerId,
         ]);
 
@@ -448,6 +460,9 @@ class TicketService
      */
     public function createInternalTicket(array $validated, $user, ?int $requestedDepartmentId = null): array
     {
+        // Strip markup once so every sink (DB, audit log, notifications, broadcasts) gets plain text.
+        $cleanTitle = trim(strip_tags((string) $validated['title']));
+        $cleanDescription = trim(strip_tags((string) $validated['description']));
         $internalTypeId = DB::table('ticket_types')->where('type_name', 'Internal')->value('ticket_type_ID');
         $empId = (int) $user->emp_id;
 
@@ -489,8 +504,8 @@ class TicketService
                 'branch_id' => $validated['branch_id'] ?? null,
                 'ticket_status_ID' => $statusId,
                 'sla_ID' => null,
-                'title' => strip_tags($validated['title']),
-                'description' => strip_tags($validated['description']),
+                'title' => $cleanTitle,
+                'description' => $cleanDescription,
                 'resolved_at' => null,
                 'closed_at' => null,
                 'created_at' => now(),
@@ -536,7 +551,7 @@ class TicketService
             'details' => json_encode([
                 'machine_ID' => $validated['machine_ID'] ?? null,
                 'problem_category_ID' => $validated['problem_category_ID'],
-                'title' => strip_tags($validated['title']),
+                'title' => $cleanTitle,
             ]),
             'is_system' => 0,
             'is_internal' => 1,
@@ -571,12 +586,12 @@ class TicketService
         $this->notificationService->dispatchAlert(
             'new_ticket',
             'New Internal Ticket Created',
-            "New internal ticket {$ticketRef}: \"" . $validated['title'] . "\" has been created and awaits delegation.",
+            "New internal ticket {$ticketRef}: \"" . $cleanTitle . "\" has been created and awaits delegation.",
             $ticketId,
             [
                 'ticket_id' => $ticketId,
                 'ticket_ref' => $ticketRef,
-                'title' => $validated['title'],
+                'title' => $cleanTitle,
             ]
         );
 
@@ -584,19 +599,19 @@ class TicketService
             $empId,
             'employee',
             'Internal Ticket Created',
-            "Your internal ticket {$ticketRef}: \"" . $validated['title'] . "\" has been submitted successfully.",
+            "Your internal ticket {$ticketRef}: \"" . $cleanTitle . "\" has been submitted successfully.",
             $ticketId,
             [
                 'ticket_id' => $ticketId,
                 'ticket_ref' => $ticketRef,
-                'title' => $validated['title'],
+                'title' => $cleanTitle,
             ]
         );
 
         $statusName = DB::table('ticket_statuses')->where('ticket_status_ID', $statusId)->value('status_name') ?? 'Open';
         $this->notificationService->broadcastTicketChange('created', $ticketId, [
             'status' => $statusName,
-            'title' => $validated['title'],
+            'title' => $cleanTitle,
         ]);
 
         $ticket = DB::table('tickets')->where('ticket_ID', $ticketId)->first();
@@ -736,6 +751,13 @@ class TicketService
         }
         $actualDenyReason = $deniedReassign ? ($deniedReassign->deny_reason ?: $latestDenyAuditReason) : null;
 
+        // Privacy: reassignment requests, reasons and denials are internal handling and must never reach a customer.
+        if ($isCustomer) {
+            $pendingReassign = null;
+            $deniedReassign = null;
+            $actualDenyReason = null;
+        }
+
         $auditLogs = DB::table('ticket_audit_logs as tal')
             ->leftJoin('employees as e', function ($join) {
                 $join->on('e.emp_id', '=', 'tal.action_by_ID')
@@ -753,6 +775,13 @@ class TicketService
             ->where('tal.ticket_ID', $ticketId)
             ->orderBy('tal.created_at', 'asc')
             ->get();
+
+        if ($isCustomer) {
+            $auditLogs = $auditLogs->reject(function ($log) {
+                return str_contains(strtolower((string) ($log->action_type ?? '')), 'reassign')
+                    || str_contains(strtolower((string) ($log->event_type ?? '')), 'reassign');
+            })->values();
+        }
 
         $prioritiesMap = DB::table('ticket_priorities')->pluck('priority_name', 'priority_ID')->toArray();
         $statusesMap = DB::table('ticket_statuses')->pluck('status_name', 'ticket_status_ID')->toArray();
@@ -1537,7 +1566,7 @@ class TicketService
         }
 
         if (array_key_exists('description', $validated) && $validated['description'] !== null) {
-            $newDesc = trim($validated['description']);
+            $newDesc = strip_tags(trim($validated['description']));
             if ($ticket->description !== $newDesc) {
                 $changes[] = ['field' => 'description', 'old' => $ticket->description, 'new' => $newDesc];
             }
@@ -1650,7 +1679,7 @@ class TicketService
                 $update['title'] = strip_tags(trim($validated['title']));
             }
             if (array_key_exists('description', $validated) && $validated['description'] !== null) {
-                $update['description'] = trim($validated['description']);
+                $update['description'] = strip_tags(trim($validated['description']));
             }
             if (array_key_exists('problem_category_ID', $validated) && $validated['problem_category_ID'] !== null) {
                 $update['problem_category_ID'] = $validated['problem_category_ID'];

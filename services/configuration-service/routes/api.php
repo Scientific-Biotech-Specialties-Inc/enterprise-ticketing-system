@@ -127,11 +127,15 @@ $registerRoutes = function () {
 // Public RSA encryption key endpoint (no prefix)
 Route::get('/encryption-key', [EmailConfigurationController::class, 'getEncryptionKey']);
 
-// Direct routes (proxied with rewrite strips the prefix)
-$registerRoutes();
+// Spec 0034: config.access decides public / internal / admin per route from the verified token or
+// X-Internal-Token (never from X-User-* headers). Unlisted routes fail closed to admin.
+Route::middleware('config.access')->group(function () use ($registerRoutes) {
+    // Direct routes (proxied with rewrite strips the prefix)
+    $registerRoutes();
 
-// Grouped routes under /configuration/
-Route::prefix('configuration')->group($registerRoutes);
+    // Grouped routes under /configuration/
+    Route::prefix('configuration')->group($registerRoutes);
 
-// Grouped routes under /ticketing/configuration/
-Route::prefix('ticketing/configuration')->group($registerRoutes);
+    // Grouped routes under /ticketing/configuration/
+    Route::prefix('ticketing/configuration')->group($registerRoutes);
+});

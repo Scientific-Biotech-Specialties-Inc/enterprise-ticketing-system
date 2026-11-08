@@ -34,7 +34,7 @@ import { useToast } from '@/context/ToastContext';
 
 const getStoredUser = () => {
   try {
-    return JSON.parse(localStorage.getItem('user') || 'null');
+    return JSON.parse(sessionStorage.getItem('user') || 'null');
   } catch {
     return null;
   }
@@ -57,7 +57,7 @@ export default function CustomerDashboard() {
   const [modalLoading, setModalLoading] = useState(false);
   const [loadingText, setLoadingText] = useState('Loading...');
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   const toast = useToast();
   const effectiveUser = user || getStoredUser();
   const customerName = effectiveUser?.first_name
@@ -66,15 +66,39 @@ export default function CustomerDashboard() {
   const customerId = effectiveUser?.id || 1;
 
   useEffect(() => {
-    if (!effectiveUser) return;
-    window.history.pushState(null, '', window.location.href);
-    const handlePopState = () => {
-      window.history.pushState(null, '', window.location.href);
-      navigate('/customer-dashboard', { replace: true });
+    const handlePageShow = (e) => {
+      const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('is_logged_out') === 'true';
+      if (e.persisted || !isAuthenticated || !effectiveUser || isLoggedOut) {
+        navigate('/', { replace: true });
+      }
     };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [effectiveUser, navigate]);
+    window.addEventListener('pageshow', handlePageShow);
+    return () => window.removeEventListener('pageshow', handlePageShow);
+  }, [isAuthenticated, effectiveUser, navigate]);
+
+  useEffect(() => {
+    const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('is_logged_out') === 'true';
+    if (!effectiveUser || !isAuthenticated || isLoggedOut) {
+      navigate('/', { replace: true });
+      return undefined;
+    }
+
+    // Lock browser Back and Forward buttons on customer-dashboard while logged in
+    // so the user cannot use the Back button to return to the landing page or login page.
+    window.history.pushState(window.history.state, '', window.location.href);
+    const handlePopState = (e) => {
+      if (sessionStorage.getItem('is_logged_out') === 'true') {
+        navigate('/', { replace: true });
+        return;
+      }
+      e.stopImmediatePropagation();
+      window.history.pushState(window.history.state, '', window.location.href);
+    };
+    window.addEventListener('popstate', handlePopState, true);
+    return () => {
+      window.removeEventListener('popstate', handlePopState, true);
+    };
+  }, [effectiveUser, isAuthenticated, navigate]);
 
   const loadDashboardData = useCallback(async ({ forceRefresh = false, source = 'manual' } = {}) => {
     if (source !== 'websocket' && source !== 'poll') {

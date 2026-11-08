@@ -1,3 +1,4 @@
+import { safeUrl } from '@/utils/safeUrl';
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   HelpCircle,
@@ -59,7 +60,7 @@ const isQuarantinedFile = (file) => {
   return Boolean(file.is_quarantined || file.quarantined || file.status === 'quarantined' || file.virus_detected);
 };
 
-const getFileUrl = (file) => {
+const getFileUrlRaw = (file) => {
   if (!file) return '';
   if (typeof file === 'string') return file;
   if (file.url) return file.url;
@@ -69,6 +70,7 @@ const getFileUrl = (file) => {
   if (file.path) return file.path;
   return '';
 };
+const getFileUrl = (file) => safeUrl(getFileUrlRaw(file));
 
 const getFileName = (file) => {
   if (!file) return 'Attachment';
@@ -1150,8 +1152,9 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
 
   const getRequestingEmployeeName = () => {
     if (ticket.reassignmentRequestedBy) {
-      const emp = employees.find(e => e.id === ticket.reassignmentRequestedBy);
-      return emp ? emp.name : `Employee ID: ${ticket.reassignmentRequestedBy}`;
+      // requested_by may be an employee id or already a display name.
+      const emp = employees.find(e => String(e.id) === String(ticket.reassignmentRequestedBy));
+      return emp ? emp.name : String(ticket.reassignmentRequestedBy);
     }
     return 'Assigned Employee';
   };
@@ -1640,32 +1643,6 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                           <span className="text-gray-500 text-[10px] uppercase font-bold tracking-wide">Reason Provided</span>
                           <p className="text-gray-700 font-medium leading-relaxed italic mt-0.5">&quot;{formatProperSentenceCase(ticket.reassignmentReason) || 'No reason provided'}&quot;</p>
                         </div>
-                        {/* Department Managers for Escalation (AC-2) */}
-                        <div className="mt-3 pt-3 border-t border-amber-100">
-                          <span className="text-gray-500 text-[10px] uppercase font-bold tracking-wide block mb-1.5">
-                            Department Managers (Escalation Contacts)
-                          </span>
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                            <div className="bg-amber-50/60 border border-amber-200/60 rounded-lg p-2 text-[11px]">
-                              <div className="font-bold text-slate-800">Service Department</div>
-                              <div className="text-slate-700 font-medium mt-0.5">Carlos Mendoza</div>
-                              <div className="text-[10px] text-slate-500">Lead Service Engineer</div>
-                              <div className="text-[10px] text-primary truncate mt-0.5 font-mono">carlos.mendoza@hospital.com</div>
-                            </div>
-                            <div className="bg-amber-50/60 border border-amber-200/60 rounded-lg p-2 text-[11px]">
-                              <div className="font-bold text-slate-800">IT Department</div>
-                              <div className="text-slate-700 font-medium mt-0.5">Michael Scott</div>
-                              <div className="text-[10px] text-slate-500">IT Systems Specialist</div>
-                              <div className="text-[10px] text-primary truncate mt-0.5 font-mono">michael.scott@hospital.com</div>
-                            </div>
-                            <div className="bg-amber-50/60 border border-amber-200/60 rounded-lg p-2 text-[11px]">
-                              <div className="font-bold text-slate-800">Customer Support</div>
-                              <div className="text-slate-700 font-medium mt-0.5">Ava Santos</div>
-                              <div className="text-[10px] text-slate-500">Customer Support Lead</div>
-                              <div className="text-[10px] text-primary truncate mt-0.5 font-mono">cs@gmail.com</div>
-                            </div>
-                          </div>
-                        </div>
                       </div>
                     </div>
                     {showReassignDeny ? (
@@ -2041,6 +2018,11 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                       }
                       setIsProcessing(true);
                       try {
+                        // The backend rejects On Hold -> Resolved, so a held ticket is resumed first.
+                        const isOnHold = String(currentStatus || ticket.status).toLowerCase().startsWith('on hold');
+                        if (isOnHold) {
+                          await resumeTicket(ticket.ticket_ID || ticket.id);
+                        }
                         const timestamp = new Date().toISOString();
                         await onStatusUpdate({
                           id: ticket.id,
@@ -2049,7 +2031,9 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                             {
                               id: `status-closed-${Date.now()}`,
                               type: 'status',
-                              text: 'Ticket resolved and closed by CS Representative.',
+                              text: isOnHold
+                                ? 'Ticket resumed from On Hold, then resolved and closed by CS Representative.'
+                                : 'Ticket resolved and closed by CS Representative.',
                               timestamp,
                             }
                           ]
@@ -2057,6 +2041,7 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                         onClose();
                       } catch (err) {
                         console.error(err);
+                        window.alert(err.response?.data?.message || 'Failed to resolve the ticket. Please try again.');
                       } finally {
                         setIsProcessing(false);
                       }
@@ -2792,7 +2777,10 @@ export function AssignModal({ ticket, employees, departments, priorityOptions, o
                     <div className="max-h-60 overflow-auto bg-page border border-border rounded-xl p-2 space-y-1.5">
                       {eligibleEmployeesList.map((emp) => {
                         const isSelected = selectedEmployees.some((x) => Number(x) === Number(emp.id));
-                        const isAvailable = emp.status === 'active' || emp.is_active || emp.availability === 'Available';
+                        // Presence (spec 0035): online when the heartbeat is fresh. Offline staff stay selectable with a warning.
+                        const isAvailable = emp.presence
+                          ? emp.presence === 'online'
+                          : (emp.status === 'active' || emp.is_active || emp.availability === 'Available');
                         const branchName = emp.branch || emp.branch_name || ticketBranch;
                         const defaultPos = (emp.department || '').toLowerCase() === 'service' ? 'Engineer' : 'Employee';
                         const posLevel = (emp.position_level && !['senior', 'mid', 'junior'].includes(String(emp.position_level).toLowerCase()))
@@ -2841,9 +2829,14 @@ export function AssignModal({ ticket, employees, departments, priorityOptions, o
                                 </div>
                               </div>
                             </div>
-                            <Badge variant={isAvailable ? 'emerald' : 'secondary'} className="text-[10px] shrink-0">
-                              {isAvailable ? 'Available' : 'Unavailable'}
-                            </Badge>
+                            <div className="flex flex-col items-end gap-1 shrink-0">
+                              <Badge variant={isAvailable ? 'emerald' : 'secondary'} className="text-[10px]">
+                                {isAvailable ? 'Online' : 'Offline'}
+                              </Badge>
+                              {!isAvailable && (
+                                <span className="text-[10px] text-slate-muted text-right">Offline, may not see this right away.</span>
+                              )}
+                            </div>
                           </label>
                         );
                       })}

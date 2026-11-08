@@ -73,10 +73,7 @@ class TicketDefaultsTest extends TestCase
             ['category_name' => 'Hardware Issue', 'is_active' => true, 'created_at' => now(), 'updated_at' => now()]
         );
 
-        DB::table('machines')->updateOrInsert(
-            ['machine_ID' => 1],
-            ['machine_name' => 'Demo Scanner', 'serial_number' => 'SN-1001', 'created_at' => now(), 'updated_at' => now()]
-        );
+        $this->seedMachine(1, ['machine_name' => 'Demo Scanner', 'serial_number' => 'SN-1001']);
 
         // Retrieve or create Super Admin employee
         $this->superAdmin = Employee::where('role', 'superadmin')->first()

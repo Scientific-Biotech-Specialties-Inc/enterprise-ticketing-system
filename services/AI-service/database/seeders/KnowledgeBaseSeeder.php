@@ -145,14 +145,14 @@ class KnowledgeBaseSeeder extends Seeder
             }
 
             // Index chunks & embeddings if content exists
+            // indexArticle() activates the new embeddings only when the article is Published.
+            // Spec 0036: a failed embedding call leaves the article 'Indexing failed' instead of storing fake vectors.
             if (!empty($article->content)) {
-                $ragService->indexArticle($article);
-
-                // Set is_active based on status: only Published articles are active!
-                $isActive = ($article->status === 'Published');
-                KbEmbedding::where('article_id', $article->id)->update([
-                    'is_active' => $isActive,
-                ]);
+                try {
+                    $ragService->indexArticle($article);
+                } catch (\App\Exceptions\EmbeddingFailedException $e) {
+                    $this->command?->warn("Article #{$article->id} could not be indexed: {$e->getMessage()}");
+                }
             }
         }
     }

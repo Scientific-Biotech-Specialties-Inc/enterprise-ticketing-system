@@ -204,7 +204,7 @@ class MessageController extends Controller
         }
 
         $request->validate([
-            'message' => 'required|string|max:5000',
+            'message' => ['required', 'string', 'max:5000', new \App\Rules\NoMarkup()],
             'sender_name' => 'required|string|max:255',
             'sender_type' => 'required|string|max:50',
             'sender_id' => 'nullable|integer',
@@ -248,6 +248,14 @@ class MessageController extends Controller
                 'errors' => [
                     'message' => ['At least message text or an attached file is required.']
                 ]
+            ], 422);
+        }
+
+        if ($hasText && \App\Rules\NoMarkup::contains($rawMessage)) {
+            return response()->json([
+                'message' => 'Message must not contain HTML or script markup.',
+                'code' => 'MARKUP_NOT_ALLOWED',
+                'errors' => ['message' => ['The message must not contain HTML or script markup.']]
             ], 422);
         }
 
@@ -821,7 +829,7 @@ class MessageController extends Controller
 
                             if ($recipientEmail) {
                                 $configServiceUrl = env('CONFIGURATION_SERVICE_URL', 'http://configuration-service:8000');
-                                \Illuminate\Support\Facades\Http::timeout(5)->retry(2, 100)->post("{$configServiceUrl}/api/email/dispatch", [
+                                \Illuminate\Support\Facades\Http::timeout(5)->withHeaders(['X-Internal-Token' => (string) env('INTERNAL_TOKEN', '')])->retry(2, 100)->post("{$configServiceUrl}/api/email/dispatch", [
                                     'to' => $recipientEmail,
                                     'subject' => $notificationTitle,
                                     'html' => "<p><strong>{$senderName}</strong> ({$senderRole}) posted a new message on ticket #{$ticket_id}:</p><blockquote>" . e($previewText) . "</blockquote><p><a href=\"" . url($deepLink) . "\">View ticket conversation</a></p>",
@@ -862,16 +870,7 @@ class MessageController extends Controller
     public function update(Request $request, $ticket_id, $message_id)
     {
         $user = Auth::user();
-        if (!$user && ($request->input('user_id') || $request->header('X-User-Id'))) {
-            $fallbackId = $request->input('user_id') ?: $request->header('X-User-Id');
-            $fallbackType = $request->input('user_type') ?: $request->header('X-User-Type', 'customer');
-            $fallbackName = $request->input('user_name') ?: $request->header('X-User-Name', 'User');
-            $user = new \Illuminate\Auth\GenericUser([
-                'id' => $fallbackId,
-                'name' => $fallbackName,
-                'user_type' => $fallbackType,
-            ]);
-        }
+        // Spec 0034: identity comes only from the verified token, never from headers or body ids.
 
         if (!$user) {
             return response()->json([
@@ -1064,16 +1063,7 @@ class MessageController extends Controller
     public function history(Request $request, $ticket_id, $message_id)
     {
         $user = Auth::user();
-        if (!$user && ($request->input('user_id') || $request->header('X-User-Id'))) {
-            $fallbackId = $request->input('user_id') ?: $request->header('X-User-Id');
-            $fallbackType = $request->input('user_type') ?: $request->header('X-User-Type', 'customer');
-            $fallbackName = $request->input('user_name') ?: $request->header('X-User-Name', 'User');
-            $user = new \Illuminate\Auth\GenericUser([
-                'id' => $fallbackId,
-                'name' => $fallbackName,
-                'user_type' => $fallbackType,
-            ]);
-        }
+        // Spec 0034: identity comes only from the verified token, never from headers or body ids.
 
         if (!$user) {
             return response()->json(['message' => 'Unauthorized'], 401);

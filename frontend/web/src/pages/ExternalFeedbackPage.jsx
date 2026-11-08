@@ -6,6 +6,7 @@ import StarRating from '@/components/feedback/StarRating';
 import ThankYouScreen from '@/components/feedback/ThankYouScreen';
 import { getTicketEmployees, saveFeedback, hasFeedbackBeenSubmitted, getTicketFeedback, isFeedbackFormEnabled } from '@/data/mockFeedbackData';
 import { getCategoryFeedbackQuestions, getFeedbackFormStatus } from '@/services/configurationService';
+import tokenStore from '@/auth/tokenStore';
 
 export default function ExternalFeedbackPage() {
   const { ticketId } = useParams();
@@ -58,7 +59,12 @@ export default function ExternalFeedbackPage() {
           }
         } else {
           try {
-            const apiRes = await fetch(`/api/ticketing/analytics/feedback/ticket/${effectiveTicketId}`);
+            const apiRes = await fetch(`/api/ticketing/analytics/feedback/ticket/${effectiveTicketId}`, {
+              headers: {
+                Accept: 'application/json',
+                ...(tokenStore.getToken() ? { Authorization: `Bearer ${tokenStore.getToken()}` } : {}),
+              },
+            });
             if (apiRes.ok) {
               const apiJson = await apiRes.json();
               if (apiJson.data && isMounted) {

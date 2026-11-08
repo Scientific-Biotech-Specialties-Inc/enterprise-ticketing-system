@@ -254,6 +254,7 @@ export default function CSIncoming() {
           id: Number(row.id ?? row.emp_id),
           name: row.name || `${row.first_name || ''} ${row.last_name || ''}`.trim() || row.email,
           status: row.is_active ? 'active' : 'inactive',
+          presence: row.presence || (row.is_active ? 'online' : 'offline'),
           department: row.department?.trim() || 'Unassigned',
           branch: row.branch || row.branch_name || 'Main',
           position_level: (row.position_level && !['senior', 'mid', 'junior'].includes(String(row.position_level).toLowerCase()))
@@ -335,7 +336,8 @@ export default function CSIncoming() {
         }
       }
     } else {
-      loadLiveData({ forceRefresh: true });
+      // Background poll: refresh silently. Without the source, loadLiveData shows the full skeleton every 30s.
+      loadLiveData({ forceRefresh: true, source: context?.source || 'poll' });
     }
   }, [loadLiveData]);
 
@@ -345,11 +347,18 @@ export default function CSIncoming() {
   }, [loadStaticData, loadLiveData]);
 
   useEffect(() => {
+    // assignTicketId (from a notification's Assign button) opens the assignment modal directly.
+    const assignId = location.state?.assignTicketId;
     const focusId = location.state?.focusTicketId;
-    if (focusId && tickets.length > 0) {
-      const match = tickets.find(t => t.id === focusId || t.ticket_ID === focusId);
+    const targetId = assignId ?? focusId;
+    if (targetId && tickets.length > 0) {
+      const numericTarget = Number(String(targetId).replace(/\D/g, ''));
+      const match = tickets.find(t =>
+        t.id === targetId || t.ticket_ID === targetId ||
+        (numericTarget && Number(t.ticket_ID) === numericTarget)
+      );
       if (match) {
-        setModal({ mode: 'summary', ticket: match });
+        setModal({ mode: assignId ? 'assign' : 'summary', ticket: match });
         window.history.replaceState({}, document.title);
       }
     }

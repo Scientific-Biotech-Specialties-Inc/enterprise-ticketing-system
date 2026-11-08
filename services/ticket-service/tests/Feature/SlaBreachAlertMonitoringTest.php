@@ -220,7 +220,9 @@ class SlaBreachAlertMonitoringTest extends TestCase
     {
         DB::table('clients')->updateOrInsert(['id' => $this->testClientId], [
             'client_name' => 'Metro General Hospital',
-            'email' => 'contact@metrogeneral.org',
+            'email' => 'sla_metro_' . $this->testClientId . '@metrogeneral.test',
+            'address' => '10 Metro Ave',
+            'contact_number' => '0000000003',
         ]);
 
         DB::table('employees')->updateOrInsert(['emp_id' => $this->csEmpId], [
@@ -231,6 +233,7 @@ class SlaBreachAlertMonitoringTest extends TestCase
             'department' => 'Customer Service',
             'branch' => 'Main',
             'is_active' => true,
+            'password_hash' => 'secret',
         ]);
 
         DB::table('employees')->updateOrInsert(['emp_id' => $this->assignedEmpId], [
@@ -241,6 +244,7 @@ class SlaBreachAlertMonitoringTest extends TestCase
             'department' => 'Biomedical',
             'branch' => 'Main',
             'is_active' => true,
+            'password_hash' => 'secret',
         ]);
 
         DB::table('employees')->updateOrInsert(['emp_id' => $this->newAssigneeEmpId], [
@@ -251,6 +255,7 @@ class SlaBreachAlertMonitoringTest extends TestCase
             'department' => 'Biomedical',
             'branch' => 'Main',
             'is_active' => true,
+            'password_hash' => 'secret',
         ]);
 
         DB::table('employees')->updateOrInsert(['emp_id' => $this->superAdminEmpId], [
@@ -261,6 +266,7 @@ class SlaBreachAlertMonitoringTest extends TestCase
             'department' => 'Executive',
             'branch' => 'Main',
             'is_active' => true,
+            'password_hash' => 'secret',
         ]);
 
         DB::table('problem_categories')->updateOrInsert(['problem_category_ID' => 1], [
@@ -296,6 +302,7 @@ class SlaBreachAlertMonitoringTest extends TestCase
 
         $ticketId = DB::table('tickets')->insertGetId([
             'ticket_number' => 'TKT-1001',
+            'ticket_type_ID' => 1,
             'created_by' => $this->testClientId,
             'problem_category_ID' => 1,
             'priority_ID' => 1,
@@ -303,7 +310,6 @@ class SlaBreachAlertMonitoringTest extends TestCase
             'title' => 'MRI Scanner Coolant Leak',
             'description' => 'System coolant temperature exceeds threshold.',
             'resolution_due_at' => $overdueDate,
-            'due_at' => $overdueDate,
             'sla_status' => 'At Risk',
             'created_at' => Carbon::now()->subHours(6),
             'updated_at' => Carbon::now()->subHours(1),
@@ -312,7 +318,7 @@ class SlaBreachAlertMonitoringTest extends TestCase
         DB::table('ticket_assignments')->insert([
             'ticket_ID' => $ticketId,
             'employee_ID' => $this->assignedEmpId,
-            'is_active' => true,
+            'assigned_by' => $this->csEmpId,
             'created_at' => Carbon::now()->subHours(5),
         ]);
 
@@ -338,6 +344,7 @@ class SlaBreachAlertMonitoringTest extends TestCase
 
         $ticketId = DB::table('tickets')->insertGetId([
             'ticket_number' => 'TKT-1002',
+            'ticket_type_ID' => 1,
             'created_by' => $this->testClientId,
             'problem_category_ID' => 1,
             'priority_ID' => 1,
@@ -345,7 +352,6 @@ class SlaBreachAlertMonitoringTest extends TestCase
             'title' => 'CT Gantry Rotation Lock',
             'description' => 'Emergency CT room blocked.',
             'resolution_due_at' => $overdueDate,
-            'due_at' => $overdueDate,
             'sla_status' => 'On Track',
             'created_at' => Carbon::now()->subHours(5),
             'updated_at' => Carbon::now()->subHours(2),
@@ -354,7 +360,7 @@ class SlaBreachAlertMonitoringTest extends TestCase
         DB::table('ticket_assignments')->insert([
             'ticket_ID' => $ticketId,
             'employee_ID' => $this->assignedEmpId,
-            'is_active' => true,
+            'assigned_by' => $this->csEmpId,
             'created_at' => Carbon::now()->subHours(4),
         ]);
 
@@ -410,6 +416,7 @@ class SlaBreachAlertMonitoringTest extends TestCase
 
         $ticketId = DB::table('tickets')->insertGetId([
             'ticket_number' => 'TKT-1003',
+            'ticket_type_ID' => 1,
             'created_by' => $this->testClientId,
             'problem_category_ID' => 1,
             'priority_ID' => 1,
@@ -417,7 +424,6 @@ class SlaBreachAlertMonitoringTest extends TestCase
             'title' => 'Telemetry Hub Disconnected',
             'description' => 'Vital signs telemetry unit unreachable.',
             'resolution_due_at' => $overdueDate,
-            'due_at' => $overdueDate,
             'sla_status' => 'At Risk',
             'created_at' => Carbon::now()->subHours(4),
             'updated_at' => Carbon::now()->subHours(1),
@@ -426,7 +432,7 @@ class SlaBreachAlertMonitoringTest extends TestCase
         DB::table('ticket_assignments')->insert([
             'ticket_ID' => $ticketId,
             'employee_ID' => $this->assignedEmpId,
-            'is_active' => true,
+            'assigned_by' => $this->csEmpId,
             'created_at' => Carbon::now()->subHours(3),
         ]);
 
@@ -456,6 +462,7 @@ class SlaBreachAlertMonitoringTest extends TestCase
 
         $ticketId = DB::table('tickets')->insertGetId([
             'ticket_number' => 'TKT-1004',
+            'ticket_type_ID' => 1,
             'created_by' => $this->testClientId,
             'problem_category_ID' => 1,
             'priority_ID' => 1,
@@ -463,7 +470,6 @@ class SlaBreachAlertMonitoringTest extends TestCase
             'title' => 'Dialysis Station 4 Flow Alarm',
             'description' => 'Flow meter alert.',
             'resolution_due_at' => $overdueDate,
-            'due_at' => $overdueDate,
             'sla_status' => 'On Track',
             'created_at' => Carbon::now()->subHours(3),
             'updated_at' => Carbon::now()->subHours(1),
@@ -497,6 +503,7 @@ class SlaBreachAlertMonitoringTest extends TestCase
 
         $ticketId = DB::table('tickets')->insertGetId([
             'ticket_number' => 'TKT-1005',
+            'ticket_type_ID' => 1,
             'created_by' => $this->testClientId,
             'problem_category_ID' => 1,
             'priority_ID' => 1,
@@ -504,7 +511,6 @@ class SlaBreachAlertMonitoringTest extends TestCase
             'title' => 'Infusion Pump Software Glitch',
             'description' => 'Unresponsive touchscreen.',
             'resolution_due_at' => $overdueDate,
-            'due_at' => $overdueDate,
             'sla_status' => 'Breached',
             'sla_breach_notified_at' => Carbon::now()->subHours(3),
             'last_sla_breach_alert_at' => Carbon::now()->subHours(3),

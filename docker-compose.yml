@@ -351,6 +351,8 @@ services:
     restart: always
     volumes:
       - ./services/analytics-service:/var/www
+      # Shared token verification package used by AuthenticateSubsystem (spec 0034).
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
       # Keep vendor/ off the Windows bind mount. Without this every request booted Laravel over the host
       # filesystem (about 24 s), so /api/csat-stats never answered within any timeout (spec 0031 AC-16).
       - analytics-service-vendor:/var/www/vendor
@@ -388,6 +390,8 @@ services:
     volumes:
       - ./services/configuration-service:/var/www
       - configuration-service-vendor:/var/www/vendor
+      # Shared token verification package used by AuthenticateSubsystem (spec 0034).
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
     ports:
       - "8009:8000"
     networks:
@@ -420,6 +424,8 @@ services:
     volumes:
       - ./services/AI-service:/var/www
       - ai-service-vendor:/var/www/vendor
+      # Shared token verification package used by AuthenticateSubsystem (spec 0034).
+      - ./packages/ticketing-auth:/var/www/packages/ticketing-auth
     ports:
       - "8005:8000"
     environment:
@@ -430,9 +436,20 @@ services:
       DB_USERNAME: root
       DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+      # Spec 0036: chat timeout (max 15s) and Knowledge Base embedding settings.
+      GEMINI_TIMEOUT_SECONDS: ${GEMINI_TIMEOUT_SECONDS:-15}
+      KB_EMBEDDING_MODEL: ${KB_EMBEDDING_MODEL:-gemini-embedding-001}
+      KB_EMBEDDING_DIMS: ${KB_EMBEDDING_DIMS:-768}
+      KB_MIN_SCORE: ${KB_MIN_SCORE:-0.55}
       CLAMAV_HOST: clamav
       CLAMAV_PORT: 3310
+      # Staff JWT verification (VerifyEmployeeJwt): token revocation lookup and branch lookup from auth-service.
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      AUTH_SERVICE_URL: http://auth-service:8000
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
     networks:
       - default
       - shared-capstone-network

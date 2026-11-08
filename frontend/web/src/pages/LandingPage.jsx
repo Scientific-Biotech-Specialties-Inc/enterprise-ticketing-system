@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/context/AuthContext';
 import sbsiLogo from '@/assets/SBSI.png';
 import heroBg from '@/assets/SBSI-bg.png';
 
@@ -771,7 +772,31 @@ const featureCards = [
    ═════════════════════════════════════════════════════════════════════ */
 export default function LandingPage() {
   const navigate = useNavigate();
+  const { isAuthenticated, isLoading } = useAuth();
   const [activeSection, setActiveSection] = useState('hero');
+
+  /* Redirect authenticated customers immediately and lock Back/Forward history when logged out */
+  useEffect(() => {
+    if (!isLoading && isAuthenticated) {
+      navigate('/customer-dashboard', { replace: true });
+      return undefined;
+    }
+
+    // Truncate forward history (disables Forward button after logout) and block Back/Forward into dashboard
+    // Capture this page's URL now: inside popstate, window.location already points at the entry
+    // the user went back to, so re-pushing it would send them (and Forward) to the wrong page.
+    const guardUrl = window.location.href;
+    const guardState = window.history.state;
+    window.history.pushState(guardState, '', guardUrl);
+    const handlePopState = (e) => {
+      e.stopImmediatePropagation();
+      window.history.pushState(guardState, '', guardUrl);
+    };
+    window.addEventListener('popstate', handlePopState, true);
+    return () => {
+      window.removeEventListener('popstate', handlePopState, true);
+    };
+  }, [isLoading, isAuthenticated, navigate]);
 
   /* Inject scoped styles */
   useEffect(() => {
@@ -822,7 +847,7 @@ export default function LandingPage() {
               <button className={`lp-nav-link${activeSection === 'features' ? ' is-active' : ''}`} onClick={() => scrollTo('features')}>Features</button>
             </nav>
             <div className="lp-nav-divider" />
-            <button className="lp-btn-login" onClick={() => navigate('/customer')}>Log in</button>
+            <button className="lp-btn-login" onClick={() => navigate('/customer', { replace: true })}>Log in</button>
           </div>
         </div>
       </header>
@@ -838,7 +863,7 @@ export default function LandingPage() {
             A unified platform for managing contracts, expenses, productivity and support — built for the business finance and marketing industry.
           </p>
           <div className="lp-hero-ctas">
-            <button className="lp-cta-primary" onClick={() => navigate('/customer')}>
+            <button className="lp-cta-primary" onClick={() => navigate('/customer', { replace: true })}>
               <span>Get Started</span>
               <ArrowRightIcon size={18} />
             </button>
@@ -888,7 +913,7 @@ export default function LandingPage() {
                 </div>
 
                 <div className="lp-slide-action">
-                  <button className="lp-slide-btn" style={{ backgroundColor: ts.accentColor }} onClick={() => navigate('/customer')}>
+                  <button className="lp-slide-btn" style={{ backgroundColor: ts.accentColor }} onClick={() => navigate('/customer', { replace: true })}>
                     <span>Access {ts.acronym} Module</span>
                     <ArrowRightIcon size={15} />
                   </button>
@@ -1025,10 +1050,10 @@ export default function LandingPage() {
             <div className="lp-footer-col">
               <h4 className="lp-footer-col-title">Ticketing System</h4>
               <ul className="lp-footer-list">
-                <li><button className="lp-footer-link-item" onClick={() => navigate('/customer')}>Submit a Ticket</button></li>
-                <li><button className="lp-footer-link-item" onClick={() => navigate('/customer')}>Track My Tickets</button></li>
-                <li><button className="lp-footer-link-item" onClick={() => navigate('/customer')}>SLA Dashboard</button></li>
-                <li><button className="lp-footer-link-item" onClick={() => navigate('/customer')}>Knowledge Base</button></li>
+                <li><button className="lp-footer-link-item" onClick={() => navigate('/customer', { replace: true })}>Submit a Ticket</button></li>
+                <li><button className="lp-footer-link-item" onClick={() => navigate('/customer', { replace: true })}>Track My Tickets</button></li>
+                <li><button className="lp-footer-link-item" onClick={() => navigate('/customer', { replace: true })}>SLA Dashboard</button></li>
+                <li><button className="lp-footer-link-item" onClick={() => navigate('/customer', { replace: true })}>Knowledge Base</button></li>
               </ul>
             </div>
 
@@ -1039,7 +1064,7 @@ export default function LandingPage() {
                 <li><button className="lp-footer-link-item" onClick={() => scrollTo('hero')}>Home Overview</button></li>
                 <li><button className="lp-footer-link-item" onClick={() => scrollTo('systems')}>Ticketing System</button></li>
                 <li><button className="lp-footer-link-item" onClick={() => scrollTo('features')}>Platform Features</button></li>
-                <li><button className="lp-footer-link-item lp-footer-link-accent" onClick={() => navigate('/customer')}>Access Portal</button></li>
+                <li><button className="lp-footer-link-item lp-footer-link-accent" onClick={() => navigate('/customer', { replace: true })}>Access Portal</button></li>
               </ul>
             </div>
 

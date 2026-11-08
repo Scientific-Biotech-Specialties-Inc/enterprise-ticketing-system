@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import ExternalFeedbackPage from './ExternalFeedbackPage';
+import tokenStore from '@/auth/tokenStore';
 
 // Mock react-router-dom
 const mockNavigate = vi.fn();
@@ -314,6 +315,38 @@ describe('ExternalFeedbackPage Component Tests (Category Specific Feedback Accep
 
     // Customer is not blocked from submitting
     expect(screen.getByRole('button', { name: /Submit Feedback/i })).toBeInTheDocument();
+  });
+
+  it('spec 0034 AC-4: asks the analytics service for existing feedback with the signed in bearer token', async () => {
+    tokenStore.setToken('customer-token-xyz');
+
+    try {
+      render(<ExternalFeedbackPage />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Customer Satisfaction Survey')).toBeInTheDocument();
+      });
+
+      const feedbackCall = global.fetch.mock.calls.find(([url]) => String(url).includes('/api/ticketing/analytics/feedback/ticket/'));
+      expect(feedbackCall).toBeDefined();
+      expect(feedbackCall[1].headers.Authorization).toBe('Bearer customer-token-xyz');
+    } finally {
+      tokenStore.clearToken();
+    }
+  });
+
+  it('spec 0034 AC-4: sends no Authorization header when nobody is signed in', async () => {
+    tokenStore.clearToken();
+
+    render(<ExternalFeedbackPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Customer Satisfaction Survey')).toBeInTheDocument();
+    });
+
+    const feedbackCall = global.fetch.mock.calls.find(([url]) => String(url).includes('/api/ticketing/analytics/feedback/ticket/'));
+    expect(feedbackCall).toBeDefined();
+    expect(feedbackCall[1].headers).not.toHaveProperty('Authorization');
   });
 
   it('covers AC-9: ensures responsive and accessible form controls for desktop and mobile', async () => {

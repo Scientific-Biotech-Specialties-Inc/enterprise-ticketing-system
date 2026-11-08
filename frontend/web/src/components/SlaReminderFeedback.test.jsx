@@ -317,7 +317,7 @@ describe('Customer Feedback Lifecycle Tests (Submit, Dismiss, Edit, Delete)', ()
     expect(onEditMock).toHaveBeenCalledWith(recentFeedback);
   });
 
-  it('covers AC-11 (delete cancel): cancels delete confirmation modal and keeps feedback unchanged', () => {
+  it('spec 0034 AC-12: the customer portal has no delete feedback action', () => {
     const recentFeedback = {
       submitted: true,
       submittedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
@@ -328,71 +328,11 @@ describe('Customer Feedback Lifecycle Tests (Submit, Dismiss, Edit, Delete)', ()
 
     render(<TicketFeedbackSection ticket={resolvedTicket} onLeaveFeedback={vi.fn()} />);
 
-    const deleteBtn = screen.getByRole('button', { name: /delete/i });
-    fireEvent.click(deleteBtn);
-
-    expect(screen.getByText('Delete Feedback?')).toBeInTheDocument();
-
-    // Click Cancel
-    const cancelBtn = screen.getByRole('button', { name: /cancel/i });
-    fireEvent.click(cancelBtn);
-
+    // Edit stays available inside the 48 hour window, delete is for admins only (done in the backend).
+    expect(screen.getByRole('button', { name: /edit/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Delete Feedback?')).not.toBeInTheDocument();
     expect(mockFeedbackData.deleteFeedback).not.toHaveBeenCalled();
-    expect(screen.getByText('Customer Feedback')).toBeInTheDocument();
-  });
-
-  it('opens delete confirmation modal and calls deleteFeedback', async () => {
-    const recentFeedback = {
-      submitted: true,
-      submittedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-      ratings: { 101: 5 },
-      comments: { 101: 'Great support!' },
-    };
-    mockFeedbackData.getTicketFeedback.mockReturnValue(recentFeedback);
-
-    render(<TicketFeedbackSection ticket={resolvedTicket} onLeaveFeedback={vi.fn()} />);
-
-    const deleteBtn = screen.getByRole('button', { name: /delete/i });
-    fireEvent.click(deleteBtn);
-
-    expect(screen.getByText('Delete Feedback?')).toBeInTheDocument();
-    expect(screen.getByText(/permanently delete your submitted experience feedback/i)).toBeInTheDocument();
-
-    const confirmDeleteBtn = screen.getByRole('button', { name: /delete feedback/i });
-    fireEvent.click(confirmDeleteBtn);
-
-    await waitFor(() => {
-      expect(mockFeedbackData.deleteFeedback).toHaveBeenCalledWith(882);
-    });
-  });
-
-  it('covers AC-11 (delete error): displays error message when deleteFeedback fails and keeps feedback intact', async () => {
-    const recentFeedback = {
-      submitted: true,
-      submittedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-      ratings: { 101: 5 },
-      comments: { 101: 'Great support!' },
-    };
-    mockFeedbackData.getTicketFeedback.mockReturnValue(recentFeedback);
-    mockFeedbackData.deleteFeedback.mockRejectedValueOnce({
-      response: { data: { message: 'Database delete failed. Please retry.' } },
-    });
-
-    render(<TicketFeedbackSection ticket={resolvedTicket} onLeaveFeedback={vi.fn()} />);
-
-    const deleteBtn = screen.getByRole('button', { name: /delete/i });
-    fireEvent.click(deleteBtn);
-
-    const confirmDeleteBtn = screen.getByRole('button', { name: /delete feedback/i });
-    fireEvent.click(confirmDeleteBtn);
-
-    await waitFor(() => {
-      expect(screen.getByText('Database delete failed. Please retry.')).toBeInTheDocument();
-    });
-
-    // Feedback section remains active
-    expect(screen.getByText('Delete Feedback?')).toBeInTheDocument();
   });
 
   it('locks feedback actions when 48-hour edit window is expired', () => {

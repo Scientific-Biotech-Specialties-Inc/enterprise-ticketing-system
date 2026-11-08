@@ -23,6 +23,10 @@ class BranchCategoryTest extends TestCase
     {
         parent::setUp();
 
+        $this->seedBranch('luzon', 'Luzon Regional Center', 'LUZ');
+        $this->seedBranch('visayas', 'Visayas Medical Hub', 'VIS');
+        $this->seedBranch('main', 'Main Branch', 'MAIN');
+
         $this->superAdmin = Employee::where('role', 'superadmin')->first()
             ?? Employee::create([
                 'emp_id' => 99981,
@@ -59,6 +63,47 @@ class BranchCategoryTest extends TestCase
             ]);
             \Illuminate\Support\Facades\DB::table('branch_sla_policies')->where('category_name', 'IT')->update(['category_id' => $itCatId]);
         }
+
+        $this->seedLuzonBranchFixtures();
+    }
+
+    /**
+     * Mirror the luzon seed data from the 2026_10_05_000003 migration. The shared test database
+     * does not keep it, and these tests depend on it.
+     */
+    private function seedLuzonBranchFixtures(): void
+    {
+        $db = \Illuminate\Support\Facades\DB::class;
+        $itCatId = $db::table('problem_categories')->where('category_name', 'IT')->value('problem_category_ID');
+
+        foreach ([1 => 'Low', 2 => 'Medium', 3 => 'High', 4 => 'Critical'] as $pid => $pname) {
+            if ($db::table('ticket_priorities')->where('priority_ID', $pid)->doesntExist()) {
+                $db::table('ticket_priorities')->insert(['priority_ID' => $pid, 'priority_name' => $pname, 'created_at' => now(), 'updated_at' => now()]);
+            }
+        }
+
+        $categoryIds = [];
+        foreach ([
+            'Biomedical Facility Maintenance' => 'Specialized biomedical hardware and clinical facility maintenance',
+            'Radiology Support' => 'Imaging equipment calibration and radiology software support',
+        ] as $name => $description) {
+            $categoryIds[$name] = $db::table('problem_categories')
+                ->where('branch_id', 'luzon')->where('category_name', $name)->value('problem_category_ID')
+                ?? $db::table('problem_categories')->insertGetId([
+                    'category_name' => $name, 'branch_id' => 'luzon', 'description' => $description,
+                    'is_active' => true, 'is_system_default' => false,
+                    'created_at' => now(), 'updated_at' => now(),
+                ]);
+        }
+
+        $db::table('branch_sla_policies')->updateOrInsert(
+            ['branch_id' => 'luzon', 'category_name' => 'IT', 'priority' => 'High'],
+            ['category_id' => $itCatId, 'resolution_time_limit' => 360, 'response_time_limit' => 30, 'created_at' => now(), 'updated_at' => now()]
+        );
+        $db::table('branch_sla_policies')->updateOrInsert(
+            ['branch_id' => 'luzon', 'category_name' => 'Biomedical Facility Maintenance', 'priority' => 'Critical'],
+            ['category_id' => $categoryIds['Biomedical Facility Maintenance'], 'resolution_time_limit' => 120, 'response_time_limit' => 15, 'created_at' => now(), 'updated_at' => now()]
+        );
     }
 
     public function test_unauthenticated_is_rejected(): void
@@ -215,7 +260,7 @@ class BranchCategoryTest extends TestCase
 
         // Ensure at least one open ticket references it
         $clientId = DB::table('clients')->value('id') ?? 1;
-        $machineId = DB::table('machines')->value('machine_ID') ?? 1;
+        $machineId = DB::table('machines')->value('machine_ID') ?? $this->seedMachine(1);
         DB::table('tickets')->insert([
             'ticket_number' => 'TEST-OPEN-999',
             'title' => 'Open Ticket Blocking Deletion',
@@ -340,7 +385,7 @@ class BranchCategoryTest extends TestCase
             ->assertOk();
 
         $clientId = DB::table('clients')->value('id') ?? 1;
-        $machineId = DB::table('machines')->value('machine_ID') ?? 1;
+        $machineId = DB::table('machines')->value('machine_ID') ?? $this->seedMachine(1);
         $itCatId = (int) DB::table('problem_categories')->where('category_name', 'IT')->value('problem_category_ID');
 
         $ticketId = DB::table('tickets')->insertGetId([

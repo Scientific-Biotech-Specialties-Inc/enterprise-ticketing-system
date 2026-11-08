@@ -16,6 +16,7 @@ class KbEmbedding extends Model
         'article_id',
         'embedding',
         'dimensions',
+        'embedding_model',
         'is_active',
     ];
 

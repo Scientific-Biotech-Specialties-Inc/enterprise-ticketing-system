@@ -3,6 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Exceptions\ArticleMissingEmbeddingsException;
+use App\Exceptions\EmbeddingFailedException;
+use App\Exceptions\IndexingInProgressException;
+use App\Http\Middleware\AuthenticateTokenOrInternal;
 use App\Models\KbArticle;
 use App\Models\KbChunk;
 use App\Models\KbEmbedding;
@@ -11,6 +14,7 @@ use App\Services\AuditLoggingService;
 use App\Services\ClamAVScanner;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -33,78 +37,77 @@ class KbArticleController extends Controller
     }
 
     /**
-     * Resolves the authenticated user, role, and acting administrator name.
+     * Spec 0036 (AC-11): resolve the acting user only from verified identity.
+     *
+     * The KB write routes sit behind `auth.token_or_internal`, so by the time this runs the caller
+     * either sent a valid X-Internal-Token or a token whose signature was verified (staff RS256 JWT,
+     * or a customer Passport token). Nothing is read from an unverified token payload, the request
+     * body, or caller supplied headers.
      */
     protected function resolveActor(Request $request): array
     {
-        $authHeader = $request->header('Authorization');
-        $actorName = $request->input('actor') ?? $request->header('X-Actor-Name') ?? 'Super Admin';
-        $role = 'guest';
-        $isSuperAdmin = false;
-
-        if (app()->environment('local') && empty($authHeader)) {
-            $isSuperAdmin = true;
-            $role = 'superadmin';
+        if ($request->attributes->get('internal_call') === true || AuthenticateTokenOrInternal::hasValidInternalToken($request)) {
+            return ['actor' => 'Internal Service', 'role' => 'superadmin', 'is_super_admin' => true];
         }
 
-        if ($authHeader && str_starts_with($authHeader, 'Bearer ')) {
-            $token = substr($authHeader, 7);
-            if ($token === 'frontend-dev-token' || (app()->environment('local') && $token === 'frontend-dev-token')) {
-                $isSuperAdmin = true;
-                $role = 'superadmin';
-                $actorName = $request->input('actor') ?? $request->header('X-Actor-Name') ?? 'Super Admin';
-            } else {
-                $parts = explode('.', $token);
-                if (count($parts) === 3) {
-                    $payloadB64 = $parts[1];
-                    $remainder = strlen($payloadB64) % 4;
-                    if ($remainder) {
-                        $payloadB64 .= str_repeat('=', 4 - $remainder);
-                    }
-                    $payloadJson = base64_decode(strtr($payloadB64, '-_', '+/'));
-                    $payload = json_decode($payloadJson, true);
-
-                    if (is_array($payload)) {
-                        $tokenRole = strtolower(str_replace([' ', '_', '-'], '', (string) ($payload['role'] ?? '')));
-                        $tokenDept = strtolower(str_replace([' ', '_', '-'], '', (string) ($payload['department'] ?? '')));
-                        $role = $tokenRole ?: 'employee';
-
-                        $isSuperAdmin = in_array($tokenRole, ['superadmin', 'systemadministrator', 'admin'])
-                            || in_array($tokenDept, ['superadmin', 'admin']);
-
-                        $tokenName = trim(($payload['first_name'] ?? '') . ' ' . ($payload['last_name'] ?? ''));
-                        if (empty($tokenName)) {
-                            $tokenName = $payload['name'] ?? $payload['email'] ?? null;
-                        }
-                        if (!empty($tokenName)) {
-                            $actorName = $tokenName;
-                        }
-                    }
-                }
-            }
-        } elseif ($user = (auth('api')->user() ?? $request->user())) {
-            $userRole = strtolower(str_replace([' ', '_', '-'], '', (string) ($user->role ?? '')));
-            $userDept = strtolower(str_replace([' ', '_', '-'], '', (string) ($user->department ?? '')));
-            $role = $userRole ?: 'employee';
-            $isSuperAdmin = in_array($userRole, ['superadmin', 'systemadministrator', 'admin'])
-                || in_array($userDept, ['superadmin', 'admin']);
-            $actorName = $user->name ?? $user->email ?? 'Super Admin';
+        $user = $request->user() ?? Auth::user();
+        if (!$user) {
+            return ['actor' => 'Unknown', 'role' => 'guest', 'is_super_admin' => false];
         }
 
-        // Internal token check
-        $internalToken = $request->header('X-Internal-Token');
-        $expectedToken = env('INTERNAL_TOKEN');
-        if (!empty($internalToken) && !empty($expectedToken) && hash_equals((string) $expectedToken, (string) $internalToken)) {
-            $isSuperAdmin = true;
-            $role = 'superadmin';
-            $actorName = $request->input('actor') ?? 'Internal Service';
+        $normalize = fn ($value) => strtolower(str_replace([' ', '_', '-'], '', (string) ($value ?? '')));
+        $userRole = $normalize($user->role ?? null);
+        $userDept = $normalize($user->department ?? null);
+
+        $name = trim(((string) ($user->first_name ?? '')) . ' ' . ((string) ($user->last_name ?? '')));
+        if ($name === '') {
+            $name = (string) ($user->name ?? $user->email ?? 'Super Admin');
         }
 
         return [
-            'actor' => $actorName ?: 'Super Admin',
-            'role' => $role,
-            'is_super_admin' => $isSuperAdmin,
+            'actor' => $name !== '' ? $name : 'Super Admin',
+            'role' => $userRole ?: 'employee',
+            'is_super_admin' => in_array($userRole, ['superadmin', 'systemadministrator', 'admin'], true)
+                || in_array($userDept, ['superadmin', 'admin'], true),
         ];
+    }
+
+    /**
+     * Probe summary for API responses (spec 0036, AC-5).
+     */
+    protected function probeSummary(KbArticle $article): array
+    {
+        $probe = RagService::lastProbe($article);
+        $score = $article->probe_score !== null ? round((float) $article->probe_score, 4) : null;
+        $rank = isset($probe['rank']) ? (int) $probe['rank'] : null;
+
+        return [
+            'score' => $score,
+            'rank' => $rank,
+            'low_retrievability' => RagService::isLowRetrievability($score, $rank, $this->ragService->minScore()),
+        ];
+    }
+
+    /**
+     * Shared error response for indexing failures (502) and a held index lock (409).
+     */
+    protected function indexingErrorResponse(\Throwable $e, KbArticle $article): JsonResponse
+    {
+        if ($e instanceof IndexingInProgressException) {
+            return response()->json([
+                'success' => false,
+                'error_code' => 'INDEXING_IN_PROGRESS',
+                'message' => $e->getMessage(),
+                'data' => $this->formatArticle($article->fresh() ?? $article),
+            ], 409);
+        }
+
+        return response()->json([
+            'success' => false,
+            'error_code' => 'INDEXING_FAILED',
+            'message' => 'The article was saved, but indexing for AI search failed: ' . $e->getMessage(),
+            'data' => $this->formatArticle($article->fresh() ?? $article),
+        ], 502);
     }
 
     /**
@@ -137,13 +140,18 @@ class KbArticleController extends Controller
             'tags' => is_array($article->tags) ? $article->tags : [],
             'description' => (string) ($article->description ?? ''),
             'content' => (string) ($article->content ?? ''),
-            'file_path' => $article->file_path,
+            // The raw storage path is internal (it points at the public disk, which nginx serves
+            // without auth). Clients download through GET /articles/{id}/file instead.
+            'has_file' => !empty($article->file_path),
             'history' => is_array($article->history) ? $article->history : [],
             'published_at' => $publishedAt,
             'archived_at' => $archivedAt,
             'chunks_count' => $article->chunks()->count(),
             'embeddings_count' => $article->embeddings()->count(),
             'active_embeddings_count' => $article->embeddings()->where('is_active', true)->count(),
+            'index_error' => $article->index_error,
+            'probe_score' => $article->probe_score !== null ? round((float) $article->probe_score, 4) : null,
+            'low_retrievability' => $article->status === 'Published' ? $this->probeSummary($article)['low_retrievability'] : false,
             'created_at' => $article->created_at?->toIso8601String(),
             'updated_at' => $article->updated_at?->toIso8601String(),
         ];
@@ -245,15 +253,84 @@ class KbArticleController extends Controller
             'version' => 'nullable|string|max:20',
             'file_type' => 'nullable|string|max:20',
             'size' => 'nullable|string|max:50',
-            'tags' => 'nullable|array',
+            'tags' => 'nullable',
             'description' => 'nullable|string',
             'content' => 'nullable|string',
             'status' => 'nullable|in:Draft,Published,Archived',
             'auto_index' => 'nullable|boolean',
+            'file' => 'nullable|file|max:10240',
         ]);
 
         $status = $validated['status'] ?? 'Draft';
         $actor = $auth['actor'];
+
+        $file = $request->file('file');
+        $storedPath = null;
+        $content = $validated['content'] ?? '';
+        $description = $validated['description'] ?? '';
+        $fileType = $validated['file_type'] ?? ($file ? null : 'ARTICLE');
+        $size = $validated['size'] ?? null;
+
+        if ($file) {
+            $filePath = $file->getRealPath();
+            $ext = strtolower($file->getClientOriginalExtension());
+            if (!in_array($ext, ['pdf', 'docx', 'csv', 'txt'])) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid file format. Only PDF, DOCX, CSV, and TXT files are supported.',
+                ], 422);
+            }
+
+            try {
+                $scanResult = $this->scanner->scanDetails($filePath);
+            } catch (\Throwable $e) {
+                Log::error('ClamAV scan error during article creation: ' . $e->getMessage());
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Antivirus scan service error: ' . $e->getMessage(),
+                ], 500);
+            }
+
+            if (!$scanResult['clean']) {
+                Log::warning('Malware detected during article file upload', [
+                    'threat' => $scanResult['threat'],
+                    'file' => $file->getClientOriginalName(),
+                    'actor' => $actor,
+                ]);
+
+                return response()->json([
+                    'success' => false,
+                    'error_code' => 'MALWARE_DETECTED',
+                    'threat' => $scanResult['threat'] ?? 'Malware.Detected',
+                    'message' => 'Security Alert: Uploaded file failed ClamAV antivirus inspection and was rejected.',
+                ], 422);
+            }
+
+            $safeName = time() . '_' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $file->getClientOriginalName());
+            $storedPath = $file->storeAs('kb_articles', $safeName, 'public');
+            $extractedContent = $this->extractTextFromFile($file, $ext);
+            if (!empty($extractedContent)) {
+                $content = $extractedContent;
+                if (empty($description)) {
+                    $description = mb_substr($extractedContent, 0, 250);
+                }
+            }
+            $fileType = strtoupper($ext);
+            $size = sprintf('%.1f %s', $file->getSize() >= 1048576 ? $file->getSize() / 1048576 : $file->getSize() / 1024, $file->getSize() >= 1048576 ? 'MB' : 'KB');
+        }
+
+        if (empty($fileType)) {
+            $fileType = 'ARTICLE';
+        }
+
+        if (empty($size)) {
+            $size = sprintf('%.1f KB', max(strlen($content) / 1024, 0.1));
+        }
+
+        $tags = $validated['tags'] ?? [];
+        if (is_string($tags)) {
+            $tags = array_values(array_filter(array_map('trim', explode(',', $tags))));
+        }
 
         $historyEntry = [
             'id' => (string) Str::uuid(),
@@ -261,7 +338,9 @@ class KbArticleController extends Controller
             'timestamp' => now()->format('Y-m-d H:i:s'),
             'actor' => $actor,
             'action' => 'Created',
-            'details' => "Article created in {$status} state.",
+            'details' => $file
+                ? "Article created from uploaded {$file->getClientOriginalName()} in {$status} state."
+                : "Article manually created in {$status} state.",
         ];
 
         $article = KbArticle::create([
@@ -269,43 +348,55 @@ class KbArticleController extends Controller
             'category' => $validated['category'] ?? 'Troubleshooting Guides',
             'machine' => $validated['machine'] ?? null,
             'version' => $validated['version'] ?? '1.0',
-            'file_type' => $validated['file_type'] ?? 'PDF',
+            'file_type' => $fileType,
+            'file_path' => $storedPath,
             'uploaded_by' => $actor,
-            'size' => $validated['size'] ?? '1.5 MB',
-            'status' => 'Draft', // initial state
-            'processing_status' => !empty($validated['content']) ? 'Ready for AI Search' : 'Draft',
-            'tags' => $validated['tags'] ?? [],
-            'description' => $validated['description'] ?? '',
-            'content' => $validated['content'] ?? '',
+            'size' => $size,
+            'status' => 'Draft', // initial state; publish is a separate step that requires indexing
+            'processing_status' => 'Draft',
+            'tags' => $tags,
+            'description' => $description,
+            'content' => $content,
             'history' => [$historyEntry],
         ]);
 
-        // Process embeddings if content is provided
-        if (!empty($validated['content']) || !empty($article->description)) {
-            $this->ragService->indexArticle($article);
-            // Default embeddings are inactive until published
-            KbEmbedding::where('article_id', $article->id)->update(['is_active' => false]);
+        // Spec 0036: index inside this request so the article is ready to publish when it returns.
+        // Embeddings stay inactive until the article is published.
+        if (!empty($article->content) || !empty($article->description)) {
+            try {
+                $this->ragService->indexArticle($article);
+            } catch (EmbeddingFailedException|IndexingInProgressException $e) {
+                return $this->indexingErrorResponse($e, $article);
+            }
         }
 
         // If explicitly requested to publish immediately
+        $probe = null;
         if ($status === 'Published') {
             try {
                 $article = $this->ragService->publishArticle($article, $actor);
+                $probe = $this->probeSummary($article);
             } catch (ArticleMissingEmbeddingsException $e) {
                 return response()->json([
                     'success' => false,
                     'message' => $e->getMessage(),
-                    'error_code' => 'NO_EMBEDDINGS',
-                    'data' => $this->formatArticle($article),
+                    'error_code' => 'NOT_INDEXED',
+                    'data' => $this->formatArticle($article->fresh()),
                 ], 422);
             }
         }
 
-        return response()->json([
+        $body = [
             'success' => true,
             'message' => 'Article created successfully.',
-            'data' => $this->formatArticle($article),
-        ], 201);
+            'data' => $this->formatArticle($article->fresh()),
+        ];
+        if ($probe !== null) {
+            $body['probe'] = $probe;
+            $body['low_retrievability'] = $probe['low_retrievability'];
+        }
+
+        return response()->json($body, 201);
     }
 
     /**
@@ -349,28 +440,75 @@ class KbArticleController extends Controller
             'details' => 'Article metadata or content modified.',
         ];
 
+        // Publish state and indexing state are owned by the server (publish, archive and indexArticle).
+        // Letting a client set them would bypass the NOT_INDEXED guard (spec 0036, AC-3).
+        unset($validated['status'], $validated['processing_status']);
+
         $article->fill($validated);
+
+        // Capture old -> new values for the audit trail before saving. Long text bodies are
+        // flagged as changed rather than copied, to keep the audit row small.
+        $changes = [];
+        foreach (array_keys($article->getDirty()) as $field) {
+            if (in_array($field, ['content', 'description'], true)) {
+                $changes[$field] = ['changed' => true];
+                continue;
+            }
+            $changes[$field] = ['from' => $article->getOriginal($field), 'to' => $article->getAttribute($field)];
+        }
+
         $article->history = $history;
         $article->save();
 
-        // Enqueue background auto-indexing on update
+        if (!empty($changes)) {
+            $this->auditLoggingService->logArticleChange(
+                (int) $article->id,
+                (string) $article->title,
+                'Metadata Updated',
+                $auth['actor'],
+                $auth['role'],
+                ['changes' => $changes],
+                $request->ip()
+            );
+        }
+
+        // Spec 0036 (AC-6, AC-7): re-embed only when the indexed text changed. A Published article
+        // keeps serving its old set until the new one is swapped in; a metadata only edit just
+        // refreshes chunk metadata in place without calling the embedding API.
+        $indexError = null;
+        $hasIndexableText = trim((string) $article->content) !== '' || trim((string) $article->description) !== '';
+        if ($hasIndexableText || $article->content_hash !== null) {
+            try {
+                $this->ragService->indexArticle($article);
+            } catch (EmbeddingFailedException|IndexingInProgressException $e) {
+                $indexError = $e;
+            }
+        }
+
+        // Cache refresh and broadcast only; indexing already happened above.
         try {
             event(new \App\Events\ArticleUpdated($article, $auth['actor']));
         } catch (\Throwable $e) {
             Log::warning('Dispatching ArticleUpdated event failed: ' . $e->getMessage());
         }
 
+        if ($indexError !== null) {
+            return $this->indexingErrorResponse($indexError, $article);
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Article updated successfully.',
-            'data' => $this->formatArticle($article),
+            'data' => $this->formatArticle($article->fresh()),
         ]);
     }
 
     /**
      * POST /api/articles/{id}/publish
-     * Super Admin action: Publish article, activating existing embeddings and/or enqueuing
-     * background re-indexing so the article becomes retrievable without manual steps.
+     * Super Admin action (spec 0036, AC-3 to AC-5): publish an article that is already indexed
+     * with the current embedding model. Publish never indexes; it activates the existing
+     * embeddings (IDs unchanged), runs the self retrieval probe, and the article is searchable
+     * as soon as this returns. Otherwise 422 NOT_INDEXED.
      */
     public function publish(Request $request, $id): JsonResponse
     {
@@ -387,35 +525,29 @@ class KbArticleController extends Controller
             return response()->json(['success' => false, 'message' => 'Article not found.'], 404);
         }
 
-        // Check if content exists
-        if (empty($article->content) && empty($article->description)) {
-            return response()->json([
-                'success' => false,
-                'message' => "Cannot publish article without content or description.",
-                'error_code' => 'NO_CONTENT',
-            ], 422);
-        }
-
+        // An article with no content was never indexed, so the single NOT_INDEXED guard in
+        // publishArticle() covers it too (spec 0036, AC-3).
         try {
-            $embeddingsCount = KbEmbedding::where('article_id', $article->id)->count();
-            if ($embeddingsCount > 0) {
-                $updated = $this->ragService->publishArticle($article, $auth['actor']);
-            } else {
-                $article->status = 'Published';
-                $article->published_at = now();
-                $article->processing_status = 'Processing';
-                $article->save();
-                $updated = $article;
-            }
-
-            // Enqueue background re-indexing
-            event(new \App\Events\ArticlePublished($updated, $auth['actor']));
+            // publishArticle() dispatches ArticlePublished itself (cache refresh and broadcast only).
+            $updated = $this->ragService->publishArticle($article, $auth['actor']);
+            $probe = $this->probeSummary($updated);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Article published successfully and queued for active RAG search indexing.',
+                'message' => $probe['low_retrievability']
+                    ? 'Article published, but it is hard to find: its own title and description did not rank it highly. Consider improving the title, description or content.'
+                    : 'Article published and searchable by the AI assistant.',
                 'data' => $this->formatArticle($updated),
+                'probe' => $probe,
+                'low_retrievability' => $probe['low_retrievability'],
             ]);
+        } catch (ArticleMissingEmbeddingsException $e) {
+            return response()->json([
+                'success' => false,
+                'error_code' => 'NOT_INDEXED',
+                'message' => $e->getMessage(),
+                'data' => $this->formatArticle($article->fresh()),
+            ], 422);
         } catch (\Throwable $e) {
             Log::error('Failed to publish article: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
             return response()->json([
@@ -556,8 +688,12 @@ class KbArticleController extends Controller
             return response()->json(['success' => false, 'message' => 'Article not found.'], 404);
         }
 
-        $this->ragService->indexArticle($article);
-        $this->ragService->refreshIndex($id);
+        // Retry button for 'Indexing failed' (spec 0036): always embed again with the current model.
+        try {
+            $this->ragService->indexArticle($article, null, true);
+        } catch (EmbeddingFailedException|IndexingInProgressException $e) {
+            return $this->indexingErrorResponse($e, $article);
+        }
 
         return response()->json([
             'success' => true,
@@ -648,7 +784,7 @@ class KbArticleController extends Controller
         $article->file_path = $storedPath;
         $article->file_type = strtoupper($ext);
         $article->size = $formattedSize;
-        $article->processing_status = 'Ready for AI Search';
+        // processing_status is set by indexArticle() below (Indexing, then Ready or failed).
 
         // 6. Record history entry
         $history = is_array($article->history) ? $article->history : [];
@@ -665,13 +801,23 @@ class KbArticleController extends Controller
         $article->history = $history;
         $article->save();
 
-        // 7. Re-index embeddings
-        $this->ragService->indexArticle($article);
-        $this->ragService->refreshIndex($article->id);
+        $this->auditLoggingService->logArticleChange(
+            (int) $article->id,
+            (string) $article->title,
+            'File Replaced',
+            $auth['actor'],
+            $auth['role'],
+            ['file_name' => $file->getClientOriginalName(), 'file_size' => $formattedSize, 'file_type' => strtoupper($ext)],
+            $request->ip()
+        );
 
-        // If article is published, ensure newly created embeddings are marked active
-        if ($article->status === 'Published') {
-            KbEmbedding::where('article_id', $article->id)->update(['is_active' => true]);
+        // 7. Re-index embeddings (spec 0036, AC-6): the new set is built inactive and swapped in
+        // atomically, activated if Published. On failure the old set keeps serving customers.
+        $indexError = null;
+        try {
+            $this->ragService->indexArticle($article);
+        } catch (EmbeddingFailedException|IndexingInProgressException $e) {
+            $indexError = $e;
         }
 
         // Broadcast update event
@@ -681,10 +827,18 @@ class KbArticleController extends Controller
             Log::warning('Dispatching ArticleUpdated event failed: ' . $e->getMessage());
         }
 
+        if ($indexError !== null) {
+            return $this->indexingErrorResponse($indexError, $article);
+        }
+
+        // Index internals are not needed by the client after a replacement.
+        $data = $this->formatArticle($article->fresh());
+        unset($data['chunks_count'], $data['embeddings_count'], $data['active_embeddings_count']);
+
         return response()->json([
             'success' => true,
             'message' => "File for \"{$article->title}\" was successfully replaced, scanned by ClamAV, and re-indexed.",
-            'data' => $this->formatArticle($article->fresh()),
+            'data' => $data,
         ]);
     }
 
@@ -962,6 +1116,7 @@ class KbArticleController extends Controller
 
         $importedArticles = [];
         $failedCount = 0;
+        $indexFailedCount = 0;
         $groupedArticles = [];
         $currentArticle = null;
 
@@ -1104,17 +1259,21 @@ class KbArticleController extends Controller
                 'uploaded_by' => $actor,
                 'size' => sprintf('%.1f KB', max(strlen($fullContent) / 1024, 0.1)),
                 'status' => 'Draft',
-                'processing_status' => !empty($fullContent) ? 'Ready for AI Search' : 'Draft',
+                'processing_status' => 'Draft',
                 'tags' => $tags,
                 'description' => $description,
                 'content' => $fullContent,
                 'history' => [$historyEntry],
             ]);
 
-            // Index chunks and embeddings
+            // Index chunks and embeddings (inactive, since imports start as Draft). A failure marks
+            // only this article 'Indexing failed' with its reason; the import carries on.
             if (!empty($fullContent)) {
-                $this->ragService->indexArticle($article);
-                KbEmbedding::where('article_id', $article->id)->update(['is_active' => false]);
+                try {
+                    $this->ragService->indexArticle($article);
+                } catch (EmbeddingFailedException|IndexingInProgressException $e) {
+                    $indexFailedCount++;
+                }
             }
 
             $importedArticles[] = $this->formatArticle($article->fresh());
@@ -1125,6 +1284,7 @@ class KbArticleController extends Controller
             'message' => "Successfully imported " . count($importedArticles) . " knowledge articles from CSV.",
             'count' => count($importedArticles),
             'skipped' => $failedCount,
+            'index_failed' => $indexFailedCount,
             'data' => $importedArticles,
         ], 201);
     }

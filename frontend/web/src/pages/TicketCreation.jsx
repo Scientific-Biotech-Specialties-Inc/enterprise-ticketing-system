@@ -13,7 +13,7 @@ import {
   getEscalateHandoff,
   classifyDepartment,
 } from '@/services/ticketService';
-import { getSystemStatus } from '@/services/configurationService';
+import { getSystemStatus, getFileLimitsConfig } from '@/services/configurationService';
 import { normalizeCasing } from '@/utils/normalizeCasing';
 import { formatProperTitleCase, needsProperCasing } from '@/utils/titleCaseUtils';
 import { useAuth } from '@/context/AuthContext';
@@ -139,6 +139,32 @@ export default function TicketCreation() {
   const [error, setError] = useState('');
   const [files, setFiles] = useState([]);
   const [fileError, setFileError] = useState('');
+  // Upload limits are owned by the superadmin (configuration-service). These defaults
+  // only apply until the live config loads or if it cannot be fetched.
+  const [fileLimits, setFileLimits] = useState({
+    maxFileSizeMB: 15,
+    maxFileCount: 5,
+    allowedFileTypes: ['PDF', 'PNG', 'DOCX', 'DOC', 'JPG', 'JPEG'],
+  });
+
+  useEffect(() => {
+    let active = true;
+    getFileLimitsConfig()
+      .then((cfg) => {
+        if (!active || !cfg) return;
+        setFileLimits((prev) => ({
+          maxFileSizeMB: Number(cfg.maxFileSizeMB) > 0 ? Number(cfg.maxFileSizeMB) : prev.maxFileSizeMB,
+          maxFileCount: Number(cfg.maxFileCount) > 0 ? Number(cfg.maxFileCount) : prev.maxFileCount,
+          allowedFileTypes: Array.isArray(cfg.allowedFileTypes) && cfg.allowedFileTypes.length > 0
+            ? cfg.allowedFileTypes.map((t) => String(t).toUpperCase())
+            : prev.allowedFileTypes,
+        }));
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
   const [successModal, setSuccessModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [createdTicketId, setCreatedTicketId] = useState(null);
@@ -495,16 +521,14 @@ export default function TicketCreation() {
           )
         );
       } else {
-        setFiles((prev) =>
-          prev.map((f) =>
-            f.id === fileItem.id
-              ? {
-                  ...f,
-                  status: 'clean',
-                }
-              : f
-          )
-        );
+        // The server rejected the file (size, type, count, or an outage). Never mark it clean:
+        // a file without a stored attachment id would be silently dropped on submit.
+        const serverMessage =
+          err?.response?.data?.errors?.attachments?.[0] ||
+          err?.response?.data?.message ||
+          'This file could not be uploaded. Please remove it and try again.';
+        setFileError(serverMessage);
+        setFiles((prev) => prev.filter((f) => f.id !== fileItem.id));
       }
     }
   };
@@ -513,9 +537,16 @@ export default function TicketCreation() {
     setFileError('');
     const selectedFiles = Array.from(e.target.files);
     if (selectedFiles.length > 0) {
-      const maxIndividual = 15 * 1024 * 1024; // 15MB
-      const maxTotal = 45 * 1024 * 1024; // 45MB
-      const allowedExts = ['.pdf', '.png', '.docx', '.doc', '.jpg', '.jpeg'];
+      const { maxFileSizeMB, maxFileCount, allowedFileTypes } = fileLimits;
+      const maxIndividual = maxFileSizeMB * 1024 * 1024;
+      const maxTotal = maxIndividual * maxFileCount;
+      const allowedExts = allowedFileTypes.map((t) => '.' + t.toLowerCase());
+
+      if (files.length + selectedFiles.length > maxFileCount) {
+        setFileError(`You can attach a maximum of ${maxFileCount} files.`);
+        e.target.value = '';
+        return;
+      }
 
       let currentTotalSize = files.reduce((acc, f) => acc + f.size, 0);
 
@@ -523,18 +554,21 @@ export default function TicketCreation() {
       for (const file of selectedFiles) {
         const ext = '.' + file.name.split('.').pop().toLowerCase();
         if (!allowedExts.includes(ext)) {
-          setFileError(`Invalid file type "${file.name}". Supported formats: PDF, PNG, Word (DOC, DOCX), JPEG.`);
+          setFileError(`Invalid file type "${file.name}". Supported formats: ${allowedFileTypes.join(', ')}.`);
+          e.target.value = '';
           return;
         }
 
         if (file.size > maxIndividual) {
-          setFileError(`File "${file.name}" exceeds the maximum limit of 15MB.`);
+          setFileError(`File "${file.name}" exceeds the maximum limit of ${maxFileSizeMB}MB.`);
+          e.target.value = '';
           return;
         }
 
         currentTotalSize += file.size;
         if (currentTotalSize > maxTotal) {
-          setFileError('Total attachments size exceeds the maximum limit of 45MB.');
+          setFileError(`Total attachments size exceeds the maximum limit of ${maxFileSizeMB * maxFileCount}MB.`);
+          e.target.value = '';
           return;
         }
 
@@ -963,7 +997,7 @@ export default function TicketCreation() {
                   </div>
                   <span className="text-sm font-semibold text-primary">Click to upload files</span>
                   <span className="text-xs text-muted-slate mt-1 uppercase tracking-wider">
-                    PDF, PNG, Word — max 15MB per file, 45MB total
+                    {fileLimits.allowedFileTypes.join(', ')} — max {fileLimits.maxFileSizeMB}MB per file, {fileLimits.maxFileCount} files
                   </span>
                 </label>
               </div>

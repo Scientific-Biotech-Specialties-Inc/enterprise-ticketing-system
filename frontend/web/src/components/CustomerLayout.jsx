@@ -1,15 +1,36 @@
-import React, { useState } from 'react';
-import { Outlet } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { Outlet, Navigate } from 'react-router-dom';
 import Header from './Header';
 import Sidebar from './Sidebar';
 import { useAuth } from '@/context/AuthContext';
 import PrivateRoute from '@/routes/PrivateRoute';
 import ForceChangePasswordModal from './ForceChangePasswordModal';
 import MaintenanceGate from './MaintenanceGate';
+import tokenStore from '@/auth/tokenStore';
 
 export default function CustomerLayout() {
-  const { isFirstLogin } = useAuth();
+  const { isAuthenticated, isLoading, isFirstLogin } = useAuth();
   const [sidebarHovered, setSidebarHovered] = useState(false);
+
+  useEffect(() => {
+    const handlePageShow = (e) => {
+      const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('is_logged_out') === 'true';
+      if (e.persisted || !tokenStore.getToken() || !isAuthenticated || isLoggedOut) {
+        if (!tokenStore.getToken() || !isAuthenticated || isLoggedOut) {
+          const isCustomerSite = import.meta.env.VITE_APP_MODE === 'customer';
+          const landingUrl = isCustomerSite ? (import.meta.env.BASE_URL || '/') : '/';
+          window.location.replace(landingUrl);
+        }
+      }
+    };
+    window.addEventListener('pageshow', handlePageShow);
+    return () => window.removeEventListener('pageshow', handlePageShow);
+  }, [isAuthenticated]);
+
+  const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('is_logged_out') === 'true';
+  if ((!isLoading && !isAuthenticated) || isLoggedOut) {
+    return <Navigate to="/" replace />;
+  }
 
   return (
     <div className="min-h-screen bg-page font-sans flex flex-col text-dark-slate w-full max-w-full overflow-x-hidden">
@@ -31,4 +52,3 @@ export default function CustomerLayout() {
     </div>
   );
 }
-

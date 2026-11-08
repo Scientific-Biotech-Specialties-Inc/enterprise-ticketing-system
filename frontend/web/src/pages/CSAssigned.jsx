@@ -242,6 +242,7 @@ export default function CSAssigned() {
           name: row.name || `${row.first_name || ''} ${row.last_name || ''}`.trim() || row.email || `Employee #${row.id ?? row.emp_id}`,
           role: row.role || '',
           status: row.is_active ? 'active' : 'inactive',
+          presence: row.presence || (row.is_active ? 'online' : 'offline'),
           department: row.department || 'Unassigned',
           position_level: (row.position_level && !['senior', 'mid', 'junior'].includes(String(row.position_level).toLowerCase()))
             ? row.position_level

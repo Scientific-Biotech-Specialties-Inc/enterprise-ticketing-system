@@ -162,7 +162,7 @@ export default function MyTickets({ mode = 'all' }) {
   const loadDrafts = useCallback(async () => {
     setLoadingDrafts(true);
     try {
-      const list = await getTicketDrafts({ client_id: customerId });
+      const list = await getTicketDrafts();
       setDrafts(list || []);
     } catch (err) {
       console.warn('Failed to load ticket drafts:', err);
@@ -189,10 +189,10 @@ export default function MyTickets({ mode = 'all' }) {
     }
   }, [customerId]);
 
-  const loadTickets = useCallback(async ({ forceRefresh = false } = {}) => {
-    setLoading(true);
+  const loadTickets = useCallback(async ({ forceRefresh = false, source = 'manual' } = {}) => {
+    // Realtime ticks (websocket/poll) refresh silently instead of flashing the skeleton.
+    if (source !== 'websocket' && source !== 'poll') setLoading(true);
     setError('');
-
     try {
       const ticketsList = await getCustomerTickets({ createdBy: customerId, limit: 100, forceRefresh });
       const seen = new Set();

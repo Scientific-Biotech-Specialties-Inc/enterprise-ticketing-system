@@ -97,12 +97,41 @@ class EmployeeReassignmentService
                 'type' => 'reassignment_request',
             ];
 
-            $this->notificationService->notifyCS(
-                'Reassignment Requested',
-                "Engineer " . $empName . " has requested reassignment for Ticket {$ticketRef}: \"" . $title . "\"." . ($reason !== '' ? " Reason: \"" . $reason . "\"." : ""),
-                $ticketId,
-                $csData
-            );
+            $csTitle = 'Reassignment Requested';
+            $csMessage = "Engineer " . $empName . " has requested reassignment for Ticket {$ticketRef}: \"" . $title . "\"." . ($reason !== '' ? " Reason: \"" . $reason . "\"." : "");
+
+            // Route the request to the CSR who delegated the ticket, not every CSR.
+            $delegatorId = (int) ($assignment->assigned_by ?? 0);
+            $delegator = $delegatorId > 0
+                ? DB::table('employees')->where('emp_id', $delegatorId)->where('role', 'customer service')->first()
+                : null;
+
+            if ($delegator) {
+                $this->notificationService->notifyRecipient(
+                    (int) $delegator->emp_id,
+                    'employee',
+                    $csTitle,
+                    $csMessage,
+                    $ticketId,
+                    $csData
+                );
+            } else {
+                // Delegator is unknown or no longer a CSR: fall back to CSRs in the engineer's branch.
+                $branchCsIds = $emp && !empty($emp->branch)
+                    ? DB::table('employees')
+                        ->where('role', 'customer service')
+                        ->where('branch', $emp->branch)
+                        ->pluck('emp_id')
+                    : collect();
+
+                if ($branchCsIds->isNotEmpty()) {
+                    foreach ($branchCsIds as $csEmpId) {
+                        $this->notificationService->notifyRecipient((int) $csEmpId, 'employee', $csTitle, $csMessage, $ticketId, $csData);
+                    }
+                } else {
+                    $this->notificationService->notifyCS($csTitle, $csMessage, $ticketId, $csData);
+                }
+            }
 
             $this->notificationService->notifyCustomer(
                 $customerId,
@@ -505,6 +534,38 @@ class EmployeeReassignmentService
         $isCS = in_array($role, ['customer service', 'customer support', 'cs', 'head of cs', 'head of customer service', 'admin', 'superadmin', 'super admin']);
         if (!$isCS) {
             $query->where('rr.employee_id', $user->emp_id);
+        } elseif (in_array($role, ['customer service', 'customer support', 'cs'], true)) {
+            // A CSR works pending requests for tickets they delegated, plus fallback requests when delegator is absent or not a CSR.
+            $csId = (int) $user->emp_id;
+            $csBranch = !empty($user->branch) ? trim((string) $user->branch) : null;
+            $query->where(function ($q) use ($csId, $csBranch) {
+                $q->where('rr.status', '!=', 'pending')
+                    ->orWhereExists(function ($sub) use ($csId) {
+                        $sub->select(DB::raw(1))
+                            ->from('ticket_assignments as ta')
+                            ->whereColumn('ta.ticket_ID', 'rr.ticket_id')
+                            ->whereColumn('ta.employee_ID', 'rr.employee_id')
+                            ->where('ta.assigned_by', $csId);
+                    })
+                    ->orWhere(function ($fallbackQ) use ($csBranch) {
+                        $fallbackQ->whereNotExists(function ($delegatorSub) {
+                            $delegatorSub->select(DB::raw(1))
+                                ->from('ticket_assignments as ta2')
+                                ->join('employees as del', 'del.emp_id', '=', 'ta2.assigned_by')
+                                ->whereColumn('ta2.ticket_ID', 'rr.ticket_id')
+                                ->whereColumn('ta2.employee_ID', 'rr.employee_id')
+                                ->whereIn('del.role', ['customer service', 'customer support', 'cs']);
+                        });
+
+                        if ($csBranch) {
+                            $fallbackQ->where(function ($bQ) use ($csBranch) {
+                                $bQ->where('e.branch', $csBranch)
+                                    ->orWhereNull('e.branch')
+                                    ->orWhere('e.branch', '');
+                            });
+                        }
+                    });
+            });
         }
 
         if ($status) {

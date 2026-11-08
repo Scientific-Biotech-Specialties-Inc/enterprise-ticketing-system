@@ -19,6 +19,19 @@ class DecryptRsaPayload
      */
     public function handle(Request $request, Closure $next, ...$fields)
     {
+        // Nothing to decrypt (e.g. a test email that reuses the saved API key): no key id is needed.
+        // Credentials are never accepted in plaintext, because any present field still requires a key.
+        $hasEncryptedField = false;
+        foreach ($fields as $field) {
+            if ($request->filled($field)) {
+                $hasEncryptedField = true;
+                break;
+            }
+        }
+        if (!$hasEncryptedField) {
+            return $next($request);
+        }
+
         $keyId = $request->header('X-Key-Id');
 
         if (!$keyId) {

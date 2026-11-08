@@ -17,7 +17,7 @@ class EmployeeReassignmentController extends Controller
     public function reassignRequest(Request $request, int $ticketId)
     {
         $validated = $request->validate([
-            'reason' => ['required', 'string'],
+            'reason' => ['required', 'string', new \App\Rules\NoMarkup()],
         ]);
 
         $rawReason = trim($validated['reason']);

@@ -259,7 +259,7 @@ class FeedbackQuestionController extends Controller
     {
         $validated = $request->validate([
             'category'      => 'required|string|max:50',
-            'text'          => 'required|string|max:1000',
+            'text'          => ['required', 'string', 'max:1000', new \App\Rules\NoMarkup()],
             'response_type' => 'nullable|string|in:Star Rating,Yes / No,Multiple Choice,Checkbox,Free Text',
             'responseType'  => 'nullable|string|in:Star Rating,Yes / No,Multiple Choice,Checkbox,Free Text',
             'options'       => 'nullable|array',
@@ -388,7 +388,7 @@ class FeedbackQuestionController extends Controller
 
         $validated = $request->validate([
             'category'      => 'nullable|string|max:50',
-            'text'          => 'nullable|string|max:1000',
+            'text'          => ['nullable', 'string', 'max:1000', new \App\Rules\NoMarkup()],
             'response_type' => 'nullable|string|in:Star Rating,Yes / No,Multiple Choice,Checkbox,Free Text',
             'responseType'  => 'nullable|string|in:Star Rating,Yes / No,Multiple Choice,Checkbox,Free Text',
             'options'       => 'nullable|array',

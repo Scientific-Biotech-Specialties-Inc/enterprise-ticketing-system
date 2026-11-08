@@ -148,6 +148,32 @@ class TicketConfigurationService
     }
 
     /**
+     * Maximum number of attachments allowed on one ticket submission (file_limits.maxFileCount).
+     * attachment-service only checks the count per upload request, and the ticket form uploads
+     * files one by one for scanning, so the ticket endpoints must enforce the total themselves.
+     */
+    public static function getMaxFileCount(): int
+    {
+        $default = 5;
+        try {
+            return (int) Cache::remember('ticket:config:file_limits:max_count', 30, function () use ($default) {
+                $configUrl = env('CONFIGURATION_SERVICE_URL', 'http://configuration-service:8000');
+                $response = Http::timeout(5)->get("{$configUrl}/api/ticket-configurations/file_limits");
+                if ($response->successful()) {
+                    $json = $response->json();
+                    $val = $json['value'] ?? $json;
+                    $count = (int) ($val['maxFileCount'] ?? 0);
+                    return $count > 0 ? $count : $default;
+                }
+                return $default;
+            });
+        } catch (\Throwable $e) {
+            Log::warning('Failed to fetch file limits from configuration-service: ' . $e->getMessage());
+            return $default;
+        }
+    }
+
+    /**
      * Clear the Redis cached window configuration.
      */
     public static function clearCache(): void

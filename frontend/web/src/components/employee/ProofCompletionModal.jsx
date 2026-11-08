@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { updateEmployeeTicket } from '@/services/ticketService';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
+import useMaxFileCount from '@/hooks/useMaxFileCount';
 
 function ProofFileItem({ file, onRemove }) {
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -53,6 +54,7 @@ export default function ProofCompletionModal({
   useLockBodyScroll(Boolean(ticket));
   const navigate = useNavigate();
   const [proofFiles, setProofFiles] = useState([]);
+  const maxFileCount = useMaxFileCount();
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -178,6 +180,12 @@ export default function ProofCompletionModal({
 
     if (newFiles.length === 0) {
       setErrorMessage('Selected file(s) are already added.');
+      e.target.value = null;
+      return;
+    }
+
+    if (proofFiles.length + newFiles.length > maxFileCount) {
+      setErrorMessage(`You can attach a maximum of ${maxFileCount} files.`);
       e.target.value = null;
       return;
     }

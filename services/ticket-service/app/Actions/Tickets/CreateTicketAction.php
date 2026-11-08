@@ -11,6 +11,7 @@ use App\Services\TicketCacheService;
 use App\Services\TicketLimitService;
 use App\Services\TicketNumberGeneratorService;
 use App\Services\TicketConfigurationService;
+use App\Services\TicketNotificationService;
 
 class CreateTicketAction
 {
@@ -18,7 +19,8 @@ class CreateTicketAction
         protected SLAService $slaService,
         protected TicketCacheService $cacheService,
         protected TicketLimitService $ticketLimitService,
-        protected TicketNumberGeneratorService $numberGeneratorService
+        protected TicketNumberGeneratorService $numberGeneratorService,
+        protected TicketNotificationService $notificationService
     ) {}
 
     /**
@@ -73,7 +75,7 @@ class CreateTicketAction
                 ->value('ticket_status_ID') ?: 1;
         }
 
-        return DB::transaction(function () use ($validated, $clientId, $externalTypeId, $priorityId, $statusId, $finalTitle, $ticketNumber, $departmentId, $defaults) {
+        $result = DB::transaction(function () use ($validated, $clientId, $externalTypeId, $priorityId, $statusId, $finalTitle, $ticketNumber, $departmentId, $defaults) {
             $ticketData = [
                 'ticket_number' => $ticketNumber,
                 'machine_ID' => !empty($validated['machine_ID']) ? (int) $validated['machine_ID'] : null,
@@ -117,20 +119,6 @@ class CreateTicketAction
                 Log::warning('CreateTicketAction: Failed to assign SLA: ' . $e->getMessage());
             }
 
-            // Bind attachments
-            $attachmentIds = $validated['attachments'] ?? [];
-            if (!empty($attachmentIds)) {
-                try {
-                    Http::post('http://attachment-service:8000/api/bind', [
-                        'ticket_id' => $ticketId,
-                        'attachment_ids' => $attachmentIds,
-                        'is_proof' => false
-                    ]);
-                } catch (\Throwable $e) {
-                    Log::error('CreateTicketAction: Failed to bind attachments: ' . $e->getMessage());
-                }
-            }
-
             // Create initial audit log
             DB::table('ticket_audit_logs')->insert([
                 'ticket_ID' => $ticketId,
@@ -154,6 +142,94 @@ class CreateTicketAction
                 'ticket' => (array) $createdTicket,
             ];
         });
+
+        // Bind attachments only after the ticket row is committed. attachment-service writes
+        // ticket_attachments.ticket_id, whose foreign key on tickets would wait on our uncommitted
+        // row while we wait on the HTTP call, stalling ticket creation until the 30s timeout.
+        $attachmentIds = $validated['attachments'] ?? [];
+        if (!empty($attachmentIds)) {
+            try {
+                Http::post('http://attachment-service:8000/api/bind', [
+                    'ticket_id' => $result['ticket_id'],
+                    'attachment_ids' => $attachmentIds,
+                    'is_proof' => false
+                ]);
+            } catch (\Throwable $e) {
+                Log::error('CreateTicketAction: Failed to bind attachments: ' . $e->getMessage());
+            }
+        }
+
+        $this->dispatchCreatedSideEffects($result, $validated, $clientId, $finalTitle, $ticketNumber);
+
+        return $result;
+    }
+
+    /**
+     * Post-commit side effects of a new customer ticket: CS new_ticket alert, customer notification
+     * and email, the realtime `created` broadcast, and the welcome chat message.
+     * Each step is non-blocking so a downstream failure never undoes a committed ticket.
+     */
+    protected function dispatchCreatedSideEffects(array $result, array $validated, int $clientId, string $finalTitle, string $ticketNumber): void
+    {
+        $ticketId = (int) $result['ticket_id'];
+        $ticketRef = TicketNumberGeneratorService::refFor($ticketId);
+        $clientName = DB::table('clients')->where('id', $clientId)->value('client_name') ?? 'Customer';
+        $ticketRow = $result['ticket'] ?? [];
+
+        try {
+            $this->notificationService->dispatchAlert(
+                'new_ticket',
+                'New Ticket Created',
+                "New Ticket {$ticketRef}: \"{$finalTitle}\" has been created by {$clientName}.",
+                $ticketId,
+                ['ticket_id' => $ticketId, 'title' => $finalTitle]
+            );
+
+            $this->notificationService->notifyCustomer(
+                $clientId,
+                'Ticket Created',
+                "Your ticket {$ticketRef}: \"{$finalTitle}\" has been created successfully. Our team will review it shortly.",
+                $ticketId
+            );
+
+            $categoryName = DB::table('problem_categories')->where('problem_category_ID', $validated['problem_category_ID'])->value('category_name') ?? '';
+            $priorityName = DB::table('ticket_priorities')->where('priority_ID', $ticketRow['priority_ID'] ?? ($validated['priority_ID'] ?? 1))->value('priority_name') ?? '';
+            $this->notificationService->sendCustomerEmail(
+                $clientId,
+                'Ticket Created',
+                "Your ticket {$ticketNumber}: \"{$finalTitle}\" has been created successfully.",
+                $ticketId,
+                $finalTitle,
+                $categoryName,
+                $priorityName
+            );
+        } catch (\Throwable $e) {
+            Log::error('CreateTicketAction: Failed to dispatch creation notifications: ' . $e->getMessage());
+        }
+
+        try {
+            $statusName = DB::table('ticket_statuses')->where('ticket_status_ID', $ticketRow['ticket_status_ID'] ?? null)->value('status_name') ?? 'Open';
+            $this->notificationService->broadcastTicketChange('created', $ticketId, [
+                'status' => $statusName,
+                'title' => $finalTitle,
+                'customer_id' => $clientId,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('CreateTicketAction: Failed to broadcast ticket creation: ' . $e->getMessage());
+        }
+
+        try {
+            Http::withHeaders([
+                'X-Internal-Token' => env('INTERNAL_TOKEN'),
+            ])->post("http://messaging-service:8000/api/internal/tickets/{$ticketId}/messages", [
+                'message' => "Hi! I am the Customer Support Assistant. A representative will be with you shortly. For your reference, this chat is for your ticket: {$ticketNumber}.",
+                'sender_name' => 'Customer Support Assistant',
+                'sender_type' => 'cs',
+                'sender_id' => null,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('CreateTicketAction: Failed to send initial chat message: ' . $e->getMessage());
+        }
     }
 }
 

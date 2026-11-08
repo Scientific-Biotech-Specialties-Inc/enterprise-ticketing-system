@@ -17,30 +17,90 @@ class AiChatController extends Controller
     }
 
     /**
-     * Resolves the authenticated user or verifies internal microservice tokens.
+     * Spec 0034: identity comes only from the verified token, or from a valid X-Internal-Token
+     * (trusted microservice). Never from a user_id the caller supplies.
      */
     protected function getAuthenticatedUser(Request $request): ?object
     {
-        // 1. Check Passport / Default Auth Guard
+        // 1. Verified Passport token
         $user = auth('api')->user() ?? $request->user();
         if ($user) {
             return $user;
         }
 
-        // 2. Check trusted internal microservice token
-        $internalToken = $request->header('X-Internal-Token');
-        $expectedToken = env('INTERNAL_TOKEN');
-        if (!empty($internalToken) && !empty($expectedToken) && hash_equals((string) $expectedToken, (string) $internalToken)) {
+        // 2. Trusted internal microservice token
+        if (\App\Http\Middleware\AuthenticateTokenOrInternal::hasValidInternalToken($request)) {
             return (object) ['is_internal' => true];
         }
 
-        // 3. Fallback: check query parameter or body user_id for customer requests
-        $requestedUserId = $request->input('user_id') ?? $request->query('user_id');
-        if (!empty($requestedUserId)) {
-            return (object) ['id' => $requestedUserId, 'is_fallback' => true];
+        return null;
+    }
+
+    protected function isInternal(?object $auth): bool
+    {
+        return $auth !== null && !empty($auth->is_internal);
+    }
+
+    /** Staff (a verified user with an emp_id) may read customer AI chats, never change them. */
+    protected function isStaff(?object $auth): bool
+    {
+        if ($auth === null || $this->isInternal($auth)) {
+            return false;
+        }
+
+        // A staff JWT verified by VerifyEmployeeJwt becomes an AuthenticatedUserDto. Its claims carry no emp_id,
+        // so the DTO type itself is the proof of staff identity (customers authenticate through Passport).
+        return $auth instanceof \Ticketing\Auth\Dto\AuthenticatedUserDto
+            || (int) ($auth->emp_id ?? 0) > 0;
+    }
+
+    /** 403 for a staff caller on a route that changes a conversation. */
+    protected function staffWriteDenied(?object $auth)
+    {
+        if ($this->isStaff($auth)) {
+            return response()->json(['success' => false, 'message' => 'Staff can read customer chats but not change them.'], 403);
         }
 
         return null;
+    }
+
+    /** The verified user id of a token caller, or null. */
+    protected function tokenUserId(?object $auth): ?string
+    {
+        if ($auth === null || $this->isInternal($auth)) {
+            return null;
+        }
+        $id = $auth->id ?? $auth->emp_id ?? (method_exists($auth, 'getAuthIdentifier') ? $auth->getAuthIdentifier() : null);
+
+        return $id !== null && $id !== '' ? (string) $id : null;
+    }
+
+    /**
+     * A user_id named in the request is honoured only for a trusted internal call or a verified staff reader
+     * (the exceptions in spec 0034). A customer token can never use it to pick the owner.
+     */
+    protected function internalCallerUserId(Request $request): ?string
+    {
+        $id = $request->input('user_id');
+
+        return $id !== null && $id !== '' ? (string) $id : null;
+    }
+
+    /** Internal calls reach any conversation. A token caller reaches only a conversation they own. */
+    protected function canAccess(AiConversation $conversation, ?object $auth, bool $readOnly = false): bool
+    {
+        if ($this->isInternal($auth) || ($readOnly && $this->isStaff($auth))) {
+            return true;
+        }
+        $uid = $this->tokenUserId($auth);
+
+        return $uid !== null && !empty($conversation->user_id) && (string) $conversation->user_id === $uid;
+    }
+
+    /** Someone else's conversation is reported as not found, so ids cannot be probed. */
+    protected function conversationNotFound()
+    {
+        return response()->json(['success' => false, 'message' => 'Conversation not found'], 404);
     }
 
     /**
@@ -52,7 +112,7 @@ class AiChatController extends Controller
         $validated = $request->validate([
             'messages' => 'required|array',
             'conversation_id' => 'nullable|string',
-            'user_id' => 'nullable|numeric',
+            'user_id' => 'nullable|numeric', // used only on a trusted internal call
         ]);
 
         $auth = $this->getAuthenticatedUser($request);
@@ -60,21 +120,20 @@ class AiChatController extends Controller
             return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
         }
 
-        $isInternal = isset($auth->is_internal) && $auth->is_internal;
-        $userId = $isInternal ? ($validated['user_id'] ?? null) : ($auth->id ?? $auth->emp_id ?? $auth->getAuthIdentifier());
+        if ($denied = $this->staffWriteDenied($auth)) {
+            return $denied;
+        }
+
+        $isInternal = $this->isInternal($auth);
+        $userId = $isInternal ? $this->internalCallerUserId($request) : $this->tokenUserId($auth);
 
         $convId = $validated['conversation_id'] ?? Str::uuid()->toString();
         $incomingMessages = $validated['messages'];
 
         // Retrieve or initialize conversation record and verify ownership
         $conversation = AiConversation::find($convId);
-        if ($conversation && !$isInternal && $userId && !empty($conversation->user_id)) {
-            if ((string) $conversation->user_id !== (string) $userId) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Forbidden: Conversation belongs to another user',
-                ], 403);
-            }
+        if ($conversation && !$this->canAccess($conversation, $auth)) {
+            return $this->conversationNotFound();
         }
 
         // Call Gemini Service
@@ -145,20 +204,22 @@ class AiChatController extends Controller
             return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
         }
 
-        $isInternal = isset($auth->is_internal) && $auth->is_internal;
         $query = AiConversation::query();
 
-        if ($isInternal) {
-            if ($request->has('user_id')) {
-                $query->where('user_id', $request->query('user_id'));
+        if ($this->isInternal($auth)) {
+            if (($requestedUserId = $this->internalCallerUserId($request)) !== null) {
+                $query->where('user_id', $requestedUserId);
             }
+        } elseif ($this->isStaff($auth)) {
+            // Staff read the chats of the customer they name. With no customer named they see none.
+            $requestedUserId = $this->internalCallerUserId($request);
+            $query->where('user_id', $requestedUserId ?? '__none__');
         } else {
-            $userId = $auth->id ?? $auth->emp_id ?? $auth->getAuthIdentifier();
-            $query->where('user_id', $userId);
+            $query->where('user_id', $this->tokenUserId($auth));
         }
 
         $conversations = $query->orderBy('updated_at', 'desc')
-            ->select(['id', 'user_id', 'title', 'status', 'messages', 'created_at', 'updated_at'])
+            ->select(['id', 'user_id', 'title', 'status', 'messages', 'escalation_data', 'created_at', 'updated_at'])
             ->get()
             ->map(function ($c) {
                 $cleaned = preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $c->title ?? '');
@@ -198,15 +259,8 @@ class AiChatController extends Controller
             ], 404);
         }
 
-        $isInternal = isset($auth->is_internal) && $auth->is_internal;
-        if (!$isInternal) {
-            $userId = $auth->id ?? $auth->emp_id ?? $auth->getAuthIdentifier();
-            if (!empty($conversation->user_id) && (string) $conversation->user_id !== (string) $userId) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Forbidden: You do not have permission to view this conversation',
-                ], 403);
-            }
+        if (!$this->canAccess($conversation, $auth, true)) {
+            return $this->conversationNotFound();
         }
 
         return response()->json([
@@ -226,6 +280,10 @@ class AiChatController extends Controller
             return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
         }
 
+        if ($denied = $this->staffWriteDenied($auth)) {
+            return $denied;
+        }
+
         $conversation = AiConversation::find($id);
 
         if (!$conversation) {
@@ -235,15 +293,8 @@ class AiChatController extends Controller
             ]);
         }
 
-        $isInternal = isset($auth->is_internal) && $auth->is_internal;
-        if (!$isInternal) {
-            $userId = $auth->id ?? $auth->emp_id ?? $auth->getAuthIdentifier() ?? $request->input('user_id') ?? $request->query('user_id');
-            if (!empty($conversation->user_id) && $userId && (string) $conversation->user_id !== (string) $userId) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Forbidden: You do not have permission to delete this conversation',
-                ], 403);
-            }
+        if (!$this->canAccess($conversation, $auth)) {
+            return $this->conversationNotFound();
         }
 
         $conversation->delete();
@@ -256,7 +307,9 @@ class AiChatController extends Controller
 
     /**
      * DELETE /api/conversations/{id}/messages/{messageId}
-     * Removes a specific message from a conversation's history.
+     * Individual messages are part of the support record (they feed escalation handoffs and
+     * ticket context), so they can never be deleted one by one. The route stays registered so
+     * older clients get a clear 403 instead of a 404.
      */
     public function deleteMessage(Request $request, string $id, string $messageId)
     {
@@ -265,39 +318,20 @@ class AiChatController extends Controller
             return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
         }
 
+        if ($denied = $this->staffWriteDenied($auth)) {
+            return $denied;
+        }
+
+        // Keep the ownership check first so another user's conversation still reads as 404.
         $conversation = AiConversation::find($id);
-        if (!$conversation) {
-            return response()->json([
-                'success' => true,
-                'message' => 'Conversation not found',
-            ]);
+        if (!$conversation || !$this->canAccess($conversation, $auth)) {
+            return $this->conversationNotFound();
         }
-
-        $isInternal = isset($auth->is_internal) && $auth->is_internal;
-        if (!$isInternal) {
-            $userId = $auth->id ?? $auth->emp_id ?? $auth->getAuthIdentifier() ?? $request->input('user_id') ?? $request->query('user_id');
-            if (!empty($conversation->user_id) && $userId && (string) $conversation->user_id !== (string) $userId) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Forbidden: You do not have permission to modify this conversation',
-                ], 403);
-            }
-        }
-
-        $messages = is_array($conversation->messages) ? $conversation->messages : [];
-        $updated = array_values(array_filter($messages, function ($m) use ($messageId) {
-            $mId = $m['id'] ?? null;
-            return (string) $mId !== (string) $messageId;
-        }));
-
-        $conversation->messages = $updated;
-        $conversation->save();
 
         return response()->json([
-            'success' => true,
-            'message' => 'Message deleted successfully',
-            'messages' => $updated,
-        ]);
+            'success' => false,
+            'message' => 'Chat messages cannot be deleted.',
+        ], 403);
     }
 
     /**
@@ -311,21 +345,24 @@ class AiChatController extends Controller
             return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
         }
 
+        if ($denied = $this->staffWriteDenied($auth)) {
+            return $denied;
+        }
+
         $convId = $request->input('conversation_id');
         if ($convId) {
             $conversation = AiConversation::find($convId);
             if ($conversation) {
-                $isInternal = isset($auth->is_internal) && $auth->is_internal;
-                if (!$isInternal) {
-                    $userId = $auth->id ?? $auth->emp_id ?? $auth->getAuthIdentifier();
-                    if (!empty($conversation->user_id) && (string) $conversation->user_id !== (string) $userId) {
-                        return response()->json([
-                            'success' => false,
-                            'message' => 'Forbidden: You do not have permission to update this conversation',
-                        ], 403);
-                    }
+                if (!$this->canAccess($conversation, $auth)) {
+                    return $this->conversationNotFound();
                 }
                 $conversation->status = 'ticket_created';
+                if ($ticketId = $request->input('ticket_id')) {
+                    // Persist the ticket link so staff can open the exact AI chat behind a ticket.
+                    $escalation = $conversation->escalation_data ?? [];
+                    $escalation['ticket_id'] = (int) $ticketId;
+                    $conversation->escalation_data = $escalation;
+                }
                 $conversation->save();
             }
         }
@@ -389,6 +426,11 @@ class AiChatController extends Controller
      */
     public function escalateHandoff(Request $request, string $id)
     {
+        $auth = $this->getAuthenticatedUser($request);
+        if (!$auth) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+        }
+
         $conversation = AiConversation::find($id);
         if (!$conversation) {
             return response()->json([
@@ -406,16 +448,8 @@ class AiChatController extends Controller
             ]);
         }
 
-        $auth = $this->getAuthenticatedUser($request);
-        $isInternal = isset($auth->is_internal) && $auth->is_internal;
-        if (!$isInternal && $auth) {
-            $userId = $auth->id ?? $auth->emp_id ?? $auth->getAuthIdentifier();
-            if (!empty($conversation->user_id) && $userId && (string) $conversation->user_id !== (string) $userId) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Forbidden: You do not have permission to access this conversation handoff',
-                ], 403);
-            }
+        if (!$this->canAccess($conversation, $auth, true)) {
+            return $this->conversationNotFound();
         }
 
         $escalationData = $conversation->escalation_data ?? [];

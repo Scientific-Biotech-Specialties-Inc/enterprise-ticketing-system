@@ -1065,11 +1065,13 @@ class SLAService
         }
 
         // Broadcast real-time change
+        // $managers can be empty (no department manager), so never rely on the foreach variable here.
+        $lastManager = collect($managers)->filter()->last();
         $notificationService->broadcastTicketChange('sla_breach', $ticketId, [
             'ticket_id' => $ticketId,
             'sla_status' => 'Breached',
             'employee_ids' => $assignedEmpIds,
-            'manager_id' => $manager ? (int) $manager->emp_id : null,
+            'manager_id' => $lastManager ? (int) $lastManager->emp_id : null,
             'overdue_duration' => $overdueDuration,
         ]);
 

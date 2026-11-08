@@ -146,7 +146,12 @@ class AuditTimelineService
                     ->orWhereNull('tal.is_internal');
             })
             // Internal notes written before the is_internal flag was set per row must stay hidden from customers.
-            ->whereNotIn('tal.action_type', ['internal_note', 'internal_note_added']);
+            ->whereNotIn('tal.action_type', ['internal_note', 'internal_note_added'])
+            // Reassignment requests, reasons and outcomes are internal handling and never shown to customers.
+            ->where('tal.action_type', 'not like', '%reassign%')
+            ->where(function ($sub) {
+                $sub->whereNull('tal.event_type')->orWhere('tal.event_type', 'not like', '%reassign%');
+            });
         }
 
         // Optional filtering by event type or action type

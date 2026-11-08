@@ -21,6 +21,23 @@ class TicketNumberFormatTest extends TestCase
     {
         parent::setUp();
 
+        // The number format now lives in configuration-service. Fake it statefully:
+        // PUT stores and echoes the format, GET returns what was stored (503 before any save, so defaults apply).
+        $stored = null;
+        Http::fake([
+            '*/api/ticket-configurations/number_format*' => function ($request) use (&$stored) {
+                if (in_array($request->method(), ['PUT', 'PATCH'], true)) {
+                    $stored = $request->data();
+                    return Http::response(['value' => $stored], 200);
+                }
+                if ($request->method() === 'POST') { // reset
+                    $stored = null;
+                    return Http::response(['value' => \App\Services\TicketConfigurationService::DEFAULT_NUMBER_FORMAT], 200);
+                }
+                return $stored === null ? Http::response([], 503) : Http::response(['value' => $stored], 200);
+            },
+        ]);
+
         // Create or find a Super Admin employee for testing
         $superAdminRecord = DB::table('employees')->where('role', 'superadmin')->first();
         if (!$superAdminRecord) {
@@ -269,6 +286,7 @@ class TicketNumberFormatTest extends TestCase
     public function test_format_change_does_not_retroactively_affect_existing_tickets(): void
     {
         $legacyNumber = 'LEGACY-' . uniqid();
+        $this->seedMachine(1);
 
         // Insert a ticket with a specific ticket_number
         $ticketId = DB::table('tickets')->insertGetId([

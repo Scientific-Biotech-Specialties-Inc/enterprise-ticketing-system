@@ -1,3 +1,4 @@
+import { safeUrl } from '@/utils/safeUrl';
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -29,6 +30,7 @@ import DelegateTicketModal from '@/components/employee/DelegateTicketModal';
 import ReassignmentDisapprovalBanner from '@/components/employee/ReassignmentDisapprovalBanner';
 import { isReassignmentDenied, hasPendingReassignment } from '@/utils/reassignmentUtils';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
+import useMaxFileCount from '@/hooks/useMaxFileCount';
 import { useAuth } from '@/context/AuthContext';
 import FilePreviewModal from '@/components/FilePreviewModal';
 import InternalNotesSection from '@/components/InternalNotesSection';
@@ -59,6 +61,7 @@ export default function EmployeeTicketUpdate() {
   const [statusDraft, setStatusDraft] = useState(state?.ticket?.status ?? '');
   const [remarks, setRemarks] = useState('');
   const [attachedFiles, setAttachedFiles] = useState([]);
+  const maxFileCount = useMaxFileCount();
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [showStatusConfirm, setShowStatusConfirm] = useState(false);
@@ -366,7 +369,9 @@ export default function EmployeeTicketUpdate() {
 
   const handleFileChange = (e) => {
     const selected = Array.from(e.target.files);
-    const fileError = validateFiles(selected);
+    const fileError = selected.length > maxFileCount
+      ? `You can attach a maximum of ${maxFileCount} files.`
+      : validateFiles(selected);
     if (fileError) {
       setErrorMessage(fileError);
       setAttachedFiles([]);
@@ -698,7 +703,7 @@ export default function EmployeeTicketUpdate() {
                     <div className="flex flex-col gap-2">
                       {(ticket.proofAttachments || ticket.proofFiles).map((file, idx) => {
                         const fName = typeof file === 'string' ? file.split('/').pop() : (file.name || file.file_name || `Proof-${idx + 1}`);
-                        const fUrl = typeof file === 'string' ? file : (file.url || file.file_path || file.path || '');
+                        const fUrl = safeUrl(typeof file === 'string' ? file : (file.url || file.file_path || file.path || ''));
                         const isQuarantined = Boolean(
                           typeof file === 'object' && (file?.is_quarantined || file?.quarantined || file?.status === 'quarantined' || file?.virus_detected)
                         );
@@ -907,7 +912,7 @@ export default function EmployeeTicketUpdate() {
                 <div className="flex flex-wrap gap-3">
                   {ticket.attachments.map((file, idx) => {
                     const fName = typeof file === 'string' ? file.split('/').pop() : (file.name || file.file_name || `Attachment-${idx + 1}`);
-                    const fUrl = typeof file === 'string' ? file : (file.url || file.file_path || file.path || '');
+                    const fUrl = safeUrl(typeof file === 'string' ? file : (file.url || file.file_path || file.path || ''));
                     const isQuarantined = Boolean(
                       typeof file === 'object' && (file?.is_quarantined || file?.quarantined || file?.status === 'quarantined' || file?.virus_detected)
                     );

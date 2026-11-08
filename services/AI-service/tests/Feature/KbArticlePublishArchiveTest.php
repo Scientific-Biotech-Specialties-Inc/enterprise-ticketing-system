@@ -30,23 +30,10 @@ class KbArticlePublishArchiveTest extends TestCase
      */
     protected function superAdminHeaders(string $actorName = 'Super Admin'): array
     {
-        // Construct mock JWT payload representing Super Admin
-        $header = base64_encode(json_encode(['alg' => 'RS256', 'typ' => 'JWT']));
-        $payload = base64_encode(json_encode([
-            'sub' => 1,
-            'name' => $actorName,
-            'role' => 'Super Admin',
-            'department' => 'Super Admin',
-            'exp' => time() + 3600,
-        ]));
-        $sig = base64_encode('sig');
-        $token = "{$header}.{$payload}.{$sig}";
+        // Spec 0036 (AC-11): identity comes from a verified token, never from an unsigned payload.
+        $this->actingAsSuperAdmin($actorName);
 
-        return [
-            'Authorization' => "Bearer {$token}",
-            'X-Actor-Name' => $actorName,
-            'Accept' => 'application/json',
-        ];
+        return ['Accept' => 'application/json'];
     }
 
     /**
@@ -54,21 +41,9 @@ class KbArticlePublishArchiveTest extends TestCase
      */
     protected function employeeHeaders(): array
     {
-        $header = base64_encode(json_encode(['alg' => 'RS256', 'typ' => 'JWT']));
-        $payload = base64_encode(json_encode([
-            'sub' => 99,
-            'name' => 'Regular Employee',
-            'role' => 'technician',
-            'department' => 'Support',
-            'exp' => time() + 3600,
-        ]));
-        $sig = base64_encode('sig');
-        $token = "{$header}.{$payload}.{$sig}";
+        $this->actingAsEmployee();
 
-        return [
-            'Authorization' => "Bearer {$token}",
-            'Accept' => 'application/json',
-        ];
+        return ['Accept' => 'application/json'];
     }
 
     /**
@@ -165,14 +140,14 @@ class KbArticlePublishArchiveTest extends TestCase
             $this->superAdminHeaders()
         );
 
+        // Spec 0036 (AC-3, AC-12): publish never indexes; an unindexed article is refused.
         $response->assertStatus(422)
             ->assertJson([
                 'success' => false,
-                'error_code' => 'NO_EMBEDDINGS',
-            ])
-            ->assertJsonFragment([
-                'message' => "Cannot publish article: no successfully processed embeddings exist for this article. Please extract and process document content before publishing.",
+                'error_code' => 'NOT_INDEXED',
             ]);
+        $this->assertStringContainsString('not indexed for AI search', $response->json('message'));
+        $this->assertSame(0, KbEmbedding::where('article_id', $article->id)->count(), 'Publish must not index.');
 
         $article->refresh();
         $this->assertEquals('Draft', $article->status, 'Article status must remain Draft.');
@@ -197,9 +172,10 @@ class KbArticlePublishArchiveTest extends TestCase
             'content' => 'Epson L3110 EcoTank ink charging procedure, printhead alignment, and driver installation.',
         ]);
 
-        // Initial extraction & embedding generation
+        // Initial extraction & embedding generation (inactive, since the article is a Draft)
         $this->ragService->indexArticle($article);
-        KbEmbedding::where('article_id', $article->id)->update(['is_active' => false]);
+        $this->assertFalse(KbEmbedding::where('article_id', $article->id)->where('is_active', true)->exists());
+        $callsBeforePublish = $this->embeddingCallCount();
 
         $initialChunkIds = KbChunk::where('article_id', $article->id)->pluck('id')->sort()->values()->toArray();
         $initialEmbeddingIds = KbEmbedding::where('article_id', $article->id)->pluck('id')->sort()->values()->toArray();
@@ -226,6 +202,10 @@ class KbArticlePublishArchiveTest extends TestCase
         // Embeddings must now be active
         $activeCount = KbEmbedding::where('article_id', $article->id)->where('is_active', true)->count();
         $this->assertEquals($initialChunkCount, $activeCount, 'All existing embeddings must be activated.');
+
+        // The only embedding call during publish is the probe query, never a chunk re-embed.
+        $this->assertSame(1, $this->embeddingCallCount() - $callsBeforePublish, 'Publish embeds only the probe query.');
+        $response->assertJsonStructure(['probe' => ['score', 'rank', 'low_retrievability'], 'low_retrievability']);
     }
 
     /**

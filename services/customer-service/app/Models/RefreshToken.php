@@ -14,10 +14,12 @@ class RefreshToken extends Model
         'client_id',
         'employee_id',
         'token_hash',
+        'is_revoked',
         'expires_at',
     ];
 
     protected $casts = [
+        'is_revoked' => 'boolean',
         'expires_at' => 'datetime',
     ];
 
