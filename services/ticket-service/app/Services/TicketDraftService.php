@@ -14,23 +14,7 @@ class TicketDraftService
 
     protected function ensureTable(): void
     {
-        try {
-            if (!Schema::hasTable('ticket_drafts')) {
-                Schema::create('ticket_drafts', function (Blueprint $table) {
-                    $table->bigIncrements('id');
-                    $table->unsignedBigInteger('client_id')->index();
-                    $table->string('title')->nullable();
-                    $table->text('description')->nullable();
-                    $table->unsignedBigInteger('machine_ID')->nullable();
-                    $table->unsignedBigInteger('problem_category_ID')->nullable();
-                    $table->unsignedBigInteger('priority_ID')->nullable();
-                    $table->json('attachments')->nullable();
-                    $table->timestamps();
-                });
-            }
-        } catch (\Throwable $e) {
-            Log::warning("Could not ensure ticket_drafts table: " . $e->getMessage());
-        }
+        // Table schema is strictly governed and created by database migrations
     }
 
     public function saveDraft(int $clientId, array $data, ?int $draftId = null): array

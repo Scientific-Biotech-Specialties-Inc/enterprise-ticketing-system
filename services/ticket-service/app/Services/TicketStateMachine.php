@@ -25,6 +25,7 @@ class TicketStateMachine
     public const STATE_REOPENED = 'Reopened';
     public const STATE_ON_HOLD = 'On Hold/Pending';
     public const STATE_CANCELLED = 'Cancelled';
+    public const STATE_ESCALATED = 'Escalated';
 
     // Internal In-Progress Ownership Constants
     public const OWNER_CS = 'cs';
@@ -35,12 +36,12 @@ class TicketStateMachine
     public const STATUS_ID_IN_PROGRESS = 2;
     public const STATUS_ID_RESOLVED = 3;
     public const STATUS_ID_CLOSED = 4;
-    public const STATUS_ID_CANCELLED = 5;
     public const STATUS_ID_ESCALATED = 5;
     public const STATUS_ID_PENDING_EVALUATION = 6;
     public const STATUS_ID_PENDING = 7;
     public const STATUS_ID_REOPENED = 8;
     public const STATUS_ID_DISCARDED = 9;
+    public const STATUS_ID_CANCELLED = 9;
     public const STATUS_ID_PENDING_ASSIGNMENT = 10;
     public const STATUS_ID_ON_HOLD = 11;
 
@@ -110,6 +111,9 @@ class TicketStateMachine
             case self::STATUS_ID_REOPENED:
                 return self::STATE_REOPENED;
 
+            case self::STATUS_ID_ESCALATED:
+                return self::STATE_ESCALATED;
+
             case self::STATUS_ID_CANCELLED:
             case self::STATUS_ID_DISCARDED:
                 return self::STATE_CANCELLED;
@@ -120,6 +124,7 @@ class TicketStateMachine
                 if ($norm === 'open') return self::STATE_OPEN;
                 if ($norm === 'resolved') return self::STATE_RESOLVED;
                 if ($norm === 'closed') return self::STATE_CLOSED;
+                if ($norm === 'escalated') return self::STATE_ESCALATED;
                 if ($norm === 'discarded' || $norm === 'cancelled') return self::STATE_CANCELLED;
                 if ($norm === 'on hold' || $norm === 'pending') return self::STATE_ON_HOLD;
                 if ($norm === 'pending assignment') return self::STATE_ASSIGNED;
@@ -149,6 +154,8 @@ class TicketStateMachine
                     return self::STATE_CLOSED;
                 case self::STATUS_ID_REOPENED:
                     return self::STATE_REOPENED;
+                case self::STATUS_ID_ESCALATED:
+                    return self::STATE_ESCALATED;
                 case self::STATUS_ID_DISCARDED:
                     return self::STATE_CANCELLED;
                 case self::STATUS_ID_PENDING_ASSIGNMENT:
@@ -182,6 +189,7 @@ class TicketStateMachine
         }
         if ($lower === 'resolve') return self::STATE_RESOLVED;
         if ($lower === 'close') return self::STATE_CLOSED;
+        if ($lower === 'escalate' || $lower === 'escalated') return self::STATE_ESCALATED;
         if ($lower === 'cancel' || $lower === 'discard') return self::STATE_CANCELLED;
 
         // Exact names
@@ -196,6 +204,7 @@ class TicketStateMachine
             self::STATE_REOPENED,
             self::STATE_ON_HOLD,
             self::STATE_CANCELLED,
+            self::STATE_ESCALATED,
         ] as $canonical) {
             if (strtolower($canonical) === $lower) {
                 return $canonical;
@@ -230,6 +239,12 @@ class TicketStateMachine
 
     /**
      * Determine if a transition is permitted.
+     *
+     * The superadmin Transition Matrix (configuration "transitions") is the source of
+     * truth for every editable state. Only system rules that are not editable in the
+     * matrix are hardcoded here: Cancelled is terminal, On Hold resumes contextually,
+     * Reopened routes to CS automatically, and rejected proof returns to In Progress.
+     * Staying in the same state (e.g. reassigning an Assigned ticket) is not a transition.
      */
     public function canTransition(string $fromState, string $toState, array $context = []): bool
     {
@@ -237,7 +252,11 @@ class TicketStateMachine
             return false;
         }
 
-        // Contextual resume from On Hold/Pending
+        if ($fromState === $toState) {
+            return true;
+        }
+
+        // Contextual resume from On Hold/Pending (non-editable in the matrix)
         if ($fromState === self::STATE_ON_HOLD) {
             return in_array($toState, [
                 self::STATE_ASSIGNED,
@@ -252,37 +271,7 @@ class TicketStateMachine
             return true;
         }
 
-        // Direct CS assignment from Open to Assigned is always permitted for incoming triage
-        if ($fromState === self::STATE_OPEN && $toState === self::STATE_ASSIGNED) {
-            return true;
-        }
-
-        // Allow CS technician updates and reassignment to Assigned from any active working state
-        if (in_array($fromState, [
-            self::STATE_OPEN,
-            self::STATE_ASSIGNED,
-            self::STATE_REASSIGNED,
-            self::STATE_IN_PROGRESS_EMPLOYEE,
-            self::STATE_IN_PROGRESS_CS,
-            self::STATE_ON_HOLD,
-        ], true) && $toState === self::STATE_ASSIGNED) {
-            return true;
-        }
-
-        // Allow holding an assigned ticket (Pending Assignment to On Hold)
-        if ($fromState === self::STATE_ASSIGNED && $toState === self::STATE_ON_HOLD) {
-            return true;
-        }
-
-        // Customer Service may resolve-and-close an in-progress ticket (incl. Pending Evaluation) in one step
-        if ($toState === self::STATE_CLOSED && in_array($fromState, [
-            self::STATE_IN_PROGRESS_CS,
-            self::STATE_IN_PROGRESS_EMPLOYEE,
-        ], true)) {
-            return true;
-        }
-
-        // Allow proof rejection returning to In Progress
+        // Rejected proof returns the ticket to In Progress
         if (!empty($context['proof_rejected']) && in_array($toState, [
             self::STATE_IN_PROGRESS_EMPLOYEE,
             self::STATE_IN_PROGRESS_CS,
@@ -558,6 +547,12 @@ class TicketStateMachine
                 $updateFields['in_progress_owner'] = null;
                 $auditAction = 'cancel';
                 break;
+
+            case self::STATE_ESCALATED:
+                $updateFields['ticket_status_ID'] = self::STATUS_ID_ESCALATED;
+                $updateFields['in_progress_owner'] = null;
+                $auditAction = 'escalate';
+                break;
         }
 
         if (array_key_exists('priority_ID', $context) && $context['priority_ID'] !== null) {
@@ -637,13 +632,19 @@ class TicketStateMachine
                 } catch (\Throwable $e) {}
             }
 
-            // 5. Insert audit log
+            // 5. Insert audit log with structured timeline attributes
             DB::table('ticket_audit_logs')->insert([
                 'ticket_ID' => $ticketId,
                 'action_type' => $auditAction,
+                'event_type' => in_array($auditAction, ['hold', 'resume', 'reopen', 'close', 'resolve'], true) ? $auditAction : 'status_change',
                 'action_by_ID' => $actorId,
                 'actor_type' => $actorType,
+                'actor_role' => in_array(strtolower($actorType), ['employee', 'superadmin', 'admin', 'cs', 'systemadministrator', 'itadmin'], true) ? $actorType : null,
+                'before_state' => json_encode(['state' => $currentState]),
+                'after_state' => json_encode(['state' => $resolvedTargetState]),
                 'details' => json_encode($auditDetails),
+                'is_system' => ($actorType === 'system') ? 1 : 0,
+                'is_internal' => ($resolvedTargetState === self::STATE_ON_HOLD) ? 1 : 0,
                 'created_at' => now(),
             ]);
         });

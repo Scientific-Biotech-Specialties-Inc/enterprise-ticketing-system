@@ -171,9 +171,10 @@ class TicketStateMachineTest extends TestCase
             ['ticket_status_ID' => 2, 'status_name' => 'In Progress', 'color_code' => '#2563eb'],
             ['ticket_status_ID' => 3, 'status_name' => 'Resolved', 'color_code' => '#16a34a'],
             ['ticket_status_ID' => 4, 'status_name' => 'Closed', 'color_code' => '#64748b'],
-            ['ticket_status_ID' => 5, 'status_name' => 'Cancelled', 'color_code' => '#ef4444'],
+            ['ticket_status_ID' => 5, 'status_name' => 'Escalated', 'color_code' => '#dc2626'],
             ['ticket_status_ID' => 7, 'status_name' => 'Pending', 'color_code' => '#8b5cf6'],
-            ['ticket_status_ID' => 9, 'status_name' => 'Reopened', 'color_code' => '#ec4899'],
+            ['ticket_status_ID' => 8, 'status_name' => 'Reopened', 'color_code' => '#ec4899'],
+            ['ticket_status_ID' => 9, 'status_name' => 'Cancelled', 'color_code' => '#ef4444'],
             ['ticket_status_ID' => 10, 'status_name' => 'Pending Assignment', 'color_code' => '#06b6d4'],
             ['ticket_status_ID' => 11, 'status_name' => 'On Hold', 'color_code' => '#f97316'],
             ['ticket_status_ID' => 12, 'status_name' => 'Pending Evaluation', 'color_code' => '#a855f7'],
@@ -186,10 +187,12 @@ class TicketStateMachineTest extends TestCase
             );
         }
 
-        DB::table('ticket_priorities')->updateOrInsert(
-            ['priority_ID' => 1],
-            ['priority_name' => 'Low', 'color_code' => '#22c55e', 'created_at' => now(), 'updated_at' => now()]
-        );
+        foreach ([1 => 'Low', 2 => 'Medium', 3 => 'High', 4 => 'Critical'] as $pid => $pname) {
+            DB::table('ticket_priorities')->updateOrInsert(
+                ['priority_ID' => $pid],
+                ['priority_name' => $pname, 'created_at' => now(), 'updated_at' => now()]
+            );
+        }
 
         DB::table('slas')->updateOrInsert(
             ['sla_ID' => 1],
@@ -201,10 +204,7 @@ class TicketStateMachineTest extends TestCase
             ['category_name' => 'Hardware Issue', 'is_active' => true, 'created_at' => now(), 'updated_at' => now()]
         );
 
-        DB::table('machines')->updateOrInsert(
-            ['machine_ID' => 1],
-            ['machine_name' => 'Test Machine', 'serial_number' => 'SN-TSM-001', 'created_at' => now(), 'updated_at' => now()]
-        );
+        $this->seedMachine(1, ['machine_name' => 'Test Machine', 'serial_number' => 'SN-TSM-001']);
 
         \App\Models\Employee::unguard();
 
@@ -300,7 +300,7 @@ class TicketStateMachineTest extends TestCase
         $ticketClosed = $this->createTestTicket(['ticket_status_ID' => 4]);
         $this->assertEquals(TicketStateMachine::STATE_CLOSED, $this->stateMachine->resolveState($ticketClosed));
 
-        $ticketCancelled = $this->createTestTicket(['ticket_status_ID' => 5]);
+        $ticketCancelled = $this->createTestTicket(['ticket_status_ID' => TicketStateMachine::STATUS_ID_CANCELLED]);
         $this->assertEquals(TicketStateMachine::STATE_CANCELLED, $this->stateMachine->resolveState($ticketCancelled));
     }
 
@@ -337,17 +337,17 @@ class TicketStateMachineTest extends TestCase
     {
         $ticket = $this->createTestTicket(['ticket_status_ID' => 1]); // Open
 
-        // Attempting Open -> Closed should be rejected (Open can only go to In Progress (CS) or Cancelled)
+        // Attempting Open -> Resolved should be rejected (not allowed by the default Transition Matrix)
         $response = $this->actingAs($this->superAdmin, 'api')
             ->putJson("/api/tickets/{$ticket->ticket_ID}", [
-                'ticket_status_ID' => 4, // Closed
+                'ticket_status_ID' => 3, // Resolved
             ]);
 
         $response->assertStatus(422);
         $response->assertJson([
             'code' => 'INVALID_TICKET_TRANSITION',
             'from_status' => TicketStateMachine::STATE_OPEN,
-            'to_status' => TicketStateMachine::STATE_CLOSED,
+            'to_status' => TicketStateMachine::STATE_RESOLVED,
         ]);
         $this->assertIsArray($response->json('allowed_statuses'));
     }
@@ -357,7 +357,7 @@ class TicketStateMachineTest extends TestCase
      */
     public function test_terminal_cancelled_status_rejects_further_transition()
     {
-        $ticket = $this->createTestTicket(['ticket_status_ID' => 5]); // Cancelled
+        $ticket = $this->createTestTicket(['ticket_status_ID' => TicketStateMachine::STATUS_ID_CANCELLED]);
 
         $response = $this->actingAs($this->superAdmin, 'api')
             ->putJson("/api/tickets/{$ticket->ticket_ID}", [

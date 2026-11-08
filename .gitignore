@@ -54,3 +54,4 @@ auth.json
 # Agent tasks and scratch
 .agents/tasks/
 scratch/
+.claude/

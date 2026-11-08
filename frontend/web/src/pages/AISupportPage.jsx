@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { Bot, Send, Paperclip, ChevronDown, ChevronUp, X, CheckCircle, AlertTriangle, Plus, MessageSquare, Trash2, ArrowLeft, Clock } from 'lucide-react';
 import axiosInstance from '@/api/axiosInstance';
@@ -8,6 +8,7 @@ import { getTicketFormOptions, createTicket, getCustomerTickets, saveTicketDraft
 import TitleCasingModal from '@/components/TitleCasingModal';
 import DuplicateTicketModal from '@/components/DuplicateTicketModal';
 import { formatProperTitleCase, needsProperCasing } from '@/utils/titleCaseUtils';
+import SkeletonLoader from '@/components/SkeletonLoader.jsx';
 
 const formatTime = (iso) => {
   if (!iso) return '';
@@ -304,6 +305,9 @@ function AISourceList({ sources }) {
     </div>
   );
 }
+
+// AI conversation statuses (ai-service) meaning the chat already ended in a ticket.
+const FINISHED_CONVERSATION_STATUSES = ['ticket_created', 'escalated'];
 
 function TicketRecommendationCard({ onCreateTicket, onContinue }) {
   return (
@@ -734,6 +738,10 @@ const getStoredUser = () => {
 
 function AISupportPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  // "Create Ticket" entry points ask for a fresh chat instead of reopening the last one.
+  // Captured once so later re-renders or a page refresh don't keep forcing new chats.
+  const startNewChatRef = useRef(Boolean(location.state?.startNewChat));
   const { user } = useAuth();
   const effectiveUser = user || getStoredUser();
   const currentUserId = effectiveUser?.id ?? effectiveUser?.client_ID ?? effectiveUser?.client_id;
@@ -746,7 +754,28 @@ function AISupportPage() {
   const [activeConversationId, setActiveConversationId] = useState('');
   const [messages, setMessages] = useState([welcomeMessage, gatherDetailsMessage]);
   const [input, setInput] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
+  // Pending AI replies are tracked per conversation, so switching chats never shows another
+  // chat's typing indicator and a late reply never lands in the chat currently on screen.
+  const [pendingConvIds, setPendingConvIds] = useState(() => new Set());
+  const isTyping = pendingConvIds.has(activeConversationId);
+  const markPending = useCallback((convId) => {
+    setPendingConvIds((prev) => new Set(prev).add(convId));
+  }, []);
+  const clearPending = useCallback((convId) => {
+    setPendingConvIds((prev) => {
+      if (!prev.has(convId)) return prev;
+      const next = new Set(prev);
+      next.delete(convId);
+      return next;
+    });
+  }, []);
+  const activeConvIdRef = useRef(activeConversationId);
+  useEffect(() => {
+    activeConvIdRef.current = activeConversationId;
+  }, [activeConversationId]);
+  // Skeletons: the sidebar list on first load, and the message pane while a chat is fetched.
+  const [conversationsLoading, setConversationsLoading] = useState(true);
+  const [loadingConversationId, setLoadingConversationId] = useState(null);
   const [showSuggestionChips, setShowSuggestionChips] = useState(true);
   const [showTicketCard, setShowTicketCard] = useState(false);
   const [showReviewModal, setShowReviewModal] = useState(false);
@@ -812,10 +841,14 @@ function AISupportPage() {
       return;
     }
 
+    setLoadingConversationId(convId);
     axiosInstance.get(`${AI_API_URL}/conversations/${convId}`, { 
       baseURL: '',
       params: { user_id: currentUserId }
     })
+      .finally(() => {
+        setLoadingConversationId((current) => (current === convId ? null : current));
+      })
       .then(res => {
         if (res.data.success && res.data.conversation) {
           const conv = res.data.conversation;
@@ -967,7 +1000,7 @@ function AISupportPage() {
               ...c,
               timestamp: c.updated_at || c.created_at || new Date().toISOString(),
               messageCount: c.message_count !== undefined ? c.message_count : (Array.isArray(c.messages) ? c.messages.length : (c.messageCount || 2)),
-              title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : 'AI Support Session'
+              title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : 'AI Support Session'
             }));
           setConversations(prev => {
             const activeDraft = prev.find(c => String(c.id).startsWith('draft-'));
@@ -985,6 +1018,9 @@ function AISupportPage() {
 
     let isMounted = true;
     axiosInstance.get(`${AI_API_URL}/conversations`, { baseURL: '', params: { user_id: currentUserId } })
+      .finally(() => {
+        if (isMounted) setConversationsLoading(false);
+      })
       .then(res => {
         if (!isMounted) return;
         if (res.data.success && Array.isArray(res.data.conversations)) {
@@ -994,7 +1030,7 @@ function AISupportPage() {
               ...c,
               timestamp: c.updated_at || c.created_at || new Date().toISOString(),
               messageCount: c.message_count !== undefined ? c.message_count : (Array.isArray(c.messages) ? c.messages.length : (c.messageCount || 2)),
-              title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : 'AI Support Session'
+              title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : 'AI Support Session'
             }));
           setConversations(fetched);
           // Always open on a clean New Support Session by default instead of loading stale test chats
@@ -1046,9 +1082,11 @@ function AISupportPage() {
   }, [activeConversationId, conversationPhase, showSuggestionChips, showTicketCard, escalationTicketData, saveConversationState]);
 
   const simulateAIResponse = useCallback((content, sources) => {
-    setIsTyping(true);
+    const convId = activeConvIdRef.current;
+    markPending(convId);
     setTimeout(() => {
-      setIsTyping(false);
+      clearPending(convId);
+      if (activeConvIdRef.current !== convId) return;
       addMessage({
         id: `ai-${Date.now()}`,
         role: 'ai',
@@ -1057,7 +1095,7 @@ function AISupportPage() {
         timestamp: new Date().toISOString(),
       });
     }, 1500);
-  }, [addMessage]);
+  }, [addMessage, markPending, clearPending]);
 
   const handleSuggestionClick = useCallback((chip) => {
     setInput(chip);
@@ -1078,7 +1116,8 @@ function AISupportPage() {
     addMessage(userMessage);
     setInput('');
     if (showSuggestionChips) setShowSuggestionChips(false);
-    setIsTyping(true);
+    const sendingConvId = activeConversationId;
+    markPending(sendingConvId);
 
     const updatedMessages = [...messages, userMessage];
     const apiMessages = updatedMessages
@@ -1097,8 +1136,15 @@ function AISupportPage() {
       user_id: currentUserId
     }, { baseURL: '' })
       .then(res => {
-        setIsTyping(false);
+        clearPending(sendingConvId);
         const returnedConvId = res.data.conversation_id || activeConversationId;
+        // The customer moved to another chat while waiting. The backend already saved the reply,
+        // so only refresh the list; the reply shows when they open that chat again.
+        if (activeConvIdRef.current !== sendingConvId) {
+          delete conversationStateRef.current[sendingConvId];
+          fetchConversationsListOnly();
+          return;
+        }
         if (returnedConvId !== activeConversationId) {
           setActiveConversationId(returnedConvId);
         }
@@ -1142,8 +1188,9 @@ function AISupportPage() {
         });
       })
       .catch(err => {
-        setIsTyping(false);
+        clearPending(sendingConvId);
         console.error(err);
+        if (activeConvIdRef.current !== sendingConvId) return;
         const errorText = err.response?.data?.error || 'AI Assistant is currently offline or unreachable. You can create a support ticket manually with our technical support team.';
         
         const offlineErrorContent = (
@@ -1187,7 +1234,7 @@ function AISupportPage() {
         });
       });
 
-  }, [input, conversationPhase, messages, showSuggestionChips, showTicketCard, activeConversationId, isTyping, addMessage, saveConversationState, escalationTicketData, fetchConversationsListOnly, currentUserId]);
+  }, [input, conversationPhase, messages, showSuggestionChips, showTicketCard, activeConversationId, isTyping, addMessage, saveConversationState, escalationTicketData, fetchConversationsListOnly, currentUserId, markPending, clearPending]);
 
   const handleKeyDown = useCallback((e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -1223,25 +1270,6 @@ function AISupportPage() {
         console.warn("Conversation delete completed with notice:", err);
       });
   }, [activeConversationId, loadConversation, handleNewChat, fetchConversationsListOnly, currentUserId]);
-
-  const handleDeleteMessage = useCallback((msgId) => {
-    if (!msgId || msgId === 'welcome' || msgId === 'gather') return;
-
-    setMessages(prev => {
-      const updated = prev.filter(m => m.id !== msgId);
-      saveConversationState(activeConversationId, updated, conversationPhase, showSuggestionChips, showTicketCard, escalationTicketData);
-      return updated;
-    });
-
-    if (activeConversationId) {
-      axiosInstance.delete(`${AI_API_URL}/conversations/${activeConversationId}/messages/${msgId}`, {
-        baseURL: '',
-        params: { user_id: currentUserId }
-      }).catch(err => {
-        console.warn("Message delete sync:", err);
-      });
-    }
-  }, [activeConversationId, conversationPhase, showSuggestionChips, showTicketCard, escalationTicketData, saveConversationState, currentUserId]);
 
   const handleClearChat = useCallback(() => {
     if (window.confirm("Are you sure you want to clear this conversation's messages?")) {
@@ -1296,7 +1324,7 @@ function AISupportPage() {
         }
       }
       // Strip leading question numbers, bullets, list markers e.g. "1.", "1)", "1 -", "Q1:", "Machine:"
-      res = res.replace(/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '');
+      res = res.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '');
       return res.trim();
     };
 
@@ -1532,7 +1560,7 @@ function AISupportPage() {
 
       const activeConv = conversations.find(c => c.id === activeConversationId);
       let ticketTitle = (formData.problemSummary || activeConv?.title || 'Support Ticket').trim();
-      ticketTitle = ticketTitle.replace(/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim();
+      ticketTitle = ticketTitle.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim();
       if (ticketTitle.length > 0) {
         ticketTitle = formatProperTitleCase(ticketTitle);
       } else {
@@ -1634,7 +1662,7 @@ function AISupportPage() {
 
       const activeConv = conversations.find(c => c.id === activeConversationId);
       let ticketTitle = (formData.problemSummary || activeConv?.title || 'Support Ticket').trim();
-      ticketTitle = ticketTitle.replace(/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim();
+      ticketTitle = ticketTitle.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim();
       if (ticketTitle.length > 0) {
         ticketTitle = formatProperTitleCase(ticketTitle);
       } else {
@@ -1717,7 +1745,9 @@ function AISupportPage() {
 
   const handleCloseSuccess = useCallback(() => {
     setShowSuccess(false);
-  }, []);
+    // The chat is finished once its ticket exists; move the customer to a new chat.
+    handleNewChat();
+  }, [handleNewChat]);
 
   const handleContinueChatting = useCallback(() => {
     setShowTicketCard(false);
@@ -1795,8 +1825,21 @@ function AISupportPage() {
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto py-2">
-              {conversations.map((conv) => (                <div
+            <div className="flex-1 overflow-y-auto py-2" aria-busy={conversationsLoading}>
+              {conversationsLoading && (
+                <div className="space-y-2 px-3" data-testid="conversation-list-skeleton">
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <div key={i} className="flex items-start gap-2 py-2">
+                      <SkeletonLoader className="h-4 w-4 rounded" />
+                      <div className="flex-1 space-y-2">
+                        <SkeletonLoader className="h-3 w-3/4" />
+                        <SkeletonLoader className="h-2 w-1/3" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!conversationsLoading && conversations.map((conv) => (                <div
                   key={conv.id}
                   onClick={() => loadConversation(conv.id)}
                   className={`group w-full flex items-start gap-2.5 px-3 py-2.5 text-left transition-all border-l-2 cursor-pointer ${
@@ -1882,9 +1925,22 @@ function AISupportPage() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3 bg-page">
-            {messages.map((msg, msgIndex) => {
-              const isDeletable = msg.id !== 'welcome' && msg.id !== 'gather';
+          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3 bg-page" aria-busy={conversationsLoading || Boolean(loadingConversationId)}>
+            {(conversationsLoading || loadingConversationId) ? (
+              <div className="space-y-4" data-testid="chat-messages-skeleton">
+                {[0, 1, 2].map((i) => (
+                  <React.Fragment key={i}>
+                    <div className="flex items-start gap-2">
+                      <SkeletonLoader className="h-8 w-8 rounded-full" />
+                      <SkeletonLoader className="h-16 w-2/3 rounded-2xl" />
+                    </div>
+                    <div className="flex justify-end">
+                      <SkeletonLoader className="h-10 w-1/2 rounded-2xl" />
+                    </div>
+                  </React.Fragment>
+                ))}
+              </div>
+            ) : messages.map((msg, msgIndex) => {
               const isErrorMessage = msg.isError || (typeof msg.content === 'string' && msg.content.startsWith('Ticket Submission Error:'));
               const displayErrorText = msg.isError
                 ? (typeof msg.content === 'string' ? msg.content : msg.errorMessage)
@@ -2019,15 +2075,6 @@ function AISupportPage() {
                           <p className="text-[10px] text-slate-muted">
                             {formatTime(msg.timestamp)}
                           </p>
-                          {isDeletable && (
-                            <button
-                              onClick={() => handleDeleteMessage(msg.id)}
-                              className="opacity-0 group-hover/msg:opacity-100 p-0.5 rounded text-slate-muted hover:text-destructive hover:bg-muted transition-all cursor-pointer"
-                              title="Delete this message"
-                            >
-                              <Trash2 size={11} />
-                            </button>
-                          )}
                         </div>
                       </div>
                     </div>

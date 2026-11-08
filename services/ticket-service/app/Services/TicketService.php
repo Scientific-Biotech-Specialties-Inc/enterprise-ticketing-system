@@ -35,6 +35,18 @@ class TicketService
     }
 
     /**
+     * Validation rule: reject HTML/script markup in free-text fields (stored XSS defence in depth).
+     */
+    public function rejectMarkup(): \Closure
+    {
+        return function ($attribute, $value, $fail) {
+            if (is_string($value) && preg_match('/<[\/!?a-z]/i', $value)) {
+                $fail("The {$attribute} must not contain HTML or script markup.");
+            }
+        };
+    }
+
+    /**
      * Proper casing validation rule closure.
      */
     public function validateProperCasing(): \Closure
@@ -113,7 +125,9 @@ class TicketService
                 't.first_response_at',
                 't.resolved_at',
                 't.response_sla_status',
-                't.resolution_sla_status'
+                't.resolution_sla_status',
+                't.hold_reason',
+                't.escalation_reason'
             )
             ->where('t.ticket_ID', $ticketId)
             ->first();
@@ -155,6 +169,8 @@ class TicketService
             'assigned' => $assignedIds,
             'reassignmentRequested' => !empty($pendingReassign),
             'reassignmentReason' => $pendingReassign ? $pendingReassign->reason : null,
+            'hold_reason' => $row->hold_reason ?? null,
+            'escalation_reason' => $row->escalation_reason ?? null,
             'type' => $row->ticket_type ?? 'External',
             'ticket_type' => $row->ticket_type ?? 'External',
             'is_internal' => (bool)$row->is_internal,
@@ -235,8 +251,8 @@ class TicketService
         }
 
         $clientId = (int) $user->id;
-        $rawTitle = strip_tags($validated['title']);
-        $cleanedTitle = preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $rawTitle);
+        $rawTitle = trim(strip_tags((string) $validated['title']));
+        $cleanedTitle = preg_replace('/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $rawTitle);
         $finalTitle = !empty(trim($cleanedTitle)) ? trim($cleanedTitle) : $rawTitle;
 
         $externalTypeId = DB::table('ticket_types')->where('type_name', 'External')->value('ticket_type_ID') ?? 2;
@@ -294,9 +310,7 @@ class TicketService
             'updated_at' => now(),
         ];
 
-        if (\Illuminate\Support\Facades\Schema::hasColumn('tickets', 'origin')) {
-            $ticketData['origin'] = $validated['origin'] ?? 'manual';
-        }
+        $ticketData['origin'] = $validated['origin'] ?? 'manual';
 
         $ticketId = $this->ticketLimitService->createWithinLimit(
             $clientId,
@@ -315,8 +329,14 @@ class TicketService
                 $defaults['slaPolicy'] ?? 'dynamic',
                 $validated['branch_id'] ?? null
             );
-        } catch (\Exception $e) {
-            Log::warning("Failed to assign SLA in store: " . $e->getMessage());
+        } catch (\Throwable $e) {
+            // Spec 0037 (AC-10): the ticket is still created; flag it so tickets:backfill-sla repairs it.
+            Log::error('TicketService::store: SLA assignment failed', ['ticket_ID' => $ticketId, 'error' => $e->getMessage()]);
+            try {
+                DB::table('tickets')->where('ticket_ID', $ticketId)->update(['sla_status' => 'SLA Unavailable']);
+            } catch (\Throwable $inner) {
+                Log::error('TicketService::store: could not flag SLA Unavailable', ['ticket_ID' => $ticketId, 'error' => $inner->getMessage()]);
+            }
         }
 
         $attachmentIds = $validated['attachments'] ?? [];
@@ -360,15 +380,15 @@ class TicketService
         $this->notificationService->dispatchAlert(
             'new_ticket',
             'New Ticket Created',
-            "New Ticket {$ticketRef}: \"" . $validated['title'] . "\" has been created by {$clientName}.",
+            "New Ticket {$ticketRef}: \"" . $finalTitle . "\" has been created by {$clientName}.",
             $ticketId,
-            ['ticket_id' => $ticketId, 'title' => $validated['title']]
+            ['ticket_id' => $ticketId, 'title' => $finalTitle]
         );
 
         $this->notificationService->notifyCustomer(
             $customerId,
             'Ticket Created',
-            "Your ticket {$ticketRef}: \"" . $validated['title'] . "\" has been created successfully. Our team will review it shortly.",
+            "Your ticket {$ticketRef}: \"" . $finalTitle . "\" has been created successfully. Our team will review it shortly.",
             $ticketId
         );
 
@@ -377,9 +397,9 @@ class TicketService
         $this->notificationService->sendCustomerEmail(
             $customerId,
             'Ticket Created',
-            "Your ticket {$ticketNumber}: \"" . $validated['title'] . "\" has been created successfully.",
+            "Your ticket {$ticketNumber}: \"" . $finalTitle . "\" has been created successfully.",
             $ticketId,
-            $validated['title'],
+            $finalTitle,
             $categoryName,
             $priorityName
         );
@@ -387,20 +407,30 @@ class TicketService
         DB::table('ticket_audit_logs')->insert([
             'ticket_ID' => $ticketId,
             'action_type' => 'create',
+            'event_type' => 'ticket_created',
             'action_by_ID' => $clientId,
             'actor_type' => 'customer',
+            'actor_role' => 'customer',
+            'before_state' => null,
+            'after_state' => json_encode([
+                'status_id' => $statusId,
+                'priority_id' => $priorityId,
+                'category_id' => $validated['problem_category_ID'],
+            ]),
             'details' => json_encode([
                 'machine_ID' => $validated['machine_ID'] ?? null,
                 'problem_category_ID' => $validated['problem_category_ID'],
-                'title' => strip_tags($validated['title']),
+                'title' => $finalTitle,
             ]),
+            'is_system' => 0,
+            'is_internal' => 0,
             'created_at' => now(),
         ]);
 
         $statusName = DB::table('ticket_statuses')->where('ticket_status_ID', $statusId)->value('status_name') ?? 'Open';
         $this->notificationService->broadcastTicketChange('created', $ticketId, [
             'status' => $statusName,
-            'title' => $validated['title'],
+            'title' => $finalTitle,
             'customer_id' => $customerId,
         ]);
 
@@ -436,6 +466,9 @@ class TicketService
      */
     public function createInternalTicket(array $validated, $user, ?int $requestedDepartmentId = null): array
     {
+        // Strip markup once so every sink (DB, audit log, notifications, broadcasts) gets plain text.
+        $cleanTitle = trim(strip_tags((string) $validated['title']));
+        $cleanDescription = trim(strip_tags((string) $validated['description']));
         $internalTypeId = DB::table('ticket_types')->where('type_name', 'Internal')->value('ticket_type_ID');
         $empId = (int) $user->emp_id;
 
@@ -477,8 +510,8 @@ class TicketService
                 'branch_id' => $validated['branch_id'] ?? null,
                 'ticket_status_ID' => $statusId,
                 'sla_ID' => null,
-                'title' => strip_tags($validated['title']),
-                'description' => strip_tags($validated['description']),
+                'title' => $cleanTitle,
+                'description' => $cleanDescription,
                 'resolved_at' => null,
                 'closed_at' => null,
                 'created_at' => now(),
@@ -504,20 +537,36 @@ class TicketService
                 $defaults['slaPolicy'] ?? 'dynamic',
                 $validated['branch_id'] ?? null
             );
-        } catch (\Exception $e) {
-            Log::warning("Failed to assign SLA in storeInternalTicket: " . $e->getMessage());
+        } catch (\Throwable $e) {
+            // Spec 0037 (AC-10): the ticket is still created; flag it so tickets:backfill-sla repairs it.
+            Log::error('TicketService::storeInternalTicket: SLA assignment failed', ['ticket_ID' => $ticketId, 'error' => $e->getMessage()]);
+            try {
+                DB::table('tickets')->where('ticket_ID', $ticketId)->update(['sla_status' => 'SLA Unavailable']);
+            } catch (\Throwable $inner) {
+                Log::error('TicketService::storeInternalTicket: could not flag SLA Unavailable', ['ticket_ID' => $ticketId, 'error' => $inner->getMessage()]);
+            }
         }
 
         DB::table('ticket_audit_logs')->insert([
             'ticket_ID' => $ticketId,
             'action_type' => 'create',
+            'event_type' => 'ticket_created',
             'action_by_ID' => $empId,
             'actor_type' => 'employee',
+            'actor_role' => $user->role ?? 'employee',
+            'before_state' => null,
+            'after_state' => json_encode([
+                'status_id' => $statusId,
+                'priority_id' => $priorityId,
+                'category_id' => $validated['problem_category_ID'],
+            ]),
             'details' => json_encode([
                 'machine_ID' => $validated['machine_ID'] ?? null,
                 'problem_category_ID' => $validated['problem_category_ID'],
-                'title' => strip_tags($validated['title']),
+                'title' => $cleanTitle,
             ]),
+            'is_system' => 0,
+            'is_internal' => 1,
             'created_at' => now(),
         ]);
 
@@ -549,12 +598,12 @@ class TicketService
         $this->notificationService->dispatchAlert(
             'new_ticket',
             'New Internal Ticket Created',
-            "New internal ticket {$ticketRef}: \"" . $validated['title'] . "\" has been created and awaits delegation.",
+            "New internal ticket {$ticketRef}: \"" . $cleanTitle . "\" has been created and awaits delegation.",
             $ticketId,
             [
                 'ticket_id' => $ticketId,
                 'ticket_ref' => $ticketRef,
-                'title' => $validated['title'],
+                'title' => $cleanTitle,
             ]
         );
 
@@ -562,19 +611,19 @@ class TicketService
             $empId,
             'employee',
             'Internal Ticket Created',
-            "Your internal ticket {$ticketRef}: \"" . $validated['title'] . "\" has been submitted successfully.",
+            "Your internal ticket {$ticketRef}: \"" . $cleanTitle . "\" has been submitted successfully.",
             $ticketId,
             [
                 'ticket_id' => $ticketId,
                 'ticket_ref' => $ticketRef,
-                'title' => $validated['title'],
+                'title' => $cleanTitle,
             ]
         );
 
         $statusName = DB::table('ticket_statuses')->where('ticket_status_ID', $statusId)->value('status_name') ?? 'Open';
         $this->notificationService->broadcastTicketChange('created', $ticketId, [
             'status' => $statusName,
-            'title' => $validated['title'],
+            'title' => $cleanTitle,
         ]);
 
         $ticket = DB::table('tickets')->where('ticket_ID', $ticketId)->first();
@@ -652,7 +701,9 @@ class TicketService
                 't.first_response_at',
                 't.response_sla_status',
                 't.resolution_sla_status',
-                't.last_reminder_sent_at'
+                't.last_reminder_sent_at',
+                't.hold_reason',
+                't.escalation_reason'
             )
             ->where('t.ticket_ID', $ticketId)
             ->first();
@@ -712,6 +763,13 @@ class TicketService
         }
         $actualDenyReason = $deniedReassign ? ($deniedReassign->deny_reason ?: $latestDenyAuditReason) : null;
 
+        // Privacy: reassignment requests, reasons and denials are internal handling and must never reach a customer.
+        if ($isCustomer) {
+            $pendingReassign = null;
+            $deniedReassign = null;
+            $actualDenyReason = null;
+        }
+
         $auditLogs = DB::table('ticket_audit_logs as tal')
             ->leftJoin('employees as e', function ($join) {
                 $join->on('e.emp_id', '=', 'tal.action_by_ID')
@@ -729,6 +787,13 @@ class TicketService
             ->where('tal.ticket_ID', $ticketId)
             ->orderBy('tal.created_at', 'asc')
             ->get();
+
+        if ($isCustomer) {
+            $auditLogs = $auditLogs->reject(function ($log) {
+                return str_contains(strtolower((string) ($log->action_type ?? '')), 'reassign')
+                    || str_contains(strtolower((string) ($log->event_type ?? '')), 'reassign');
+            })->values();
+        }
 
         $prioritiesMap = DB::table('ticket_priorities')->pluck('priority_name', 'priority_ID')->toArray();
         $statusesMap = DB::table('ticket_statuses')->pluck('status_name', 'ticket_status_ID')->toArray();
@@ -1334,6 +1399,17 @@ class TicketService
             ? (int) $validated['ticket_status_ID']
             : null;
 
+        // Reject re-escalation if already escalated
+        if ($statusToSet === 5 && (int)$ticket->ticket_status_ID === 5) {
+            return [
+                'status' => 422,
+                'data' => [
+                    'message' => 'This ticket is already escalated and cannot be escalated again.',
+                    'code' => 'ALREADY_ESCALATED',
+                ],
+            ];
+        }
+
         $isReopenAttempt = ($statusToSet === 8) || ($statusToSet === 2 && in_array((int)$ticket->ticket_status_ID, [3, 4], true));
         if ($isReopenAttempt) {
             $reason = $validated['reason'] ?? $validated['rejection_reason'] ?? null;
@@ -1502,7 +1578,7 @@ class TicketService
         }
 
         if (array_key_exists('description', $validated) && $validated['description'] !== null) {
-            $newDesc = trim($validated['description']);
+            $newDesc = strip_tags(trim($validated['description']));
             if ($ticket->description !== $newDesc) {
                 $changes[] = ['field' => 'description', 'old' => $ticket->description, 'new' => $newDesc];
             }
@@ -1520,6 +1596,16 @@ class TicketService
             }
         }
 
+        if (array_key_exists('assigned_to', $validated) && $validated['assigned_to'] !== null) {
+            if ($ticket->assigned_to != $validated['assigned_to']) {
+                $changes[] = ['field' => 'assigned_to', 'old' => $ticket->assigned_to, 'new' => $validated['assigned_to']];
+            }
+        }
+
+        if (array_key_exists('escalation_reason', $validated) && $validated['escalation_reason'] !== null) {
+            $changes[] = ['field' => 'escalation_reason', 'old' => $ticket->escalation_reason ?? null, 'new' => $validated['escalation_reason']];
+        }
+
         if (empty($changes)) {
             return ['status' => 200, 'data' => ['message' => 'No changes to update.']];
         }
@@ -1534,6 +1620,27 @@ class TicketService
                     $update['in_progress_owner'] = !empty($ticket->assigned_to) ? TicketStateMachine::OWNER_EMPLOYEE : TicketStateMachine::OWNER_CS;
                 } elseif (in_array($statusToSet, [3, 4, 9, 10], true)) {
                     $update['in_progress_owner'] = null;
+                } elseif ($statusToSet === 5) {
+                    $update['in_progress_owner'] = null;
+                    $escReason = $validated['escalation_reason'] ?? $validated['reason'] ?? null;
+                    if ($escReason) {
+                        $update['escalation_reason'] = $escReason;
+                    }
+                    if (!empty($validated['assigned_to'])) {
+                        $newAssignedTo = (int) $validated['assigned_to'];
+                        $update['assigned_to'] = $newAssignedTo;
+
+                        DB::table('ticket_assignments')->where('ticket_ID', $ticketId)->delete();
+                        DB::table('ticket_assignments')->insert([
+                            'ticket_ID' => $ticketId,
+                            'employee_ID' => $newAssignedTo,
+                            'assigned_by' => $assignedBy,
+                            'assignment_status' => 'assigned',
+                            'assigned_at' => now(),
+                            'created_at' => now(),
+                            'updated_at' => now(),
+                        ]);
+                    }
                 }
                 
                 if ($statusToSet == 3 || $statusToSet == 4) {
@@ -1584,13 +1691,19 @@ class TicketService
                 $update['title'] = strip_tags(trim($validated['title']));
             }
             if (array_key_exists('description', $validated) && $validated['description'] !== null) {
-                $update['description'] = trim($validated['description']);
+                $update['description'] = strip_tags(trim($validated['description']));
             }
             if (array_key_exists('problem_category_ID', $validated) && $validated['problem_category_ID'] !== null) {
                 $update['problem_category_ID'] = $validated['problem_category_ID'];
             }
             if (array_key_exists('machine_ID', $validated) && $validated['machine_ID'] !== null) {
                 $update['machine_ID'] = $validated['machine_ID'];
+            }
+            if (array_key_exists('assigned_to', $validated) && $validated['assigned_to'] !== null && empty($update['assigned_to'])) {
+                $update['assigned_to'] = (int) $validated['assigned_to'];
+            }
+            if (array_key_exists('escalation_reason', $validated) && $validated['escalation_reason'] !== null && empty($update['escalation_reason'])) {
+                $update['escalation_reason'] = $validated['escalation_reason'];
             }
 
             DB::table('tickets')->where('ticket_ID', $ticketId)->update($update);
@@ -1622,6 +1735,67 @@ class TicketService
                 ]);
             }
         });
+
+        if ($statusToSet === 5) {
+            $assignedManagerId = $validated['assigned_to'] ?? $ticket->assigned_to ?? null;
+            $escReason = $validated['escalation_reason'] ?? $validated['reason'] ?? 'Escalated by Customer Service for supervisory review.';
+            $ticketRef = TicketNumberGeneratorService::refFor($ticketId);
+            $ticketTitle = $ticket->title ?? "Ticket #{$ticketId}";
+
+            if ($assignedManagerId) {
+                $mgrTitle = "Urgent: Ticket Escalated - {$ticketRef}";
+                $mgrMessage = "Manager Alert: Ticket {$ticketRef}: \"{$ticketTitle}\" has been escalated to you. Reason: \"{$escReason}\". Immediate departmental intervention required.";
+
+                try {
+                    $this->notificationService->notifyRecipient(
+                        (int) $assignedManagerId,
+                        'employee',
+                        $mgrTitle,
+                        $mgrMessage,
+                        $ticketId,
+                        [
+                            'ticket_id' => $ticketId,
+                            'ticket_ref' => $ticketRef,
+                            'type' => 'ticket_escalated',
+                            'escalation_reason' => $escReason,
+                            'is_manager_alert' => true,
+                        ],
+                        'ticket_escalated'
+                    );
+
+                    $catNameEsc = DB::table('problem_categories')->where('problem_category_ID', $ticket->problem_category_ID)->value('category_name') ?? '';
+                    $prioNameEsc = DB::table('ticket_priorities')->where('priority_ID', $ticket->priority_ID ?? 1)->value('priority_name') ?? '';
+
+                    $this->notificationService->sendTicketEmail(
+                        (int) $assignedManagerId,
+                        $mgrTitle,
+                        $mgrMessage,
+                        $ticketId,
+                        $ticketTitle,
+                        $catNameEsc,
+                        $prioNameEsc,
+                        'ticket_escalated',
+                        [
+                            'escalation_reason' => $escReason,
+                        ]
+                    );
+                } catch (\Throwable $e) {
+                    Log::warning("Failed to dispatch manager escalation notification for ticket #{$ticketId}: " . $e->getMessage());
+                }
+            }
+
+            try {
+                $this->notificationService->broadcastTicketChange('escalated', $ticketId, [
+                    'ticket_id' => $ticketId,
+                    'status' => 'Escalated',
+                    'status_id' => 5,
+                    'assigned_to' => $assignedManagerId,
+                    'escalation_reason' => $escReason,
+                ]);
+            } catch (\Throwable $e) {
+                Log::warning("Failed to broadcast ticket escalation change: " . $e->getMessage());
+            }
+        }
 
         if (array_key_exists('proof_rejected', $validated) && $validated['proof_rejected']) {
             $assignedEmployeeId = $ticket->assigned_to;

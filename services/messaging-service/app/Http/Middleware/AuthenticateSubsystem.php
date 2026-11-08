@@ -35,16 +35,29 @@ class AuthenticateSubsystem
                         return null;
                     });
                     
-                    if ($result === true && Auth::user() instanceof Employee) {
+                    if ($result === true && (Auth::check() || $request->user())) {
                         return $next($request);
                     }
-                } catch (\Exception $e) {
+                } catch (\Throwable $e) {
                     // Ignore exception and fall through to local auth:api guard
                 }
             }
         }
 
         // 2. Fallback to local customer authentication via Passport (auth:api)
-        return app(\Illuminate\Auth\Middleware\Authenticate::class)->handle($request, $next, 'api');
+        try {
+            if (Auth::guard('api')->check()) {
+                $user = Auth::guard('api')->user();
+                if ($user) {
+                    Auth::setUser($user);
+                    $request->setUserResolver(fn () => $user);
+                    return $next($request);
+                }
+            }
+        } catch (\Throwable $e) {
+            // Passport check failed
+        }
+
+        return response()->json(['message' => 'Unauthenticated.'], 401);
     }
 }

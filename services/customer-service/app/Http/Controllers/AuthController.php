@@ -4,12 +4,16 @@ namespace App\Http\Controllers;
 
 use App\Models\Client;
 use App\Models\Employee;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Http\Request;
 use App\Services\AuthService;
 use Illuminate\Support\Str;
 use App\Models\RefreshToken;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use App\Services\SystemAlertDispatcher;
 
 class AuthController extends Controller
 {
@@ -140,18 +144,133 @@ class AuthController extends Controller
             'is_first_login' => $isFirstLogin,
         ], 200);
 
-        // Set httpOnly refresh cookie
+        // Set httpOnly refresh cookie scoped to customer API namespace
         if (!empty($result['refresh_token'])) {
             $minutes = 60 * 24 * 14; // 14 days
             $secure = config('app.env') !== 'local';
-            $resp->withCookie(cookie('refresh_token', $result['refresh_token'], $minutes, '/', null, $secure, true, false, 'Lax'));
+            $cookiePath = '/api/ticketing/customer';
+            $resp->withCookie(cookie('refresh_token', $result['refresh_token'], $minutes, $cookiePath, null, $secure, true, false, 'Lax'));
         }
 
         return $resp;
     }
 
+    public static function autoSyncWithAuthModule(): void
+    {
+        if (Cache::has('employees_synced_lock')) {
+            return;
+        }
+
+        Cache::put('employees_synced_lock', true, 60);
+
+        try {
+            $authUrl = env('AUTH_SERVICE_INTERNAL_URL', 'http://auth-service:8000');
+            $secret = env('CMS_INTERNAL_SECRET', 'cms-internal-secret-key-2026');
+
+            $resp = Http::timeout(3)
+                ->withHeaders(['X-Internal-Secret' => $secret])
+                ->get("{$authUrl}/api/internal/users-by-roles", [
+                    'roles' => 'Engineer,Manager,Employee,Supervisor',
+                ]);
+
+            if (!$resp->successful()) {
+                return;
+            }
+
+            $authUsers = $resp->json('data') ?? [];
+            if (empty($authUsers)) {
+                return;
+            }
+
+            foreach ($authUsers as $u) {
+                $email = strtolower(trim((string) ($u['email'] ?? '')));
+                if (empty($email)) continue;
+
+                $dept = trim((string) ($u['department'] ?? 'Service'));
+                $roleName = trim((string) ($u['role'] ?? 'Employee'));
+                $isManager = (stripos($roleName, 'manager') !== false);
+                $isAdmin = (stripos($roleName, 'admin') !== false);
+                $isEngineer = (stripos($roleName, 'engineer') !== false || stripos($roleName, 'supervisor') !== false);
+
+                if ($isAdmin) {
+                    $posLevel = 'Admin';
+                    $role = 'admin';
+                    $techRole = $roleName;
+                } elseif ($isManager) {
+                    $posLevel = 'Manager';
+                    $role = ($dept === 'Customer Service') ? 'customer service' : 'service';
+                    $techRole = $dept . ' Manager';
+                } elseif ($isEngineer || strcasecmp($dept, 'Service') === 0) {
+                    $posLevel = 'Engineer';
+                    $role = 'service';
+                    $techRole = 'Engineer';
+                } elseif (strcasecmp($dept, 'IT') === 0) {
+                    $posLevel = 'Employee';
+                    $role = 'service';
+                    $techRole = 'Employee';
+                } elseif ($dept === 'Customer Service') {
+                    $posLevel = 'Employee';
+                    $role = 'customer service';
+                    $techRole = 'Employee';
+                } else {
+                    $posLevel = 'Employee';
+                    $role = 'service';
+                    $techRole = 'Employee';
+                }
+
+                $branch = 'Main Branch';
+                $branchId = 1;
+                $branchName = $u['branch'] ?? ($u['branch_details']['name'] ?? '');
+                if (!empty($branchName) && stripos($branchName, 'north') !== false) {
+                    $branch = 'North Luzon Hub';
+                    $branchId = 2;
+                }
+
+                $existing = DB::table('employees')->where('email', $email)->first();
+
+                if ($existing) {
+                    DB::table('employees')->where('emp_id', $existing->emp_id)->update([
+                        'first_name' => $u['first_name'] ?: $existing->first_name,
+                        'last_name' => $u['last_name'] ?: $existing->last_name,
+                        'department' => $dept,
+                        'position_level' => $posLevel,
+                        'role' => $role,
+                        'technical_role' => $techRole,
+                        'branch' => $branch,
+                        'branch_id' => $branchId,
+                        'is_active' => (int) ($u['is_active'] ?? 1),
+                        'last_synced_at' => now(),
+                    ]);
+                } else {
+                    $newId = (isset($u['id']) && (int)$u['id'] > 0) ? (int)$u['id'] : ((int)DB::table('employees')->max('emp_id') + 1);
+                    DB::table('employees')->insert([
+                        'emp_id' => $newId,
+                        'email' => $email,
+                        'phone_number' => $u['phone'] ?? null,
+                        'password_hash' => '',
+                        'first_name' => $u['first_name'] ?? 'Staff',
+                        'last_name' => $u['last_name'] ?? '',
+                        'department' => $dept,
+                        'position_level' => $posLevel,
+                        'role' => $role,
+                        'technical_role' => $techRole,
+                        'branch' => $branch,
+                        'branch_id' => $branchId,
+                        'is_active' => (int) ($u['is_active'] ?? 1),
+                        'failed_login_count' => 0,
+                        'last_synced_at' => now(),
+                        'password_change_at' => now(),
+                    ]);
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Customer service auto-sync with auth module failed: ' . $e->getMessage());
+        }
+    }
+
     public function employeeStatuses(Request $request)
     {
+        self::autoSyncWithAuthModule();
         $user = $request->user();
 
         if (!$user instanceof Employee || !in_array($user->role, ['customer service', 'head of cs', 'head of customer service', 'cs'])) {
@@ -193,8 +312,11 @@ class AuthController extends Controller
                 $techRole = $posLevel;
             }
 
-            $isActive = (bool) data_get($presence, 'is_active', false);
-            $availability = $isActive ? 'Available' : 'Unavailable';
+            // Presence is derived from heartbeat freshness (spec 0035); is_active stays the account flag.
+            $lastSeen = $employee->last_seen_at ?: data_get($presence, 'last_seen_at');
+            $presenceState = \App\Support\Presence::state((bool) $employee->is_active, $lastSeen);
+            $isActive = (bool) $employee->is_active;
+            $availability = $presenceState === \App\Support\Presence::ONLINE ? 'Available' : 'Unavailable';
 
             return [
                 'id' => $employee->emp_id,
@@ -209,9 +331,10 @@ class AuthController extends Controller
                 'branch' => $employee->branch ?? 'Main Branch',
                 'department' => $employee->department,
                 'is_active' => $isActive,
+                'presence' => $presenceState,
                 'availability' => $availability,
                 'availability_status' => $availability,
-                'last_seen_at' => data_get($presence, 'last_seen_at', optional($employee->last_seen_at)->toISOString()),
+                'last_seen_at' => $lastSeen ? \Carbon\Carbon::parse($lastSeen)->toISOString() : null,
             ];
         });
 
@@ -230,7 +353,62 @@ class AuthController extends Controller
         $hash = hash('sha256', $raw);
         $rt = \App\Models\RefreshToken::where('token_hash', $hash)->first();
 
-        if (!$rt || ($rt->expires_at && $rt->expires_at->isPast())) {
+        if (!$rt) {
+            return response()->json(['message' => 'Invalid or expired refresh token'], 401);
+        }
+
+        // Token reuse detection (AC-5): If presented token is already revoked, purge all tokens & alert
+        if ($rt->is_revoked) {
+            Log::warning('Security breach detected: Revoked refresh token reuse attempt', [
+                'token_id' => $rt->id,
+                'client_id' => $rt->client_id,
+                'employee_id' => $rt->employee_id,
+                'ip' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+            ]);
+
+            SystemAlertDispatcher::dispatchIssue(
+                category: 'token_reuse',
+                severity: 'critical',
+                service: 'customer-service',
+                title: 'Refresh Token Reuse Detected',
+                message: 'A revoked refresh token was replayed. All active sessions have been revoked for containment.',
+                context: [
+                    'client_id' => $rt->client_id,
+                    'employee_id' => $rt->employee_id,
+                    'token_id' => $rt->id,
+                ],
+                ip: $request->ip(),
+                userAgent: $request->userAgent()
+            );
+
+            // Invalidate all active sessions, access tokens, and refresh tokens for this account
+            if ($rt->client_id) {
+                if ($rt->client) {
+                    $rt->client->tokens()->delete();
+                } else {
+                    DB::table('oauth_access_tokens')->where('user_id', $rt->client_id)->delete();
+                }
+                RefreshToken::where('client_id', $rt->client_id)->delete();
+            } elseif ($rt->employee_id) {
+                if ($rt->employee) {
+                    $rt->employee->tokens()->delete();
+                } else {
+                    DB::table('oauth_access_tokens')->where('user_id', $rt->employee_id)->delete();
+                }
+                RefreshToken::where('employee_id', $rt->employee_id)->delete();
+            }
+
+            $resp = response()->json([
+                'message' => 'Token reuse detected. All active sessions have been revoked.',
+            ], 401);
+
+            $resp->withCookie(cookie()->forget('refresh_token', '/api/ticketing/customer'));
+            $resp->withCookie(cookie()->forget('refresh_token', '/'));
+            return $resp;
+        }
+
+        if ($rt->expires_at && $rt->expires_at->isPast()) {
             return response()->json(['message' => 'Invalid or expired refresh token'], 401);
         }
 
@@ -242,18 +420,32 @@ class AuthController extends Controller
 
         $user = $client ?: $employee;
 
-        // issue new access token
-        $accessToken = $user->createToken($user instanceof Employee ? 'employee' : 'client')->accessToken;
-
-        // rotate refresh token
+        // Rotate refresh token atomically (AC-4)
         $rawNew = Str::random(80);
         $hashNew = hash('sha256', $rawNew);
-        $rt->token_hash = $hashNew;
-        $rt->expires_at = now()->addDays(14);
-        $rt->save();
+
+        DB::transaction(function () use ($rt, $hashNew) {
+            // Mark current token as revoked
+            $rt->update([
+                'is_revoked' => true,
+            ]);
+
+            // Create new active child token
+            RefreshToken::create([
+                'client_id' => $rt->client_id,
+                'employee_id' => $rt->employee_id,
+                'token_hash' => $hashNew,
+                'is_revoked' => false,
+                'expires_at' => now()->addDays(14),
+            ]);
+        });
+
+        // Issue new access token
+        $accessToken = $user->createToken($user instanceof Employee ? 'employee' : 'client')->accessToken;
 
         $minutes = 60 * 24 * 14;
         $secure = config('app.env') !== 'local';
+        $cookiePath = '/api/ticketing/customer';
 
         $resp = response()->json([
             'token' => $accessToken,
@@ -262,7 +454,8 @@ class AuthController extends Controller
                 ? $user->password_change_at === null
                 : optional($user->credential)->password_change_at === null,
         ], 200);
-        $resp->withCookie(cookie('refresh_token', $rawNew, $minutes, '/', null, $secure, true, false, 'Lax'));
+
+        $resp->withCookie(cookie('refresh_token', $rawNew, $minutes, $cookiePath, null, $secure, true, false, 'Lax'));
         return $resp;
     }
 
@@ -274,7 +467,9 @@ class AuthController extends Controller
         if ($user) {
             if ($user instanceof Employee) {
                 $isFirstLogin = $user->password_change_at === null;
-            } else {
+            } elseif ($user instanceof \Ticketing\Auth\Dto\AuthenticatedUserDto) {
+                $isFirstLogin = false;
+            } elseif (isset($user->id)) {
                 $isFirstLogin = \Illuminate\Support\Facades\DB::table('clients_credentials')
                     ->where('client_id', $user->id)
                     ->whereNull('password_change_at')
@@ -392,19 +587,26 @@ class AuthController extends Controller
 
     public function logout(Request $request)
     {
+        $user = $request->user() ?: Auth::guard('api')->user();
+
         $rawRefresh = $request->cookie('refresh_token');
         if ($rawRefresh) {
-            RefreshToken::where('token_hash', hash('sha256', $rawRefresh))->delete();
+            $hash = hash('sha256', $rawRefresh);
+            $rt = RefreshToken::where('token_hash', $hash)->first();
+            if ($rt && !$user) {
+                $user = $rt->client ?: $rt->employee;
+            }
+            RefreshToken::where('token_hash', $hash)->delete();
         }
-
-        $user = $request->user();
 
         if ($user) {
             if ($user instanceof Employee) {
                 $this->authService->logoutEmployee($user);
             }
 
-            $user->tokens()->delete();
+            if (method_exists($user, 'tokens')) {
+                $user->tokens()->delete();
+            }
             // remove refresh tokens
             if ($user instanceof Employee) {
                 RefreshToken::where('employee_id', $user->emp_id)->delete();
@@ -422,7 +624,14 @@ class AuthController extends Controller
             'message' => 'Logged out successfully',
         ]);
 
-        // clear refresh cookie
+        $secure = config('app.env') !== 'local';
+        // Explicitly expire and forget refresh cookie across all scopes
+        $resp->withCookie(cookie('refresh_token', '', -2628000, '/api/ticketing/customer', null, $secure, true, false, 'Lax'));
+        $resp->withCookie(cookie('refresh_token', '', -2628000, '/customer-ticketing', null, $secure, true, false, 'Lax'));
+        $resp->withCookie(cookie('refresh_token', '', -2628000, '/', null, $secure, true, false, 'Lax'));
+        $resp->withCookie(cookie()->forget('refresh_token', '/api/ticketing/customer'));
+        $resp->withCookie(cookie()->forget('refresh_token', '/customer-ticketing'));
+        $resp->withCookie(cookie()->forget('refresh_token', '/'));
         $resp->withCookie(cookie()->forget('refresh_token'));
 
         return $resp;
@@ -443,18 +652,20 @@ class AuthController extends Controller
 
         Cache::store('redis')->put($redisKey, $presence, 60);
 
-        $wasInactive = !$user->is_active;
+        // Only dispatch when the employee was not already Online, so a steady heartbeat does not spam the channel.
+        $wasOffline = !\App\Support\Presence::isOnline($user->last_seen_at);
 
+        // Heartbeat records presence only; it never changes the is_active account flag.
         $user->last_seen_at = now();
-        $user->is_active = true;
         $user->save();
 
-        if ($wasInactive) {
+        if ($wasOffline) {
             \App\Events\EmployeeStatusChanged::dispatch($user->refresh());
         }
 
         return response()->json([
-            'is_active' => true,
+            'is_active' => (bool) $user->is_active,
+            'presence' => \App\Support\Presence::ONLINE,
             'last_seen_at' => $user->last_seen_at->toISOString(),
         ]);
     }
@@ -540,6 +751,27 @@ class AuthController extends Controller
             ]);
         }
 
+        // Staff signed in through the central auth module arrive as a verified JWT DTO, not an Employee model.
+        if ($user instanceof \Ticketing\Auth\Dto\AuthenticatedUserDto) {
+            return response()->json([
+                'user' => [
+                    'id' => $user->emp_id ?? $user->id,
+                    'emp_id' => $user->emp_id ?? $user->id,
+                    'email' => $user->email,
+                    'first_name' => $user->first_name,
+                    'last_name' => $user->last_name,
+                    'name' => $user->name ?: trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? '')),
+                    'role' => $user->role,
+                    'department' => $user->department,
+                    'branch' => $user->branch,
+                    'branch_id' => $user->branch_id,
+                    'phone' => $user->phone_number,
+                    'is_readonly_cms' => true,
+                ],
+                'is_first_login' => false,
+            ]);
+        }
+
         $parts = explode(' ', $user->client_name ?? '');
         $firstName = $parts[0] ?? '';
         $lastName = implode(' ', array_slice($parts, 1));
@@ -572,7 +804,7 @@ class AuthController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        if ($user instanceof Employee) {
+        if ($user instanceof Employee || $user instanceof \Ticketing\Auth\Dto\AuthenticatedUserDto) {
             return response()->json(['message' => 'SSO users cannot edit profile details locally.'], 403);
         }
 

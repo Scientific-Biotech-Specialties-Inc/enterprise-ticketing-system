@@ -34,10 +34,14 @@ class Handler extends ExceptionHandler
     {
         $this->reportable(function (Throwable $e) {
             // Ignore standard user validation, 404, or 401 authentication errors
+            // Passport reports every rejected or expired bearer token as an OAuthServerException.
+            // That is an expected 401, not a system failure; alerting on it cost each such request
+            // a blocking call to notification-service (and timed out file access checks).
             if (
                 $e instanceof ValidationException ||
                 $e instanceof NotFoundHttpException ||
-                $e instanceof AuthenticationException
+                $e instanceof AuthenticationException ||
+                $e instanceof \League\OAuth2\Server\Exception\OAuthServerException
             ) {
                 return;
             }
@@ -68,5 +72,23 @@ class Handler extends ExceptionHandler
                 userAgent: request()?->userAgent()
             );
         });
+    }
+
+    /**
+     * Client errors (403, 404 and other 4xx) are expected outcomes, so they never expose file paths or stack
+     * traces even when APP_DEBUG is on. Real server errors keep the full debug detail.
+     */
+    protected function convertExceptionToArray(Throwable $e)
+    {
+        if ($e instanceof HttpException && $e->getStatusCode() < 500) {
+            return ['message' => $e->getMessage() !== '' ? $e->getMessage() : 'Request could not be completed.'];
+        }
+
+        return parent::convertExceptionToArray($e);
+    }
+
+    protected function unauthenticated($request, AuthenticationException $exception)
+    {
+        return response()->json(['message' => $exception->getMessage() ?: 'Unauthenticated.'], 401);
     }
 }

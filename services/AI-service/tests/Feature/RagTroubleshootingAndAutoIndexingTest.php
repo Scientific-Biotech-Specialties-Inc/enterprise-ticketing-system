@@ -127,16 +127,12 @@ class RagTroubleshootingAndAutoIndexingTest extends TestCase
             'status' => 'Published',
         ]);
 
-        // 1. ArticlePublished event dispatches IndexKbArticleJob
+        // 1 and 2. Spec 0036: indexing happens inside the upload, edit or replace request, so the
+        // ArticlePublished and ArticleUpdated listeners only refresh caches and never index again.
         event(new ArticlePublished($article, 'Super Admin'));
-        Queue::assertPushed(IndexKbArticleJob::class, function ($job) use ($article) {
-            return $job->articleId === $article->id && $job->action === 'publish';
-        });
-
-        // 2. ArticleUpdated event dispatches IndexKbArticleJob
         event(new ArticleUpdated($article, 'Super Admin'));
-        Queue::assertPushed(IndexKbArticleJob::class, function ($job) use ($article) {
-            return $job->articleId === $article->id && $job->action === 'update';
+        Queue::assertNotPushed(IndexKbArticleJob::class, function ($job) {
+            return in_array($job->action, ['publish', 'update'], true);
         });
 
         // 3. ArticleArchived event dispatches IndexKbArticleJob

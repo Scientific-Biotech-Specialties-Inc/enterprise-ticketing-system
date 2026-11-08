@@ -554,7 +554,21 @@ export function Loginpage({ mode = 'customer' }) {
           navigate('/customer-dashboard', { replace: true });
         }
       }
+      return undefined;
     }
+
+    // Truncate forward history when logged out on the login page so Forward button cannot enter dashboard
+    // Capture the login URL now; inside popstate, location already points at the previous entry.
+    const guardUrl = window.location.href;
+    const guardState = window.history.state;
+    window.history.pushState(guardState, '', guardUrl);
+    const handlePopState = () => {
+      if (!isAuthenticated) {
+        window.history.pushState(guardState, '', guardUrl);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
   }, [isAuthenticated, user, isFirstLogin, navigate]);
 
   // Lockout per-email handling
@@ -698,7 +712,7 @@ export function Loginpage({ mode = 'customer' }) {
 
         {/* Top Bar: Back to Home */}
         <div className="left-top">
-          <button className="back-btn" onClick={() => navigate('/')} aria-label="Back to Home">
+          <button className="back-btn" onClick={() => navigate('/', { replace: true })} aria-label="Back to Home">
             <ArrowLeft size={16} />
             <span>Back to Home</span>
           </button>

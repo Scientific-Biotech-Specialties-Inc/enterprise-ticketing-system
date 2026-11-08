@@ -36,12 +36,7 @@ ticketClient.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
-  const clientId = getStoredClientId();
-  if (clientId) {
-    config.headers['X-Client-Id'] = String(clientId);
-    config.headers['X-User-Id'] = String(clientId);
-  }
-
+  // Spec 0034: identity comes only from the verified token. No X-Client-Id or X-User-Id headers.
   return config;
 });
 
@@ -466,10 +461,7 @@ export const saveTicketDraft = async (data) => {
     }
   }
 
-  let clientId = data.client_id || data.client_ID || data.created_by || getStoredClientId();
-
   const payload = {
-    client_id: clientId || undefined,
     draft_id: data.id || data.draft_id || undefined,
     title: data.title ?? '',
     description: data.description ?? '',
@@ -483,15 +475,9 @@ export const saveTicketDraft = async (data) => {
   return response.data;
 };
 
-export const getTicketDrafts = async (params = {}) => {
-  let query = { ...params };
-  if (!query.client_id) {
-    const cid = getStoredClientId();
-    if (cid) query.client_id = cid;
-  }
-
+export const getTicketDrafts = async () => {
   try {
-    const response = await ticketClient.get('/tickets/drafts', { params: query });
+    const response = await ticketClient.get('/tickets/drafts');
     return response.data?.drafts ?? [];
   } catch (error) {
     if (error.response?.status === 401) {
@@ -501,23 +487,13 @@ export const getTicketDrafts = async (params = {}) => {
   }
 };
 
-export const getTicketDraft = async (id, params = {}) => {
-  let query = { ...params };
-  if (!query.client_id) {
-    const cid = getStoredClientId();
-    if (cid) query.client_id = cid;
-  }
-  const response = await ticketClient.get(`/tickets/drafts/${id}`, { params: query });
+export const getTicketDraft = async (id) => {
+  const response = await ticketClient.get(`/tickets/drafts/${id}`);
   return response.data?.draft ?? response.data;
 };
 
-export const deleteTicketDraft = async (id, params = {}) => {
-  let query = { ...params };
-  if (!query.client_id) {
-    const cid = getStoredClientId();
-    if (cid) query.client_id = cid;
-  }
-  const response = await ticketClient.delete(`/tickets/drafts/${id}`, { params: query });
+export const deleteTicketDraft = async (id) => {
+  const response = await ticketClient.delete(`/tickets/drafts/${id}`);
   return response.data;
 };
 
@@ -601,6 +577,71 @@ export const getCSIncomingTickets = async ({ limit = 50, page = 1, paginate = fa
 };
 
 
+/** Spec 0037: dropdown label to the server's SLA filter key. */
+export const SLA_FILTER_KEYS = {
+  Breached: 'breached',
+  'At Risk': 'at_risk',
+  'On Track': 'on_track',
+  Paused: 'paused',
+  Compliant: 'compliant',
+  'No SLA': 'no_sla',
+  'No SLA Configured': 'no_sla',
+  'SLA Unavailable': 'unavailable',
+};
+
+/**
+ * Spec 0037: one page of the CS Incoming or Assigned queue. The server applies the tab,
+ * every filter, the SLA filter, sorting, and pagination, and counts the tab badges and
+ * SLA summary cards, so the cards always match the rows across every page.
+ * (getCSIncomingTickets stays as it was for the pages that need every ticket.)
+ */
+export const getCSQueuePage = async ({
+  scope,
+  page = 1,
+  limit = 10,
+  tab,
+  search,
+  category,
+  customerName,
+  machine,
+  department,
+  type,
+  sla,
+  assignment,
+  sortBy,
+  sortDir,
+} = {}) => {
+  const params = { scope, page, limit, forceRefresh: true };
+  const optional = {
+    tab,
+    search: search?.trim(),
+    category,
+    customer_name: customerName,
+    machine,
+    department,
+    type: type && type !== 'all' ? type : undefined,
+    sla_status: sla ? (SLA_FILTER_KEYS[sla] || sla) : undefined,
+    assignment,
+    sort_by: sortBy,
+    sort_dir: sortDir,
+  };
+  Object.entries(optional).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') params[key] = value;
+  });
+
+  const response = await ticketClient.get('/cs-incoming', { params });
+  const d = response.data || {};
+  return {
+    tickets: d.data ?? d.incoming_tickets ?? [],
+    total: d.total ?? d.pagination?.total ?? 0,
+    page: d.page ?? d.pagination?.current_page ?? page,
+    perPage: d.per_page ?? d.pagination?.per_page ?? limit,
+    lastPage: Math.max(1, d.last_page ?? d.pagination?.last_page ?? 1),
+    slaSummary: d.slaSummary ?? d.sla_summary ?? null,
+    tabCounts: d.tab_counts ?? null,
+  };
+};
+
 export const clearIncomingTicketsCache = () => {
   incomingTicketsCache = null;
   incomingTicketsCacheAt = 0;
@@ -637,9 +678,17 @@ const fetchAssignableEmployees = async ({ department } = {}) => {
     }
     return true;
   });
-  employeesCache[key] = filtered;
+  // The backend now returns is_active as the account flag and a derived `presence`
+  // (online | offline | inactive, spec 0035). Existing consumers read is_active as "available now",
+  // so keep that contract by deriving it from presence and preserve the account flag separately.
+  const normalized = filtered.map((emp) => (
+    emp.presence
+      ? { ...emp, account_active: emp.is_active, is_active: emp.presence === 'online' }
+      : emp
+  ));
+  employeesCache[key] = normalized;
   employeesCacheAt[key] = Date.now();
-  return filtered;
+  return normalized;
 };
 
 export const getAssignableEmployees = async ({ department, forceRefresh = false } = {}) => {
@@ -679,18 +728,13 @@ export const getEligibleEmployees = async (ticketId, { track } = {}) => {
   try {
     response = await employeeClient.get(`/tickets/${cleanId}/eligible-employees`, { params });
   } catch (err) {
-    response = await ticketClient.get(`/tickets/${cleanId}/eligible-employees`, { params });
+    throw err;
   }
   return response.data;
 };
 
 const fetchDepartments = async () => {
-  let response;
-  try {
-    response = await employeeClient.get('/departments');
-  } catch {
-    response = await ticketClient.get('/departments');
-  }
+  const response = await employeeClient.get('/departments');
   const data = response.data?.departments ?? [];
   departmentsCache = data;
   departmentsCacheAt = Date.now();
@@ -726,12 +770,7 @@ export const assignTicketToEmployees = async ({ ticketId, employeeIds, assignedB
     assigned_by_email: assignedByEmail,
     priority_ID: priorityId,
   };
-  let response;
-  try {
-    response = await employeeClient.post(`/tickets/${normalizedId}/assign`, payload);
-  } catch (err) {
-    response = await ticketClient.post(`/tickets/${normalizedId}/assign`, payload);
-  }
+  const response = await employeeClient.post(`/tickets/${normalizedId}/assign`, payload);
   clearCSDashboardCache();
   notifyCsTicketRefresh();
   return response.data;
@@ -744,13 +783,7 @@ export const acceptTicket = async ({ ticketId, employeeIds, assignedByEmail, pri
   if (assignedByEmail !== undefined && assignedByEmail !== null) payload.assigned_by_email = assignedByEmail;
   if (priorityId !== undefined && priorityId !== null) payload.priority_ID = priorityId;
 
-  let response;
-  try {
-    response = await employeeClient.patch(`/tickets/${normalizedId}/accept`, payload);
-  } catch (err) {
-    response = await ticketClient.patch(`/tickets/${normalizedId}/accept`, payload);
-  }
-  // The save changes the ticket row, assignment rows, and audit log entries.
+  const response = await employeeClient.patch(`/tickets/${normalizedId}/accept`, payload);
   clearIncomingTicketsCache();
   clearCSDashboardCache();
   clearEmployeeTicketsCache();
@@ -786,6 +819,21 @@ export const reopenTicket = async (ticketId, reason) => {
     reason: String(reason || '').trim(),
   });
   // Clear caches since ticket updates affect customer and CS dashboards
+  clearCustomerDashboardCache();
+  clearIncomingTicketsCache();
+  clearCSDashboardCache();
+  clearEmployeeTicketsCache();
+  notifyCsTicketRefresh();
+  return response.data;
+};
+
+/**
+ * Close a ticket through the state machine (allowed only if the superadmin
+ * Transition Matrix permits the current state -> Closed).
+ */
+export const closeTicket = async (ticketId) => {
+  const numericId = Number(String(ticketId).replace(/\D/g, ''));
+  const response = await ticketClient.post(`/tickets/${numericId}/close`);
   clearCustomerDashboardCache();
   clearIncomingTicketsCache();
   clearCSDashboardCache();
@@ -838,7 +886,7 @@ export const reclassifyTicket = async ({ ticketId, problem_category_ID, priority
 
 const fetchEmployeeAssignedTickets = async ({ employeeEmail }) => {
   try {
-    const response = await ticketClient.get('/employee-tickets', {
+    const response = await employeeClient.get('/employee-tickets', {
       params: {
         employee_email: employeeEmail,
       },
@@ -904,6 +952,11 @@ export const getCSDashboard = async ({ limit = 10, forceRefresh = false } = {}) 
   return csDashboardInFlight;
 };
 
+export const getCSDashboardSummary = async ({ limit = 10 } = {}) => {
+  const response = await ticketClient.get('/cs-dashboard-summary', { params: { limit } });
+  return response.data;
+};
+
 export const clearCSDashboardCache = () => {
   csDashboardCache = null;
   csDashboardCacheAt = 0;
@@ -945,7 +998,7 @@ export const createInternalTicket = async (payload) => {
  * Route: GET /employee/tickets/internal  (auth.subsystem required)
  */
 export const getEmployeeInternalTickets = async () => {
-  const response = await ticketClient.get('/employee/tickets/internal');
+  const response = await employeeClient.get('/employee/tickets/internal');
   return response.data; // { tickets: [...] }
 };
 
@@ -1017,7 +1070,7 @@ export const cleanupCorruptedOverrides = () => {
 cleanupCorruptedOverrides();
 
 export const requestReassignment = async ({ ticketId, reason }) => {
-  const response = await ticketClient.post(`/tickets/${ticketId}/reassign-request`, {
+  const response = await employeeClient.post(`/tickets/${ticketId}/reassign-request`, {
     reason,
   });
 
@@ -1068,7 +1121,7 @@ export const respondReassignment = async ({ ticketId, action, newEmployeeId, rea
   const body = { action };
   if (newEmployeeId !== undefined) body.new_employee_id = newEmployeeId;
   if (reason !== undefined) body.reason = reason;
-  const response = await ticketClient.post(`/tickets/${ticketId}/reassign-respond`, body);
+  const response = await employeeClient.post(`/tickets/${ticketId}/reassign-respond`, body);
 
   try {
     const all = getEmployeeOverrides();
@@ -1109,7 +1162,7 @@ export const respondReassignment = async ({ ticketId, action, newEmployeeId, rea
 };
 
 export const getReassignmentRequests = async (params = {}) => {
-  const response = await ticketClient.get('/reassignment-requests', {
+  const response = await employeeClient.get('/reassignment-requests', {
     params,
   });
   return response.data?.requests ?? [];
@@ -1175,6 +1228,9 @@ export const updateEmployeeTicket = async (ticketId, formData) => {
   try {
     response = await employeeClient.post(`/tickets/${ticketId}/employee-update`, processedPayload);
   } catch (err) {
+    // Only retry when employee-service could not be reached. A real response (e.g. a 422 blocked
+    // by the Transition Matrix) must reach the caller instead of being replaced by the retry's error.
+    if (err?.response) throw err;
     response = await ticketClient.post(`/tickets/${ticketId}/employee-update`, processedPayload);
   }
   clearEmployeeTicketsCache();
@@ -1187,12 +1243,12 @@ export const updateEmployeeTicket = async (ticketId, formData) => {
 
 
 export const getInternalTickets = async () => {
-  const response = await ticketClient.get('/employee/tickets/internal');
+  const response = await employeeClient.get('/employee/tickets/internal');
   return response.data?.tickets ?? [];
 };
 
 export const getEmployeeProfile = async () => {
-  const response = await ticketClient.get('/employee/profile');
+  const response = await employeeClient.get('/employee/profile');
   return response.data;
 };
 
@@ -1201,7 +1257,7 @@ export const getWorklogs = async (params = {}) => {
     const response = await employeeClient.get('/employee/worklogs', { params });
     return response.data;
   } catch (err) {
-    const response = await ticketClient.get('/employee/worklogs', { params });
+    const response = await employeeClient.get('/employee/worklogs', { params });
     return response.data;
   }
 };
@@ -1211,7 +1267,7 @@ export const saveWorkLog = async (payload) => {
     const response = await employeeClient.post('/employee/worklogs', payload);
     return response.data;
   } catch (err) {
-    const response = await ticketClient.post('/employee/worklogs', payload);
+    const response = await employeeClient.post('/employee/worklogs', payload);
     return response.data;
   }
 };
@@ -1311,8 +1367,20 @@ export const deleteSuperAdminPriority = async (id) => {
   return response.data;
 };
 
-export const getSuperAdminAuditLogs = async () => {
-  const response = await ticketClient.get('/superadmin/audit-logs');
+export const getSuperAdminAuditLogs = async (params = {}) => {
+  const response = await ticketClient.get('/superadmin/audit-logs', { params });
+  return response.data;
+};
+
+export const getAuditLogFilterOptions = async () => {
+  const response = await ticketClient.get('/superadmin/audit-logs/filters');
+  return response.data;
+};
+
+export const getAuditLogRetentionImpact = async (previewDays) => {
+  const response = await ticketClient.get('/superadmin/audit-logs/retention/impact', {
+    params: previewDays ? { preview_days: previewDays } : {},
+  });
   return response.data;
 };
 
@@ -1353,6 +1421,18 @@ export const updateSLARule = async (id, payload) => {
 
 export const deleteSLARule = async (id) => {
   const response = await ticketClient.delete(`/superadmin/sla-rules/${id}`);
+  return response.data;
+};
+
+/**
+ * Recalculate SLA deadlines of all open tickets with the current rules and business hours.
+ */
+export const recalculateOpenTicketSlas = async () => {
+  const response = await ticketClient.post('/superadmin/sla/recalculate-open-tickets');
+  clearIncomingTicketsCache();
+  clearCSDashboardCache();
+  clearEmployeeTicketsCache();
+  notifyCsTicketRefresh();
   return response.data;
 };
 
@@ -1530,18 +1610,18 @@ export const addInternalNote = async (ticketId, note) => {
 
 // Employee Profile Update (TS105)
 export const updateEmployeeProfile = async (payload) => {
-  const response = await ticketClient.put('/employee/profile', payload);
+  const response = await employeeClient.put('/employee/profile', payload);
   return response.data;
 };
 
 // Employee Directory & Search (TS107)
 export const searchEmployees = async (params = {}) => {
-  const response = await ticketClient.get('/employees/search', { params });
+  const response = await employeeClient.get('/employees/search', { params });
   return response.data;
 };
 
 export const getEmployeeFilterOptions = async () => {
-  const response = await ticketClient.get('/employees/filter-options');
+  const response = await employeeClient.get('/employees/filter-options');
   return response.data;
 };
 
@@ -1605,6 +1685,79 @@ export const getSecurityIncidentDetail = async (incidentId) => {
 };
 
 
+
+// Heavy report queries (2 to 6 seconds cold). Callers that ask for the same endpoint and filters while a request is
+// still running (React StrictMode in development, a quick double mount, repeated preset clicks) share that one
+// request instead of each hitting the server. The entry is dropped when the request ends, so nothing is cached.
+const reportRequestsInFlight = new Map();
+
+const getSharedReport = (path, params = {}) => {
+  const key = `${path}?${JSON.stringify(Object.keys(params).sort().map((k) => [k, params[k]]))}`;
+  if (reportRequestsInFlight.has(key)) {
+    return reportRequestsInFlight.get(key);
+  }
+
+  const request = ticketClient
+    .get(path, { params })
+    .then((response) => response.data)
+    .finally(() => reportRequestsInFlight.delete(key));
+
+  reportRequestsInFlight.set(key, request);
+  return request;
+};
+
+export const getAdminDashboard = (params = {}) => getSharedReport('/admin/dashboard', params);
+
+/**
+ * Live manager summary and breached queue (spec 0031 AC-7). Scope (department, branch) is decided by the
+ * server from the signed in manager, so the only option is forcing a fresh read past the 30 s cache.
+ */
+export const getManagerDashboard = ({ forceRefresh = false } = {}) =>
+  getSharedReport('/manager/dashboard', forceRefresh ? { forceRefresh: true } : {});
+
+export const getAdminReports = async (params = {}) => {
+  const response = await ticketClient.get('/admin/reports', { params });
+  return response.data;
+};
+
+/**
+ * Server side export of the exact report snapshot the preview shows (spec 0029 AC-16, AC-17).
+ * Resolves with the raw axios response so callers can read the blob and the Content-Disposition filename.
+ */
+export const exportAdminReport = async ({ reportType, format, filters = {} }) => {
+  return ticketClient.post(
+    '/admin/reports/export',
+    { report_type: reportType, format, filters },
+    { responseType: 'blob' }
+  );
+};
+
+export const getAdminEmployeePerformance = async (params = {}) => {
+  const response = await ticketClient.get('/admin-reports/employees', { params });
+  return response.data;
+};
+
+export const getAdminDepartmentPerformance = async (params = {}) => {
+  const response = await ticketClient.get('/admin-reports/departments', { params });
+  return response.data;
+};
+
+export const getAdminPredictiveInsights = (params = {}) => getSharedReport('/admin-reports/predictive-insights', params);
+
+export const getTicketTimeline = async (ticketId, params = {}) => {
+  const response = await ticketClient.get(`/tickets/${ticketId}/timeline`, { params });
+  return response.data;
+};
+
+export const getSystemDashboard = async (params = {}) => {
+  const response = await ticketClient.get('/superadmin/system-dashboard', { params });
+  return response.data;
+};
+
+export const triggerEtlSync = async (payload = {}) => {
+  const response = await ticketClient.post('/etl/trigger', payload);
+  return response.data;
+};
 
 export const classifyDepartment = async (title, description) => {
   try {

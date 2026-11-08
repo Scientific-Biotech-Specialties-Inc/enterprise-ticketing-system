@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { downloadAttachment } from '@/utils/attachmentFiles';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { MessageCircle, Send, Users, User, AlertCircle, MoreVertical, Edit2, Trash2, Archive, RotateCcw, X, Info, History, Sparkles, Bot, Clock, Paperclip, FileText, Download, ShieldAlert, Loader2 } from 'lucide-react';
@@ -13,6 +14,7 @@ import {
   clearThreadPresence,
 } from '@/services/messagingService';
 import { getMessagingEcho } from '@/services/messagingEcho';
+import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import {
   getCustomerTickets,
   getCSIncomingTickets,
@@ -215,12 +217,20 @@ export default function MessagingPage() {
     return -1;
   }, [currentTicketMessages, lastLoadIndex, userType, userId]);
 
+  // Bumped by the ticket Reverb server so newly created/assigned tickets appear without a manual refresh.
+  const [ticketRefreshTick, setTicketRefreshTick] = useState(0);
+  const hasLoadedTicketsRef = useRef(false);
+  const handleTicketRealtime = useCallback(() => setTicketRefreshTick((n) => n + 1), []);
+  const realtimeChannels = useMemo(() => [{ name: 'ticket-updates', event: 'ticket.changed' }], []);
+  useRealtimeRefresh({ refresh: handleTicketRealtime, channels: realtimeChannels, intervalMs: 30000 });
+
   // 1. Fetch tickets for chat list
   useEffect(() => {
     let active = true;
     async function loadTickets() {
+      const isBackgroundRefresh = hasLoadedTicketsRef.current;
       try {
-        setLoading(true);
+        if (!isBackgroundRefresh) setLoading(true);
         let list = [];
         if (isCS) {
           const res = await getCSIncomingTickets({ limit: 100, forceRefresh: true });
@@ -277,7 +287,7 @@ export default function MessagingPage() {
           setTickets(list);
 
           // Auto-select if initialTicketId is in the list
-          if (initialTicketId) {
+          if (initialTicketId && !isBackgroundRefresh) {
             const numericId = Number(initialTicketId);
             const found = list.find(t => {
               const ticketId = t.ticket_ID || t.id;
@@ -307,12 +317,15 @@ export default function MessagingPage() {
       } catch (err) {
         console.error("Failed to load tickets for messaging page", err);
       } finally {
-        if (active) setLoading(false);
+        if (active) {
+          hasLoadedTicketsRef.current = true;
+          setLoading(false);
+        }
       }
     }
     loadTickets();
     return () => { active = false; };
-  }, [isCS, isEmployee, user, initialTicketId]);
+  }, [isCS, isEmployee, user, initialTicketId, ticketRefreshTick]);
 
   // 2. Map tickets to formatted contacts & calculate archive state
   const contacts = useMemo(() => {
@@ -355,6 +368,8 @@ export default function MessagingPage() {
       return {
         id: ticketId,
         ticket_ID: t.ticket_ID || Number(String(ticketId).replace(/\D/g, '')),
+        // Same ticket number the rest of the app shows; fall back to the padded id only if the API omits it.
+        ticketNumber: t.ticket_number || t.ticketNumber || (typeof ticketId === 'string' && !/^\d+$/.test(ticketId) ? ticketId : null),
         created_by: t.created_by || t.client_id || t.user_id || (isCS ? null : user?.id),
         name: `${contactName} (${ticketTitle})`,
         displayTitle: ticketTitle,
@@ -548,11 +563,17 @@ export default function MessagingPage() {
           const convList = res.data.conversations;
           setAiConversations(convList);
           if (convList.length > 0) {
-            const matched = convList.find(c =>
-              c.title && selectedContact?.displayTitle &&
-              (c.title.toLowerCase().includes(selectedContact.displayTitle.toLowerCase()) ||
-               selectedContact.displayTitle.toLowerCase().includes(c.title.toLowerCase()))
-            ) || convList[0];
+            const numericTicketId = Number(String(selectedContactId).replace(/\D/g, ''));
+            // Prefer the exact conversation linked to this ticket; fall back to a title match only.
+            const matched = convList.find(c => Number(c.escalation_data?.ticket_id) === numericTicketId)
+              || convList.find(c =>
+                c.title && selectedContact?.displayTitle &&
+                (c.title.toLowerCase().includes(selectedContact.displayTitle.toLowerCase()) ||
+                 selectedContact.displayTitle.toLowerCase().includes(c.title.toLowerCase()))
+              )
+              // The list is already scoped to this ticket's customer, so their latest chat is the best remaining guess
+              // (tickets created before the ticket link existed have no stored id and an unrelated title).
+              || convList[0];
             setSelectedAiConvId(matched.id);
           } else {
             setSelectedAiConvId(null);
@@ -1095,7 +1116,7 @@ export default function MessagingPage() {
                   <div>
                     <p className="font-semibold text-sm text-slate-dark">{selectedContact.displayTitle}</p>
                     <p className="text-xs text-slate-muted">
-                      {isCustomer ? `Ticket #${selectedContact.ticket_ID || selectedContact.id}` : `Client: ${selectedContact.subtitle}`} • Status: {selectedContact.status}
+                      {isCustomer ? `Ticket ${selectedContact.ticketNumber || `TKT-${String(selectedContact.ticket_ID || selectedContact.id).padStart(4, '0')}`}` : `Client: ${selectedContact.subtitle}`} • Status: {selectedContact.status}
                     </p>
                   </div>
                 </div>
@@ -1256,7 +1277,7 @@ export default function MessagingPage() {
                                         const isQuarantined = att.scan_status === 'quarantined' || Boolean(att.threat_alert);
                                         const isScanning = att.scan_status === 'pending' || Boolean(att.isScanning);
                                         const formattedSize = att.file_size ? `${(att.file_size / 1024).toFixed(0)} KB` : '';
-                                        const fileUrl = att.url || (att.file_path ? `/storage/${att.file_path}` : null);
+                                        const fileUrl = att.url || att.file_path || null;
 
                                         if (isQuarantined) {
                                           return (
@@ -1348,9 +1369,12 @@ export default function MessagingPage() {
                                         return (
                                           <a
                                             key={attIdx}
-                                            href={fileUrl || '#'}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
+                                            href="#"
+                                            role="button"
+                                            onClick={(e) => {
+                                              e.preventDefault();
+                                              if (fileUrl) downloadAttachment(fileUrl, att.name).catch(() => window.alert('This file could not be downloaded. You may not have access to it.'));
+                                            }}
                                             className={`flex items-center gap-2 p-2 rounded-lg transition-colors group/att ${
                                               isMine
                                                 ? 'bg-white/10 hover:bg-white/20 text-white'
@@ -1380,9 +1404,13 @@ export default function MessagingPage() {
                                     }`}>
                                       <span className="flex items-center gap-1 font-medium">
                                         <Loader2 size={11} className="animate-spin" />
-                                        Scanning file for malware (ClamAV)...
+                                        {Array.isArray(msg.attachments) && msg.attachments.length > 0
+                                          ? 'Scanning file for malware (ClamAV)...'
+                                          : 'Sending...'}
                                       </span>
-                                      <span className="italic opacity-80">Sending</span>
+                                      {Array.isArray(msg.attachments) && msg.attachments.length > 0 && (
+                                        <span className="italic opacity-80">Sending</span>
+                                      )}
                                     </div>
                                   )}
                                 </>
@@ -1401,7 +1429,8 @@ export default function MessagingPage() {
                                 </button>
                                 {activeMenuMsgId === msgId && (
                                   <div className={`absolute bottom-6 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-10 w-32 text-left text-xs ${isMine ? 'right-0' : 'left-0'}`}>
-                                    {isAuthor && isWithinEditWindow(msg) && (
+                                    {/* Spec 0037 (AC-17): a message that carries files stays exactly as sent. */}
+                                    {isAuthor && isWithinEditWindow(msg) && !(msg.attachments?.length > 0) && (
                                       <button
                                         onClick={() => handleStartEdit(msg)}
                                         className="w-full px-3 py-1.5 hover:bg-gray-50 flex items-center gap-1.5 text-gray-700 cursor-pointer font-medium whitespace-nowrap"
@@ -1615,9 +1644,10 @@ export default function MessagingPage() {
                       <div>
                         <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Ticket ID</p>
                         <p className="text-sm font-bold text-gray-800 mt-0.5">
-                          {typeof selectedContact.id === 'number'
-                            ? `TKT-${String(selectedContact.id).padStart(4, '0')}`
-                            : selectedContact.id}
+                          {selectedContact.ticketNumber
+                            || (typeof selectedContact.id === 'number'
+                              ? `TKT-${String(selectedContact.id).padStart(4, '0')}`
+                              : selectedContact.id)}
                         </p>
                       </div>
 

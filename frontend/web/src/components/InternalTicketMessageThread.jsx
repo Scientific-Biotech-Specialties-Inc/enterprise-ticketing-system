@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { downloadAttachment } from '@/utils/attachmentFiles';
 import {
   MessageSquare,
   Send,
@@ -440,9 +441,12 @@ export default function InternalTicketMessageThread({
                         return (
                           <a
                             key={attIdx}
-                            href={attUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                            href="#"
+                            role="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              if (attUrl) downloadAttachment(attUrl, attName).catch(() => {});
+                            }}
                             className={`flex items-center gap-2.5 p-2 rounded-xl transition-all ${
                               isMine
                                 ? 'bg-white/10 hover:bg-white/20 text-white'

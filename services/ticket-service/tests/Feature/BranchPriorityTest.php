@@ -22,6 +22,10 @@ class BranchPriorityTest extends TestCase
     {
         parent::setUp();
 
+        $this->seedBranch('luzon', 'Luzon Regional Center', 'LUZ');
+        $this->seedBranch('visayas', 'Visayas Medical Hub', 'VIS');
+        $this->seedBranch('main', 'Main Branch', 'MAIN');
+
         DB::table('ticket_priorities')->updateOrInsert(
             ['priority_ID' => 3],
             ['priority_name' => 'High', 'color_code' => 'bg-orange-100 text-orange-700', 'created_at' => now(), 'updated_at' => now()]
@@ -192,7 +196,7 @@ class BranchPriorityTest extends TestCase
         DB::table('ticket_statuses')->updateOrInsert(['ticket_status_ID' => 1], ['status_name' => 'Open', 'created_at' => now(), 'updated_at' => now()]);
         DB::table('ticket_types')->updateOrInsert(['ticket_type_ID' => 1], ['type_name' => 'External', 'created_at' => now(), 'updated_at' => now()]);
         DB::table('problem_categories')->updateOrInsert(['problem_category_ID' => 1], ['category_name' => 'Hardware Issue', 'is_active' => true, 'created_at' => now(), 'updated_at' => now()]);
-        DB::table('machines')->updateOrInsert(['machine_ID' => 1], ['machine_name' => 'Demo Scanner', 'serial_number' => 'SN-1001', 'created_at' => now(), 'updated_at' => now()]);
+        $this->seedMachine(1, ['machine_name' => 'Demo Scanner', 'serial_number' => 'SN-1001']);
 
         return DB::table('tickets')->insertGetId([
             'machine_ID' => 1, 'problem_category_ID' => 1, 'created_by' => $clientId,

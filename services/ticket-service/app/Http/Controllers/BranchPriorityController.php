@@ -30,8 +30,13 @@ class BranchPriorityController extends Controller
 
     public function branches(Request $request)
     {
-        if ($err = $this->checkSuperAdmin($request)) {
-            return $err;
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
+        $role = strtolower(str_replace(' ', '', $user->role ?? ''));
+        if (!in_array($role, ['superadmin', 'admin', 'systemadministrator'])) {
+            return response()->json(['message' => 'Forbidden'], 403);
         }
 
         return $this->publicBranches($request);

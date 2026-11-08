@@ -195,10 +195,10 @@ export default function MyTickets({ mode = 'all' }) {
     }
   }, [customerId]);
 
-  const loadTickets = useCallback(async ({ forceRefresh = false } = {}) => {
-    setLoading(true);
+  const loadTickets = useCallback(async ({ forceRefresh = false, source = 'manual' } = {}) => {
+    // Realtime ticks (websocket/poll) refresh silently instead of flashing the skeleton.
+    if (source !== 'websocket' && source !== 'poll') setLoading(true);
     setError('');
-
     try {
       const ticketsList = await getCustomerTickets({ createdBy: customerId, limit: 100, forceRefresh });
       const seen = new Set();
@@ -1006,7 +1006,7 @@ export default function MyTickets({ mode = 'all' }) {
         actions={
           !isHistory && (
             <Button
-              onClick={() => navigate('/ai-support')}
+              onClick={() => navigate('/ai-support', { state: { startNewChat: true } })}
               icon={<Plus className="h-4 w-4" />}
             >
               Create Ticket

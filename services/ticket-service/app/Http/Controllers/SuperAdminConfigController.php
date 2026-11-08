@@ -4,19 +4,28 @@ namespace App\Http\Controllers;
 
 use App\Events\TicketChanged;
 use App\Events\TicketLimitsUpdated;
+use App\Exceptions\PurgeAlreadyInProgressException;
+use App\Exceptions\PurgeExecutionFailedException;
+use App\Services\AuditRetentionService;
 use App\Services\TicketCacheService;
 use App\Services\TicketConfigurationService;
+use Cron\CronExpression;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Validator;
 
 class SuperAdminConfigController extends Controller
 {
     protected TicketCacheService $cacheService;
+    protected AuditRetentionService $auditRetentionService;
 
-    public function __construct(TicketCacheService $cacheService)
-    {
+    public function __construct(
+        TicketCacheService $cacheService,
+        AuditRetentionService $auditRetentionService
+    ) {
         $this->cacheService = $cacheService;
+        $this->auditRetentionService = $auditRetentionService;
     }
 
     private function checkSuperAdmin(Request $request)
@@ -494,7 +503,21 @@ class SuperAdminConfigController extends Controller
             return $err;
         }
 
-        $logs = DB::table('ticket_audit_logs as tal')
+        $validator = \Illuminate\Support\Facades\Validator::make($request->query(), [
+            'date_from' => 'nullable|date',
+            'date_to' => 'nullable|date',
+            'event_type' => 'nullable|string|max:64',
+            'branch_id' => 'nullable|integer|min:1',
+            'actor' => 'nullable|string|max:100',
+            'search' => 'nullable|string|max:200',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:200',
+        ]);
+        if ($validator->fails()) {
+            return response()->json(['status' => 'error', 'message' => 'Invalid audit log filter.', 'errors' => $validator->errors()], 422);
+        }
+
+        $query = DB::table('ticket_audit_logs as tal')
             ->leftJoin('employees as e', function ($join) {
                 $join->on('e.emp_id', '=', 'tal.action_by_ID')
                     ->whereIn('tal.actor_type', ['employee', 'superadmin', 'admin', 'cs', 'customerservice']);
@@ -504,9 +527,53 @@ class SuperAdminConfigController extends Controller
                     ->where('tal.actor_type', '=', 'customer');
             })
             ->leftJoin('tickets as t', 't.ticket_ID', '=', 'tal.ticket_ID')
-            ->select('tal.*', 'e.first_name', 'e.last_name', 'e.role', 'c.client_name')
-            ->orderBy('tal.created_at', 'desc')
-            ->get();
+            ->select('tal.*', 'e.first_name', 'e.last_name', 'e.role', 'c.client_name', 't.branch_id as ticket_branch_id', 't.ticket_number');
+
+        // Combined filters: every supplied criterion must match.
+        if ($request->filled('date_from')) {
+            $query->where('tal.created_at', '>=', \Carbon\Carbon::parse($request->query('date_from'))->startOfDay());
+        }
+        if ($request->filled('date_to')) {
+            $query->where('tal.created_at', '<=', \Carbon\Carbon::parse($request->query('date_to'))->endOfDay());
+        }
+        if ($request->filled('event_type')) {
+            $query->where('tal.action_type', $request->query('event_type'));
+        }
+        if ($request->filled('branch_id')) {
+            // Entries not tied to a ticket carry no branch, so they are excluded when narrowing by branch.
+            $query->where('t.branch_id', (int) $request->query('branch_id'));
+        }
+        if ($request->filled('actor')) {
+            $actor = '%' . $request->query('actor') . '%';
+            $query->where(function ($sub) use ($actor) {
+                $sub->whereRaw("CONCAT(COALESCE(e.first_name, ''), ' ', COALESCE(e.last_name, '')) LIKE ?", [$actor])
+                    ->orWhere('c.client_name', 'like', $actor);
+            });
+        }
+        if ($request->filled('search')) {
+            $term = '%' . $request->query('search') . '%';
+            $query->where(function ($sub) use ($term) {
+                $sub->where('tal.details', 'like', $term)
+                    ->orWhere('tal.action_type', 'like', $term)
+                    ->orWhere('tal.ticket_ID', 'like', $term)
+                    ->orWhere('t.ticket_number', 'like', $term);
+            });
+        }
+
+        $query->orderBy('tal.created_at', 'desc')->orderBy('tal.log_ID', 'desc');
+
+        // Pagination is opt in so existing clients that expect the full list keep working.
+        $paginate = $request->filled('page') || $request->filled('per_page');
+        $total = null;
+        $page = 1;
+        $perPage = 25;
+        if ($paginate) {
+            $page = (int) $request->query('page', 1);
+            $perPage = (int) $request->query('per_page', 25);
+            $total = (clone $query)->getCountForPagination();
+            $query->forPage($page, $perPage);
+        }
+        $logs = $query->get();
 
         $formattedLogs = $logs->map(function ($log) {
             $userFullName = 'System';
@@ -528,13 +595,16 @@ class SuperAdminConfigController extends Controller
 
             $action = 'Updated';
             $module = 'Tickets';
-            $target = $log->ticket_ID ? 'TKT-' . str_pad((string) $log->ticket_ID, 4, '0', STR_PAD_LEFT) : 'System';
+            // Use the stored ticket number; padding the internal row ID names a different ticket once the two diverge.
+            $target = $log->ticket_ID
+                ? ($log->ticket_number ?: 'TKT-' . str_pad((string) $log->ticket_ID, 4, '0', STR_PAD_LEFT))
+                : 'System';
             $details = $log->details;
 
             $detailsDecoded = json_decode($log->details, true);
             if ($log->actor_type === 'superadmin' && $detailsDecoded) {
                 $module = $detailsDecoded['module'] ?? 'System';
-                $target = $detailsDecoded['target'] ?? 'System';
+                $target = $detailsDecoded['target'] ?? $target;
                 $details = $detailsDecoded['text'] ?? '';
                 
                 if (str_contains($log->action_type, 'create')) {
@@ -602,10 +672,49 @@ class SuperAdminConfigController extends Controller
                 'incident_id' => $detailsDecoded['incident_id'] ?? null,
                 'severity' => $detailsDecoded['severity'] ?? null,
                 'burst_count' => $detailsDecoded['burst_count'] ?? 1,
+                'event_type' => $log->action_type,
+                'branch_id' => $log->ticket_branch_id !== null ? (int) $log->ticket_branch_id : null,
             ];
-        });
+        })->values();
+
+        if ($paginate) {
+            return response()->json([
+                'entries' => $formattedLogs,
+                'count' => $formattedLogs->count(),
+                'pagination' => [
+                    'current_page' => $page,
+                    'per_page' => $perPage,
+                    'total' => $total,
+                    'last_page' => max(1, (int) ceil($total / $perPage)),
+                ],
+            ]);
+        }
 
         return response()->json($formattedLogs);
+    }
+
+    /**
+     * Distinct, database backed values for the audit log filter dropdowns.
+     */
+    public function getAuditLogFilterOptions(Request $request)
+    {
+        if ($err = $this->checkSuperAdmin($request)) {
+            return $err;
+        }
+
+        $actionTypes = DB::table('ticket_audit_logs')->whereNotNull('action_type')->distinct()->orderBy('action_type')->pluck('action_type')->values();
+        $branches = DB::table('branches')->orderBy('name')->get(['id', 'name', 'code'])->map(fn ($b) => [
+            'id' => (int) $b->id,
+            'name' => $b->name,
+            'code' => $b->code,
+        ])->values();
+        $actorRoles = DB::table('ticket_audit_logs')->whereNotNull('actor_type')->distinct()->orderBy('actor_type')->pluck('actor_type')->values();
+
+        return response()->json([
+            'action_types' => $actionTypes,
+            'branches' => $branches,
+            'actor_roles' => $actorRoles,
+        ]);
     }
 
     /**
@@ -662,95 +771,222 @@ class SuperAdminConfigController extends Controller
         ]);
     }
 
+    private function authorizeRetentionSuperAdmin(Request $request)
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json([
+                'status' => 'error',
+                'code' => 'UNAUTHENTICATED',
+                'message' => 'Unauthorized',
+            ], 401);
+        }
+        if (strtolower(str_replace(' ', '', $user->role ?? '')) !== 'superadmin') {
+            return response()->json([
+                'status' => 'error',
+                'code' => 'FORBIDDEN',
+                'message' => 'Forbidden: Super Admin access required.',
+            ], 403);
+        }
+        return null;
+    }
+
+    private function resolveOperatorEmpId(Request $request): ?int
+    {
+        $user = $request->user();
+        if (!$user) {
+            return null;
+        }
+        $empId = $user->emp_id ?? $user->id ?? null;
+        return $empId !== null ? (int) $empId : null;
+    }
+
     /**
-     * TS088: Get log retention policy configuration.
+     * Spec 0030: Retrieve active audit log retention policy, schedule, impact estimate, and last run.
      */
     public function getLogRetentionConfig(Request $request)
     {
-        if ($err = $this->checkSuperAdmin($request)) {
+        if ($err = $this->authorizeRetentionSuperAdmin($request)) {
             return $err;
         }
 
-        $retentionDays = (int) \Illuminate\Support\Facades\Cache::get('superadmin_log_retention_days', 365);
-        $threshold = \Illuminate\Support\Carbon::now()->subDays($retentionDays);
-        $affectedCount = DB::table('ticket_audit_logs')
-            ->where('created_at', '<', $threshold)
-            ->count();
-
-        return response()->json([
-            'retention_days' => $retentionDays,
-            'threshold_date' => $threshold->toIso8601String(),
-            'affected_records_count' => $affectedCount,
-            'schedule' => 'Nightly at 02:00 UTC',
-            'last_purged_at' => \Illuminate\Support\Facades\Cache::get('superadmin_last_log_purge_at'),
-        ]);
+        return response()->json($this->auditRetentionService->getRetentionConfiguration());
     }
 
     /**
-     * TS088: Update log retention policy configuration.
+     * Spec 0030: Update audit log retention policy with enforced 30-day safety floor.
      */
     public function updateLogRetentionConfig(Request $request)
     {
-        if ($err = $this->checkSuperAdmin($request)) {
+        if ($err = $this->authorizeRetentionSuperAdmin($request)) {
             return $err;
         }
 
-        $validated = $request->validate([
-            'retention_days' => 'required|integer|min:7|max:1825',
+        $floor = $this->auditRetentionService->getSafetyFloorDays();
+        $validator = Validator::make($request->all(), [
+            'retention_days' => ['required', 'integer', "min:{$floor}", 'max:3650'],
+            'is_auto_purge_enabled' => ['sometimes', 'boolean'],
+            'purge_schedule' => [
+                'sometimes',
+                'string',
+                'max:64',
+                function (string $attribute, mixed $value, \Closure $fail): void {
+                    if (!CronExpression::isValidExpression(trim((string) $value))) {
+                        $fail("The {$attribute} field must be a valid cron expression.");
+                    }
+                },
+            ],
         ]);
 
-        \Illuminate\Support\Facades\Cache::forever('superadmin_log_retention_days', $validated['retention_days']);
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 'error',
+                'code' => 'INVALID_RETENTION_POLICY',
+                'message' => $validator->errors()->first(),
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        $operatorId = $this->resolveOperatorEmpId($request);
+        $settings = $this->auditRetentionService->updateRetentionConfiguration(
+            $validator->validated(),
+            $operatorId
+        );
 
         return response()->json([
+            'status' => 'success',
             'message' => 'Log retention policy updated successfully.',
-            'retention_days' => $validated['retention_days'],
+            'retention_days' => $settings->retention_days,
+            'settings' => [
+                'id' => $settings->id,
+                'retention_days' => $settings->retention_days,
+                'is_auto_purge_enabled' => $settings->is_auto_purge_enabled,
+                'purge_schedule' => $settings->purge_schedule,
+                'chunk_size' => $settings->chunk_size,
+                'updated_by_id' => $settings->updated_by_id,
+                'updated_at' => $settings->updated_at?->toIso8601String(),
+            ],
         ]);
     }
 
     /**
-     * TS088: Permanently purge audit logs older than retention threshold.
+     * Spec 0030: Calculate exact pre-purge expired record impact without mutating database state.
      */
-    public function purgeAuditLogs(Request $request)
+    public function getLogRetentionImpact(Request $request)
     {
-        if ($err = $this->checkSuperAdmin($request)) {
+        if ($err = $this->authorizeRetentionSuperAdmin($request)) {
             return $err;
         }
 
-        $retentionDays = (int) ($request->input('retention_days') ?? \Illuminate\Support\Facades\Cache::get('superadmin_log_retention_days', 365));
-        $threshold = \Illuminate\Support\Carbon::now()->subDays($retentionDays);
+        $floor = $this->auditRetentionService->getSafetyFloorDays();
+        $validator = Validator::make($request->query(), [
+            'preview_days' => ['sometimes', 'nullable', 'integer', "min:{$floor}", 'max:3650'],
+        ]);
 
-        $deletedCount = DB::table('ticket_audit_logs')
-            ->where('created_at', '<', $threshold)
-            ->delete();
-
-        \Illuminate\Support\Facades\Cache::forever('superadmin_last_log_purge_at', \Illuminate\Support\Carbon::now()->toIso8601String());
-
-        // Write an audit log entry for the purge action itself
-        try {
-            DB::table('ticket_audit_logs')->insert([
-                'action_type' => 'config_purge',
-                'action_by_ID' => $request->user()->emp_id ?? 0,
-                'actor_type' => 'superadmin',
-                'details' => json_encode([
-                    'module' => 'System',
-                    'target' => 'Audit Logs',
-                    'text' => "Permanently purged {$deletedCount} historical audit log records older than {$retentionDays} days.",
-                ]),
-                'created_at' => \Illuminate\Support\Carbon::now(),
-            ]);
-        } catch (\Exception $e) {
-            // Ignore if insert fails
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 'error',
+                'code' => 'INVALID_RETENTION_DAYS',
+                'message' => $validator->errors()->first(),
+                'errors' => $validator->errors(),
+            ], 422);
         }
 
-        return response()->json([
-            'message' => "Successfully purged {$deletedCount} expired audit log records.",
-            'purged_count' => $deletedCount,
-            'threshold_date' => $threshold->toIso8601String(),
-            'purged_at' => \Illuminate\Support\Carbon::now()->toIso8601String(),
-        ]);
-    });
+        $validated = $validator->validated();
+        $previewDays = isset($validated['preview_days']) && $validated['preview_days'] !== null
+            ? (int) $validated['preview_days']
+            : null;
 
-        return response()->json($formattedLogs);
+        return response()->json($this->auditRetentionService->calculateImpact($previewDays));
+    }
+
+    /**
+     * Spec 0030: Trigger manual keyset-chunked audit log purge protected by Redis concurrency mutex.
+     */
+    public function purgeAuditLogs(Request $request)
+    {
+        if ($err = $this->authorizeRetentionSuperAdmin($request)) {
+            return $err;
+        }
+
+        $floor = $this->auditRetentionService->getSafetyFloorDays();
+        if ($request->has('retention_days') && $request->input('retention_days') !== null) {
+            $validator = Validator::make($request->all(), [
+                'retention_days' => ['integer', "min:{$floor}", 'max:3650'],
+            ]);
+            if ($validator->fails()) {
+                return response()->json([
+                    'status' => 'error',
+                    'code' => 'INVALID_RETENTION_DAYS',
+                    'message' => $validator->errors()->first(),
+                    'errors' => $validator->errors(),
+                ], 422);
+            }
+        }
+
+        $operatorId = $this->resolveOperatorEmpId($request);
+
+        try {
+            $run = $this->auditRetentionService->executePurge('manual', $operatorId);
+
+            return response()->json([
+                'status' => $run->status,
+                'message' => "Successfully purged {$run->records_deleted} expired audit log records.",
+                'run_id' => $run->id,
+                'records_identified' => $run->records_identified,
+                'records_deleted' => $run->records_deleted,
+                'cutoff_timestamp' => $run->cutoff_timestamp?->toIso8601String(),
+                'duration_ms' => $run->duration_ms,
+                'purged_count' => $run->records_deleted,
+                'threshold_date' => $run->cutoff_timestamp?->toIso8601String(),
+                'purged_at' => $run->created_at?->toIso8601String(),
+            ]);
+        } catch (PurgeAlreadyInProgressException $e) {
+            return response()->json([
+                'status' => 'error',
+                'code' => 'PURGE_ALREADY_IN_PROGRESS',
+                'message' => 'PURGE_ALREADY_IN_PROGRESS',
+                'detail' => 'Another audit log purge operation is currently in progress.',
+            ], 409);
+        } catch (PurgeExecutionFailedException $e) {
+            return response()->json([
+                'status' => 'error',
+                'code' => 'PURGE_EXECUTION_FAILED',
+                'message' => 'Audit log purge execution failed.',
+                'detail' => $e->getMessage(),
+                'run_id' => $e->getPurgeRun()?->id,
+            ], 500);
+        }
+    }
+
+    /**
+     * Spec 0030: Retrieve paginated historical audit purge run records.
+     */
+    public function getLogRetentionHistory(Request $request)
+    {
+        if ($err = $this->authorizeRetentionSuperAdmin($request)) {
+            return $err;
+        }
+
+        $validator = Validator::make($request->query(), [
+            'page' => ['sometimes', 'integer', 'min:1'],
+            'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 'error',
+                'code' => 'INVALID_PAGINATION_PARAMETERS',
+                'message' => $validator->errors()->first(),
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        $validated = $validator->validated();
+        $page = (int) ($validated['page'] ?? 1);
+        $perPage = (int) ($validated['per_page'] ?? 15);
+
+        return response()->json($this->auditRetentionService->getPurgeHistory($page, $perPage));
     }
 
 

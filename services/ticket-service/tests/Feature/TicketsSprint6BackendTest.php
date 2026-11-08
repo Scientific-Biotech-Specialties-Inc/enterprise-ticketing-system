@@ -224,8 +224,8 @@ class TicketsSprint6BackendTest extends TestCase
 
     protected function seedTestData(): void
     {
-        DB::table('clients')->updateOrInsert(['id' => $this->testClientId], ['client_name' => 'Acme Hospital', 'email' => 'acme@example.com']);
-        DB::table('clients')->updateOrInsert(['id' => $this->otherClientId], ['client_name' => 'Other Clinic', 'email' => 'other@example.com']);
+        DB::table('clients')->updateOrInsert(['id' => $this->testClientId], ['client_name' => 'Acme Hospital', 'email' => 'acme@example.com', 'address' => '1 Acme Way', 'contact_number' => '0000000001']);
+        DB::table('clients')->updateOrInsert(['id' => $this->otherClientId], ['client_name' => 'Other Clinic', 'email' => 'other@example.com', 'address' => '2 Other Way', 'contact_number' => '0000000002']);
 
         DB::table('employees')->updateOrInsert(['emp_id' => $this->assignedEmpId], [
             'first_name' => 'Alice',
@@ -235,6 +235,7 @@ class TicketsSprint6BackendTest extends TestCase
             'department' => 'Service',
             'branch' => 'Main',
             'is_active' => true,
+            'password_hash' => 'secret',
         ]);
 
         DB::table('employees')->updateOrInsert(['emp_id' => $this->otherEmpId], [
@@ -245,6 +246,7 @@ class TicketsSprint6BackendTest extends TestCase
             'department' => 'Service',
             'branch' => 'Visayas',
             'is_active' => true,
+            'password_hash' => 'secret',
         ]);
 
         DB::table('employees')->updateOrInsert(['emp_id' => $this->adminEmpId], [
@@ -255,18 +257,19 @@ class TicketsSprint6BackendTest extends TestCase
             'department' => 'Management',
             'branch' => 'Main',
             'is_active' => true,
+            'password_hash' => 'secret',
         ]);
 
         DB::table('problem_categories')->updateOrInsert(['problem_category_ID' => 1], ['category_name' => 'Hardware']);
         DB::table('problem_categories')->updateOrInsert(['problem_category_ID' => 2], ['category_name' => 'Software']);
 
-        DB::table('machines')->updateOrInsert(['machine_ID' => 1], [
+        $this->seedMachine(1, [
             'machine_name' => 'CGI Machine Pro',
             'serial_number' => 'CGI-9988-AA',
             'client_ID' => $this->testClientId,
         ]);
 
-        DB::table('machines')->updateOrInsert(['machine_ID' => 2], [
+        $this->seedMachine(2, [
             'machine_name' => 'Other Machine',
             'serial_number' => 'OTH-1122-BB',
             'client_ID' => $this->otherClientId,
@@ -448,6 +451,10 @@ class TicketsSprint6BackendTest extends TestCase
             'title' => 'Internal Note Test Ticket',
             'description' => 'Description test',
             'created_by' => $this->testClientId,
+            'machine_ID' => 1,
+            'problem_category_ID' => 1,
+            'ticket_type_ID' => 1,
+            'ticket_status_ID' => 1,
             'created_at' => now(),
             'updated_at' => now(),
         ]);
@@ -472,6 +479,10 @@ class TicketsSprint6BackendTest extends TestCase
             'title' => 'Assigned Employee Note Ticket',
             'description' => 'Description test',
             'created_by' => $this->testClientId,
+            'machine_ID' => 1,
+            'problem_category_ID' => 1,
+            'ticket_type_ID' => 1,
+            'ticket_status_ID' => 1,
             'created_at' => now(),
             'updated_at' => now(),
         ]);
@@ -480,7 +491,7 @@ class TicketsSprint6BackendTest extends TestCase
         DB::table('ticket_assignments')->insert([
             'ticket_ID' => $ticketId,
             'employee_ID' => $this->assignedEmpId,
-            'is_active' => true,
+            'assigned_by' => $this->adminEmpId,
             'created_at' => now(),
             'updated_at' => now(),
         ]);
@@ -585,20 +596,31 @@ class TicketsSprint6BackendTest extends TestCase
         $directoryController = app(\App\Http\Controllers\EmployeeDirectoryController::class);
 
         // 1. Partial Name search
-        $req1 = new \Illuminate\Http\Request(['q' => 'Alic']);
+        // The shared test database can hold other employees, so assert on this test's fixtures
+        // and on every returned row matching the query, not on global totals.
+        $req1 = new \Illuminate\Http\Request(['q' => 'Alic', 'per_page' => 100]);
         $req1->setUserResolver(fn () => (object) ['emp_id' => $this->adminEmpId, 'role' => 'superadmin']);
         $res1 = $directoryController->searchEmployees($req1);
         $data1 = $res1->getData(true);
         $this->assertTrue($data1['success']);
-        $this->assertSame(1, $data1['total']);
-        $this->assertSame('Alice Engineer', $data1['data'][0]['name']);
+        $rows1 = collect($data1['data']);
+        $this->assertContains($this->assignedEmpId, $rows1->pluck('id')->all());
+        $this->assertSame('Alice Engineer', $rows1->firstWhere('id', $this->assignedEmpId)['name']);
+        $this->assertNotContains($this->otherEmpId, $rows1->pluck('id')->all()); // Bob does not match "Alic"
 
         // 2. Combinable filters (Department + Role)
-        $req2 = new \Illuminate\Http\Request(['department' => 'Service', 'role' => 'technician']);
+        $req2 = new \Illuminate\Http\Request(['department' => 'Service', 'role' => 'technician', 'per_page' => 100]);
         $req2->setUserResolver(fn () => (object) ['emp_id' => $this->adminEmpId, 'role' => 'superadmin']);
         $res2 = $directoryController->searchEmployees($req2);
         $data2 = $res2->getData(true);
-        $this->assertSame(2, $data2['total']); // Alice and Bob
+        $rows2 = collect($data2['data']);
+        $this->assertContains($this->assignedEmpId, $rows2->pluck('id')->all()); // Alice
+        $this->assertContains($this->otherEmpId, $rows2->pluck('id')->all());    // Bob
+        $this->assertNotContains($this->adminEmpId, $rows2->pluck('id')->all()); // admin role is filtered out
+        foreach ($rows2 as $row) {
+            $this->assertSame('service', strtolower($row['department']));
+            $this->assertSame('technician', strtolower($row['role']));
+        }
 
         // 3. Admin Branch Scoping: Admin in 'Main' branch cannot access employees in 'Visayas'
         $adminReq = new \Illuminate\Http\Request(['branch' => 'Visayas']);

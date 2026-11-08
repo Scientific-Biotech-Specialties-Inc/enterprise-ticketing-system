@@ -1,3 +1,4 @@
+import { safeUrl } from '@/utils/safeUrl';
 import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -25,14 +26,12 @@ import FeedbackModal from './feedback/FeedbackModal';
 import TicketFeedbackSection from './feedback/TicketFeedbackSection';
 import InternalTicketMessageThread from './InternalTicketMessageThread';
 import TicketActivityTimeline from './TicketActivityTimeline';
-import ReassignmentDisapprovalBanner from './employee/ReassignmentDisapprovalBanner';
 import { formatDisplayDate } from '@/utils/dateUtils';
 import { hasFeedbackBeenSubmitted, isFeedbackFormEnabled, setFeedbackFormEnabled, fetchFeedbackForTicket } from '@/data/mockFeedbackData';
 import { getFeedbackFormStatus, getWindowConfiguration, getCachedWindowConfiguration } from '@/services/configurationService';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { getTicketAttachments } from '@/services/ticketService';
 
 const getFileName = (file, fallback = 'Attachment') => {
   if (!file) return fallback;
@@ -40,7 +39,7 @@ const getFileName = (file, fallback = 'Attachment') => {
   return file.name || file.file_name || fallback;
 };
 
-const getFileUrl = (file) => {
+const getFileUrlRaw = (file) => {
   if (!file) return '';
   let raw = '';
   if (typeof file === 'string') {
@@ -67,6 +66,7 @@ const getFileUrl = (file) => {
   }
   return `/api/ticketing/attachment/storage/${clean}`;
 };
+const getFileUrl = (file) => safeUrl(getFileUrlRaw(file));
 
 export default function CustomerTicketDetailModal({
   ticket,
@@ -679,7 +679,6 @@ export default function CustomerTicketDetailModal({
             </div>
           )}
 
-          <ReassignmentDisapprovalBanner ticket={effectiveTicket} />
 
           {/* Pending Reassignment Banner for Requestor / Customer (TS Defect 3) */}
           {(effectiveTicket.reassignmentRequested ||
@@ -923,7 +922,7 @@ export default function CustomerTicketDetailModal({
             <div className="md:col-span-2 pt-2">
               <TicketActivityTimeline
                 ticket={effectiveTicket}
-                userRole="employee"
+                ticketId={effectiveTicket.ticket_ID}
                 pageSize={6}
               />
             </div>

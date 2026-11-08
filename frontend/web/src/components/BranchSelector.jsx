@@ -1,16 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Building2, ChevronDown, Check, MapPin, AlertCircle, Info, Globe2 } from 'lucide-react';
 import { useBranch, GLOBAL_BRANCH } from '@/context/BranchContext';
+import { useAuth } from '@/context/AuthContext';
 
 /**
- * Reusable BranchSelector Component (TS090, TS092, TS097)
+ * Reusable BranchSelector Component 
  *
- * Prominently displays and selects the physical branch / hospital facility
- * that Super Admin is currently configuring, to prevent accidental cross-branch edits.
- *
- * Supports two variants:
- * - 'default' (standard prominent selector pill for page headers and toolbars)
- * - 'banner' (full-width informational bar highlighting active branch scope)
  */
 export default function BranchSelector({
   variant = 'default',
@@ -18,9 +13,23 @@ export default function BranchSelector({
   className = '',
   onChange,
 }) {
-  const { branches, selectedBranch, setSelectedBranchId } = useBranch();
+  let authUser = null;
+  try {
+    const auth = useAuth();
+    authUser = auth?.user;
+  } catch {
+    // Graceful fallback
+  }
+
+  const { branches, selectedBranch, setSelectedBranchId, isSuperAdmin } = useBranch();
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef(null);
+
+  const userRole = (authUser?.role || '').toLowerCase();
+  const userEmail = (authUser?.email || '').toLowerCase();
+  const isSuperAdminUser = isSuperAdmin ?? (
+    userRole === 'superadmin' || userRole === 'super admin' || userEmail === 'superadmin@example.com'
+  );
 
   const activeBranch = selectedBranch || GLOBAL_BRANCH;
 
@@ -49,6 +58,7 @@ export default function BranchSelector({
   }, [isOpen]);
 
   const handleSelectBranch = (branchId) => {
+    if (!isSuperAdminUser) return;
     setSelectedBranchId(branchId);
     setIsOpen(false);
     if (onChange) {
@@ -62,6 +72,22 @@ export default function BranchSelector({
   const branchList = [GLOBAL_BRANCH, ...branches.filter((b) => b.id !== null && b.slug !== 'all')];
 
   if (variant === 'inline') {
+    if (!isSuperAdminUser) {
+      return (
+        <div
+          className={`inline-flex items-center gap-2 rounded-xl border border-slate-200/90 bg-slate-50 px-3 py-1.5 text-xs text-slate-700 shadow-xs cursor-default ${className}`}
+          title={`Assigned Facility: ${selectedBranch?.name || activeBranch.name} (${selectedBranch?.region || activeBranch.region || ''})`}
+        >
+          <Building2 size={14} className="text-slate-500 shrink-0" />
+          <span className="text-slate-400 font-normal">Branch</span>
+          <span className="font-semibold text-slate-800">{selectedBranch?.name || activeBranch.name}</span>
+          <span className="rounded-md bg-slate-200/80 px-1.5 py-0.5 text-[10px] font-bold text-slate-700">
+            {selectedBranch?.code || activeBranch.code}
+          </span>
+        </div>
+      );
+    }
+
     return (
       <div ref={dropdownRef} className={`relative inline-block text-left ${className}`}>
         <button
@@ -104,11 +130,13 @@ export default function BranchSelector({
             </div>
 
             <div className="flex flex-col gap-1 max-h-64 overflow-y-auto" role="listbox">
-              {branches.map((branch) => {
-                const isSelected = branch.id === (selectedBranch?.id || activeBranch.id);
+              {branchList.map((branch) => {
+                const isSelected =
+                  (branch.id === null && (selectedBranch?.id === null || selectedBranch?.slug === 'all' || activeBranch?.id === null || activeBranch?.slug === 'all')) ||
+                  (branch.id !== null && (branch.id === selectedBranch?.id || branch.id === activeBranch?.id || branch.slug === selectedBranch?.slug));
                 return (
                   <button
-                    key={branch.id}
+                    key={branch.id ?? 'global'}
                     type="button"
                     role="option"
                     aria-selected={isSelected}
@@ -120,12 +148,21 @@ export default function BranchSelector({
                     }`}
                   >
                     <div className="flex items-start gap-2.5 min-w-0">
-                      <Building2
-                        size={15}
-                        className={`shrink-0 mt-0.5 ${
-                          isSelected ? 'text-[#252578]' : 'text-gray-400'
-                        }`}
-                      />
+                      {branch.id === null ? (
+                        <Globe2
+                          size={15}
+                          className={`shrink-0 mt-0.5 ${
+                            isSelected ? 'text-[#252578]' : 'text-gray-400'
+                          }`}
+                        />
+                      ) : (
+                        <Building2
+                          size={15}
+                          className={`shrink-0 mt-0.5 ${
+                            isSelected ? 'text-[#252578]' : 'text-gray-400'
+                          }`}
+                        />
+                      )}
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="text-xs font-bold truncate">

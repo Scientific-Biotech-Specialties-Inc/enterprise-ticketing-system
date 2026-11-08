@@ -1,3 +1,11 @@
+import tokenStore from '@/auth/tokenStore';
+
+// Spec 0034: the analytics-service identifies the caller from the verified token only.
+const authHeaders = () => {
+  const token = tokenStore.getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 const STORAGE_KEY = 'customer_feedback';
 const EXTERNAL_TICKETS_KEY = 'demo_external_tickets';
 const PENDING_EVAL_KEY = 'demo_pending_evaluation_tickets';
@@ -247,10 +255,10 @@ export async function saveFeedback(ticketId, ratings, comments, overallComment, 
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
+        ...authHeaders(),
       },
       body: JSON.stringify({
         ticket_id: String(ticketId),
-        customer_id: customerId ? String(customerId) : null,
         ratings,
         comments: comments || {},
         overall_comment: overallComment || '',
@@ -302,6 +310,7 @@ export async function updateFeedback(ticketId, ratings, comments, overallComment
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
+        ...authHeaders(),
       },
       body: JSON.stringify({
         ratings,
@@ -341,6 +350,7 @@ export async function deleteFeedback(ticketId) {
       method: 'DELETE',
       headers: {
         'Accept': 'application/json',
+        ...authHeaders(),
       },
     });
     const result = await res.json();
@@ -357,7 +367,7 @@ export async function fetchFeedbackForTicket(ticketId) {
   const local = getTicketFeedback(ticketId);
   try {
     let res = await fetch(`/api/ticketing/analytics/feedback/ticket/${ticketId}`, {
-      headers: { Accept: 'application/json' },
+      headers: { Accept: 'application/json', ...authHeaders() },
     });
     if (!res.ok && res.status === 404) {
       const strId = String(ticketId);
@@ -366,7 +376,7 @@ export async function fetchFeedbackForTicket(ticketId) {
         const num = parseInt(numMatch[0], 10);
         const altId = strId.startsWith('TKTS-') ? String(num) : `TKTS-${String(num).padStart(5, '0')}`;
         res = await fetch(`/api/ticketing/analytics/feedback/ticket/${altId}`, {
-          headers: { Accept: 'application/json' },
+          headers: { Accept: 'application/json', ...authHeaders() },
         });
       }
     }

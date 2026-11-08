@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { ArrowLeft, RefreshCw, AlertCircle, WifiOff } from 'lucide-react';
 import axiosInstance from '@/api/axiosInstance';
@@ -33,6 +33,9 @@ export default function Profile() {
   });
 
   const effectiveUser = freshProfile || user || getStoredUser();
+  // Read through a ref so fetchFresh stays stable; depending on effectiveUser made every fetch trigger the next one.
+  const effectiveUserRef = useRef(effectiveUser);
+  effectiveUserRef.current = effectiveUser;
 
   const fetchFresh = useCallback(async (isManualRetry = false) => {
     if (isManualRetry) setLoading(true);
@@ -49,7 +52,7 @@ export default function Profile() {
     } catch (err) {
       console.warn('Failed to refresh profile from auth service:', err);
       // If we already have a user in session or localStorage, degrade gracefully to stale data
-      if (effectiveUser) {
+      if (effectiveUserRef.current) {
         setIsStale(true);
       } else {
         setError('Unable to load employee profile from the corporate authentication service. Please check your network connection and try again.');
@@ -57,7 +60,7 @@ export default function Profile() {
     } finally {
       setLoading(false);
     }
-  }, [effectiveUser]);
+  }, []);
 
   useEffect(() => {
     fetchFresh();

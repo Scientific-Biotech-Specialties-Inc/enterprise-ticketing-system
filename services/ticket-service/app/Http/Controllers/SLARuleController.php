@@ -176,6 +176,43 @@ class SLARuleController extends Controller
         return response()->json(['message' => 'SLA rule deleted successfully.']);
     }
 
+    /**
+     * Recalculate SLA deadlines of all open tickets with the current rules and business hours.
+     */
+    public function recalculateOpenTickets(Request $request, \App\Services\SLAService $slaService)
+    {
+        if ($err = $this->checkSuperAdmin($request)) {
+            return $err;
+        }
+
+        // Business hours may have just changed in configuration-service; read them fresh.
+        \Illuminate\Support\Facades\Cache::forget('ticket:config:business_hours');
+
+        $result = $slaService->recalculateOpenTickets();
+
+        $user = $request->user();
+        DB::table('ticket_audit_logs')->insert([
+            'ticket_ID' => null,
+            'action_type' => 'config_update',
+            'action_by_ID' => $user->emp_id ?? 1,
+            'actor_type' => 'superadmin',
+            'details' => json_encode([
+                'module' => 'SLA Configuration',
+                'target' => 'Open Tickets',
+                'text' => "Recalculated SLA deadlines for {$result['recalculated']} open ticket(s) using the current SLA rules and business hours.",
+            ]),
+            'created_at' => now(),
+        ]);
+
+        event(new \App\Events\TicketChanged(['type' => 'sla']));
+
+        return response()->json([
+            'message' => "Recalculated SLA deadlines for {$result['recalculated']} open ticket(s).",
+            'recalculated' => $result['recalculated'],
+            'failed' => $result['failed'],
+        ]);
+    }
+
     public function saveDepartmentRules(Request $request, int $departmentId)
     {
         if ($err = $this->checkSuperAdmin($request)) {
@@ -206,8 +243,11 @@ class SLARuleController extends Controller
                 ->first();
 
             if ($existing) {
+                // Update every matching row so duplicate department/priority rules stay in sync.
                 DB::table('sla_rules')
-                    ->where('id', $existing->id)
+                    ->where('department_id', $departmentId)
+                    ->whereNull('category_id')
+                    ->whereRaw('LOWER(priority) = ?', [strtolower($priority)])
                     ->update([
                         'response_time_limit' => $respLimit,
                         'resolution_time_limit' => $resLimit,

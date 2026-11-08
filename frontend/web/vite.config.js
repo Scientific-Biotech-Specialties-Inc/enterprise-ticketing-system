@@ -16,6 +16,10 @@ export default defineConfig({
     strictPort: true,
     cors: true,
     allowedHosts: true,
+    headers: {
+      // frame-ancestors is ignored inside a <meta> CSP tag, so it must be an HTTP header.
+      'Content-Security-Policy': "frame-ancestors 'self'",
+    },
     watch: {
       usePolling: true,
       interval: 100,

@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import * as ticketService from '@/services/ticketService';
 import CSAssigned from './CSAssigned';
 
 // Mock AuthContext
@@ -130,10 +131,22 @@ const mockSlaSummary = {
 };
 
 vi.mock('@/services/ticketService', () => ({
-  getCSIncomingTickets: vi.fn(() => {
-    const list = [...mockIncomingTickets];
-    list.slaSummary = mockSlaSummary;
-    return Promise.resolve(list);
+  // Spec 0037: the page asks the server for one filtered page. This fake server
+  // applies the SLA filter the same way, so the tests check what the page sends.
+  getCSQueuePage: vi.fn((query = {}) => {
+    const labelFor = { breached: 'Breached', at_risk: 'At Risk', on_track: 'On Track', paused: 'Paused' };
+    const keys = { Breached: 'breached', 'At Risk': 'at_risk', 'On Track': 'on_track', Paused: 'paused' };
+    const key = query.sla ? (keys[query.sla] || query.sla) : null;
+    const rows = key ? mockIncomingTickets.filter((t) => t.sla_status === labelFor[key]) : [...mockIncomingTickets];
+    return Promise.resolve({
+      tickets: rows,
+      total: rows.length,
+      page: 1,
+      perPage: 10,
+      lastPage: 1,
+      slaSummary: mockSlaSummary,
+      tabCounts: { all: 5, inProgress: 3, pendingEval: 0, reassigned: 0, onHold: 1, resolvedClosed: 0 },
+    });
   }),
   getAssignableEmployees: vi.fn(() => Promise.resolve([])),
   getDepartments: vi.fn(() => Promise.resolve([])),
@@ -239,9 +252,12 @@ describe('CSAssigned Component Tests (SLA Compliance Monitoring Acceptance Crite
     // Select "Breached" filter
     fireEvent.change(slaFilterSelect, { target: { value: 'Breached' } });
 
-    // Only Breached ticket should be visible
+    // The filter is sent to the server, and only the Breached ticket comes back
+    await waitFor(() => {
+      expect(ticketService.getCSQueuePage).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'assigned', sla: 'Breached', page: 1 }));
+      expect(screen.queryByText('POS terminal card reader failure')).not.toBeInTheDocument();
+    });
     expect(screen.getByText('Server cluster offline in Data Center 1')).toBeInTheDocument();
-    expect(screen.queryByText('POS terminal card reader failure')).not.toBeInTheDocument();
     expect(screen.queryByText('Email client synchronization error')).not.toBeInTheDocument();
   });
 
@@ -276,9 +292,12 @@ describe('CSAssigned Component Tests (SLA Compliance Monitoring Acceptance Crite
     expect(atRiskCard).toBeInTheDocument();
     fireEvent.click(atRiskCard);
 
-    // List is filtered to At Risk ticket
+    // List is filtered to At Risk ticket by the server
+    await waitFor(() => {
+      expect(ticketService.getCSQueuePage).toHaveBeenLastCalledWith(expect.objectContaining({ sla: 'At Risk' }));
+      expect(screen.queryByText('Server cluster offline in Data Center 1')).not.toBeInTheDocument();
+    });
     expect(screen.getByText('POS terminal card reader failure')).toBeInTheDocument();
-    expect(screen.queryByText('Server cluster offline in Data Center 1')).not.toBeInTheDocument();
   });
 
   it('covers AC-8: shows structured fallback state when SLA data is unavailable', async () => {

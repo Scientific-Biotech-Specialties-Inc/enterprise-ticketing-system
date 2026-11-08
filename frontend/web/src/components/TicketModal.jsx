@@ -7,6 +7,7 @@ import { formatProperTitleCase, needsProperCasing } from '@/utils/titleCaseUtils
 import { getMaxOpenTicketsLimit } from '@/data/ticketLimitConfig';
 import { useAuth } from '@/context/AuthContext';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
+import useMaxFileCount from '@/hooks/useMaxFileCount';
 
 function BoundedSelect({
   value,
@@ -137,6 +138,7 @@ function BoundedSelect({
 
 const initialFormData = {
   title: '',
+  department_id: 1,
   machine_ID: '',
   problem_category_ID: '',
   description: '',
@@ -163,6 +165,7 @@ export default function TicketModal({
   openTicketsCount = null,
   initialDraft = null,
   onDraftSaved = null,
+  showDepartmentSelector = false,
 }) {
   useLockBodyScroll(isOpen);
   const { user } = useAuth();
@@ -182,6 +185,7 @@ export default function TicketModal({
   const [formData, setFormData] = useState(initialFormData);
   const [draftId, setDraftId] = useState(null);
   const [attachments, setAttachments] = useState([]);
+  const maxFileCount = useMaxFileCount();
   const [fileError, setFileError] = useState('');
   const [touched, setTouched] = useState({});
   const [titleCasingData, setTitleCasingData] = useState(null);
@@ -226,7 +230,9 @@ export default function TicketModal({
     ? `Title exceeds ${MAX_TITLE_CHARS} characters (${titleChars}).`
     : '';
   const categoryError = !formData.problem_category_ID ? 'Category is required.' : '';
-  const equipmentError = !formData.machine_ID ? 'Equipment is required.' : '';
+  // Equipment is required for Service (1) and optional for IT (2).
+  const isItDepartment = showDepartmentSelector && Number(formData.department_id) === 2;
+  const equipmentError = !isItDepartment && !formData.machine_ID ? 'Equipment is required.' : '';
   const descriptionError = !descTrimmed
     ? 'Description is required.'
     : descTrimmed.length < MIN_DESCRIPTION_CHARS
@@ -300,6 +306,12 @@ export default function TicketModal({
 
     setFileError('');
 
+    if (attachments.length + files.length > maxFileCount) {
+      setFileError(`You can attach a maximum of ${maxFileCount} files.`);
+      event.target.value = '';
+      return;
+    }
+
     let currentTotal = attachments.reduce((acc, f) => acc + (f.size || 0), 0);
     const validFiles = [];
     for (const file of files) {
@@ -336,6 +348,11 @@ export default function TicketModal({
     }
   };
 
+  const buildSubmitData = () => {
+    const { department_id, ...rest } = formData;
+    return showDepartmentSelector ? { ...rest, department_id } : rest;
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
 
@@ -362,7 +379,7 @@ export default function TicketModal({
       setTouched((p) => ({ ...p, description: true }));
       return;
     }
-    if (!formData.problem_category_ID || !formData.machine_ID) {
+    if (!formData.problem_category_ID || (!isItDepartment && !formData.machine_ID)) {
       setSubmitError('Please complete all required fields.');
       return;
     }
@@ -375,8 +392,45 @@ export default function TicketModal({
 
     try {
       await onSubmit?.({
-        ...formData,
+        ...buildSubmitData(),
         title: finalTitle,
+        attachments,
+        draftId,
+      });
+      if (draftId) {
+        try {
+          await deleteTicketDraft(draftId);
+        } catch { /* ignore */ }
+      }
+      resetFormState();
+    } catch (error) {
+      setSubmitError(error?.response?.data?.message || error?.message || 'Failed to create ticket. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleConfirmTitleCasing = async () => {
+    if (!titleCasingData) return;
+
+    const limitConfig = getMaxOpenTicketsLimit();
+    if (!limitConfig.isUnlimited && typeof openTicketsCount === 'number' && openTicketsCount >= limitConfig.limit) {
+      setShowTitleCasingModal(false);
+      setSubmitError(`You've reached the maximum number of open tickets (${limitConfig.limit}). Resolve or close an existing ticket before submitting another.`);
+      return;
+    }
+
+    const formatted = titleCasingData.formatted;
+    setFormData((prev) => ({ ...prev, title: formatted }));
+    setShowTitleCasingModal(false);
+
+    setSubmitError('');
+    setIsSubmitting(true);
+
+    try {
+      await onSubmit?.({
+        ...buildSubmitData(),
+        title: formatted,
         attachments,
         draftId,
       });
@@ -461,7 +515,7 @@ export default function TicketModal({
     titleTrimmed.length >= MIN_TITLE_CHARS &&
     titleChars <= MAX_TITLE_CHARS &&
     formData.problem_category_ID &&
-    formData.machine_ID &&
+    (isItDepartment || formData.machine_ID) &&
     descTrimmed.length >= MIN_DESCRIPTION_CHARS &&
     descriptionChars <= MAX_DESCRIPTION_CHARS
   );
@@ -513,6 +567,22 @@ export default function TicketModal({
             {touched.title && titleError && <p className="mt-1.5 text-xs text-red-500">{titleError}</p>}
           </div>
 
+          {showDepartmentSelector && (
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-700">Department</label>
+            <select
+              name="department_id"
+              value={formData.department_id}
+              onChange={(event) => setFormData((prev) => ({ ...prev, department_id: Number(event.target.value) }))}
+              disabled={isSubmitting}
+              className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-[#252578]"
+            >
+              <option value={1}>Service</option>
+              <option value={2}>IT</option>
+            </select>
+          </div>
+          )}
+
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
             <div className="min-w-0">
               <label className="mb-2 block text-sm font-medium text-gray-700">Category</label>
@@ -529,13 +599,15 @@ export default function TicketModal({
             </div>
 
             <div className="min-w-0">
-              <label className="mb-2 block text-sm font-medium text-gray-700">Equipment Name / ID</label>
+              <label className="mb-2 block text-sm font-medium text-gray-700">
+                Equipment Name / ID{isItDepartment && <span className="ml-1 text-xs font-normal text-muted-slate">(Optional for IT)</span>}
+              </label>
               <BoundedSelect
                 value={formData.machine_ID}
                 onChange={(val) => setFormData((prev) => ({ ...prev, machine_ID: val }))}
                 onBlur={() => touch('equipment')}
                 options={equipmentOptions}
-                placeholder="Select Equipment"
+                placeholder={isItDepartment ? 'No equipment' : 'Select Equipment'}
                 disabled={loadingOptions || isSubmitting}
                 hasError={Boolean(touched.equipment && equipmentError)}
                 searchable

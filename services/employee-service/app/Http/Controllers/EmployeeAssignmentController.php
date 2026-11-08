@@ -152,8 +152,8 @@ class EmployeeAssignmentController extends Controller
 
         $validated = $request->validate([
             'status' => ['nullable', 'string', 'in:In Progress,Pending,Resolved,Pending Assignment,Pending Evaluation,Closed,Open'],
-            'remarks' => ['nullable', 'string', 'max:250'],
-            'internal_note' => ['nullable', 'string'],
+            'remarks' => ['nullable', 'string', 'max:250', new \App\Rules\NoMarkup()],
+            'internal_note' => ['nullable', 'string', new \App\Rules\NoMarkup()],
             'attachments' => ['nullable', 'array'],
             'attachments.*' => ['integer'],
             'is_proof' => ['nullable'],
@@ -173,7 +173,12 @@ class EmployeeAssignmentController extends Controller
         }
 
         $tickets = $this->assignmentService->getEmployeeTickets($employeeEmail);
-        return response()->json(['tickets' => $tickets]);
+        $departmentSummary = $this->assignmentService->getDepartmentSummaryForEmployee($employeeEmail);
+
+        return response()->json([
+            'tickets' => $tickets,
+            'department_summary' => $departmentSummary,
+        ]);
     }
 
     public function internalTickets(Request $request)

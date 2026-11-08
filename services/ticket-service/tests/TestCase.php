@@ -90,4 +90,65 @@ abstract class TestCase extends BaseTestCase
             '*/api/email/dispatch-event' => Http::response(['status' => 'success'], 200),
         ]);
     }
+
+    /**
+     * Make sure an active branch with this slug exists. The shared test database can get its
+     * branches table from another service, which skips this service's seeded branches.
+     */
+    protected function seedBranch(string $slug, string $name, ?string $code = null): void
+    {
+        \Illuminate\Support\Facades\DB::table('branches')->updateOrInsert(
+            ['slug' => $slug],
+            ['name' => $name, 'code' => $code, 'is_active' => true, 'created_at' => now(), 'updated_at' => now()]
+        );
+    }
+
+    /**
+     * Insert or update a machine fixture that satisfies the real schema:
+     * machines.category_ID -> machine_categories and machines.client_ID -> users are both required.
+     */
+    protected function seedMachine(int $machineId, array $attributes = []): int
+    {
+        $db = \Illuminate\Support\Facades\DB::class;
+
+        $categoryId = $attributes['category_ID']
+            ?? $db::table('machine_categories')->value('category_ID')
+            ?? $db::table('machine_categories')->insertGetId([
+                'category_name' => 'Imaging',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+        $clientId = $attributes['client_ID'] ?? $db::table('users')->value('id');
+        if ($clientId === null || $db::table('users')->where('id', $clientId)->doesntExist()) {
+            $userRow = [
+                'name' => 'Fixture User',
+                'email' => 'fixture_user_' . uniqid() . '@example.test',
+                'password' => 'secret',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ];
+            if ($clientId !== null) {
+                $userRow['id'] = $clientId;
+                $db::table('users')->insert($userRow);
+            } else {
+                $clientId = $db::table('users')->insertGetId($userRow);
+            }
+        }
+
+        $db::table('machines')->updateOrInsert(
+            ['machine_ID' => $machineId],
+            array_merge([
+                'machine_name' => 'Test Machine ' . $machineId,
+                'serial_number' => 'SN-FIXTURE-' . $machineId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ], $attributes, [
+                'category_ID' => $categoryId,
+                'client_ID' => $clientId,
+            ])
+        );
+
+        return $machineId;
+    }
 }

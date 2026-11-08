@@ -20,6 +20,7 @@ import { BranchProvider } from '@/context/BranchContext';
 import PrivateRoute from '@/routes/PrivateRoute';
 import GuestRoute from '@/routes/GuestRoute';
 import AuthGate from '@/routes/AuthGate';
+import WrongPortal from '@/components/WrongPortal.jsx';
 import SkeletonLoader from '@/components/SkeletonLoader.jsx';
 import PageTitleUpdater from '@/components/PageTitleUpdater.jsx';
 import MaintenanceGate from '@/components/MaintenanceGate.jsx';
@@ -92,12 +93,29 @@ const ExternalFeedbackPage = React.lazy(() => import('./pages/ExternalFeedbackPa
 function EmployeePortalGate() {
   const { isAuthenticated, isLoading, user } = useAuth();
 
-  if (isLoading) {
+  if (isLoading || (isAuthenticated && !user)) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-50">
-        <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600" />
-          <p className="mt-4 text-slate-600 font-medium">Verifying session…</p>
+      <div className="min-h-screen flex flex-col justify-start p-8 bg-page text-dark-slate space-y-6">
+        <div className="flex justify-between items-center w-full mx-auto mb-4">
+          <SkeletonLoader className="h-10 w-48" />
+          <SkeletonLoader className="h-10 w-24 rounded-full" />
+        </div>
+        <div className="w-full mx-auto grid grid-cols-1 md:grid-cols-4 gap-6">
+          <SkeletonLoader className="h-32 rounded-2xl" variant="default" />
+          <SkeletonLoader className="h-32 rounded-2xl" variant="default" />
+          <SkeletonLoader className="h-32 rounded-2xl" variant="default" />
+          <SkeletonLoader className="h-32 rounded-2xl" variant="default" />
+        </div>
+        <div className="w-full mx-auto bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
+          <div className="space-y-4">
+            <SkeletonLoader className="h-8 w-1/3 mb-6" />
+            <div className="space-y-3">
+              <SkeletonLoader className="h-12 w-full rounded-xl" />
+              <SkeletonLoader className="h-12 w-full rounded-xl" />
+              <SkeletonLoader className="h-12 w-full rounded-xl" />
+              <SkeletonLoader className="h-12 w-full rounded-xl" />
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -117,13 +135,18 @@ function EmployeePortalGate() {
   const isCS             = checkIsCS(user);
   const isEmployee       = checkIsEmployee(user);
 
-  if (isSuperAdmin)     return <Navigate to="/superadmin/config" replace />;
+  if (isSuperAdmin)     return <Navigate to="/superadmin/dashboard" replace />;
   if (isAdmin)          return <Navigate to="/admin/dashboard" replace />;
   if (isItManager)      return <Navigate to="/it-manager/dashboard" replace />;
   if (isServiceManager) return <Navigate to="/service-manager/dashboard" replace />;
   if (isCSManager)      return <Navigate to="/cs-manager/dashboard" replace />;
   if (isCS)             return <Navigate to="/cs/dashboard" replace />;
   if (isEmployee)       return <Navigate to="/employee/dashboard" replace />;
+
+  const isCustomer       = !isCS && !isEmployee && !isSuperAdmin && !isAdmin && !isItManager && !isServiceManager && !isCSManager;
+  if (isCustomer) {
+    return <WrongPortal portalType="employee" />;
+  }
 
   // Unknown role on the employee portal → back to auth module
   window.location.replace('/');
@@ -373,7 +396,9 @@ function App() {
                   </PrivateRoute>
                 }
               >
-                <Route index element={<Navigate to="config" replace />} />
+                <Route index element={<Navigate to="dashboard" replace />} />
+                <Route path="dashboard" element={<AdminDashboard />} />
+                <Route path="reports" element={<AdminReports />} />
                 <Route path="config" element={<SuperAdminTicketConfig />} />
                 <Route path="config/:subtab" element={<SuperAdminTicketConfig />} />
                 <Route path="ticket-config" element={<Navigate to="/superadmin/config" replace />} />
@@ -408,6 +433,11 @@ function App() {
 
               <Route path="/employee-login" element={<Navigate to="/login/employee" replace />} />
               <Route path="/customer-login" element={<Navigate to="/customer" replace />} />
+
+              {/* Employee portal URLs opened on the customer portal: Access Denied, not a 404 or redirect. */}
+              {import.meta.env.VITE_APP_MODE === 'customer' && (
+                <Route path="/ticketing/*" element={<WrongPortal portalType="employee" />} />
+              )}
 
               <Route
                 path="*"

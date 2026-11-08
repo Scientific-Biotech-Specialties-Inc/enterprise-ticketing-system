@@ -37,6 +37,8 @@
     "chart.js": "^4.5.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "dompurify": "3.4.17",
+    "fflate": "^0.8.3",
     "html2canvas": "^1.4.1",
     "html2pdf.js": "^0.14.0",
     "jsencrypt": "^3.5.4",

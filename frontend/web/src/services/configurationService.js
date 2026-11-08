@@ -25,15 +25,7 @@ configClient.interceptors.request.use((config) => {
     config.headers.Authorization = `Bearer ${token}`;
   }
 
-  try {
-    const rawUser = sessionStorage.getItem('user') || localStorage.getItem('user');
-    if (rawUser) {
-      const u = JSON.parse(rawUser);
-      if (u.role) config.headers['X-User-Role'] = u.role;
-      if (u.name || u.first_name) config.headers['X-Actor-Name'] = u.name || `${u.first_name || ''} ${u.last_name || ''}`.trim();
-    }
-  } catch {}
-
+  // Spec 0034: identity comes only from the verified token. No X-User-Role or X-Actor-Name headers.
   return config;
 });
 
@@ -610,6 +602,27 @@ export async function updateLogLevel(level) {
 export async function resetLogLevel() {
   const response = await configClient.post('/ticket-configurations/log-level/reset');
   return response.data?.level || response.data?.value?.level || 'Info';
+}
+
+// ---------------------------------------------------------------------------
+// SLA Business Hours (working hours used to count SLA limits)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch SLA business hours: { enabled, timezone, startTime, endTime, workingDays }.
+ * workingDays uses ISO numbering (1 = Monday ... 7 = Sunday).
+ */
+export async function getBusinessHoursConfig() {
+  const response = await configClient.get('/ticket-configurations/business_hours');
+  return response.data?.value || response.data;
+}
+
+/**
+ * Save SLA business hours.
+ */
+export async function updateBusinessHoursConfig(payload) {
+  const response = await configClient.put('/ticket-configurations/business_hours', payload);
+  return response.data?.value || response.data;
 }
 
 // ---------------------------------------------------------------------------

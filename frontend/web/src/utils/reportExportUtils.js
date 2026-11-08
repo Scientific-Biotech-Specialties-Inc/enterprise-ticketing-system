@@ -1,5 +1,6 @@
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import { buildXlsx, XLSX_MIME } from './xlsx';
 
 /**
  * Downloads raw CSV spreadsheet file formatted for Microsoft Excel / Google Sheets data analysis.
@@ -82,122 +83,160 @@ export function triggerPdfPrint() {
   window.print();
 }
 
-/**
- * Generates CSV Export for Predictive Analytics raw data analysis in Excel (ALL 10 METRICS).
- */
-export function exportPredictiveToCsv(data, period = 'Next 7 Days') {
-  exportMasterReportToCsv({ ...data, period });
+// ─── Shared helpers for analytics exports ───────────────────────────────────
+// Exports only ever contain figures the server returned. A value that is missing is written as
+// "Unavailable" so a shared report can never present an invented number as fact.
+
+const UNAVAILABLE = 'Unavailable';
+const EXPORT_HEADERS = ['Section', 'Metric', 'Value', 'Unit', 'Note'];
+
+const isPresent = (v) => v !== null && v !== undefined && v !== '' && !(typeof v === 'number' && Number.isNaN(v));
+const val = (v) => (isPresent(v) ? v : UNAVAILABLE);
+
+const csvCell = (value) => {
+  const text = String(value ?? '');
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
+function rowsToCsv(headers, rows, metaLines = []) {
+  const lines = [...metaLines.map((m) => m.map(csvCell).join(',')), ...(metaLines.length ? [''] : [])];
+  lines.push(headers.map(csvCell).join(','));
+  rows.forEach((r) => lines.push(r.map(csvCell).join(',')));
+  return lines.join('\r\n') + '\r\n';
 }
 
-/**
- * Generates CSV Export for General Operational Analytics & CSAT (ALL 10 METRICS).
- */
-export function exportAnalyticsToCsv(data) {
-  exportMasterReportToCsv(data);
+/** Branch dashboard payload: `{ kpis, status_distribution, sla, csat, workload, departments, employee_performance, recurring_issues }`. */
+function branchAnalyticsRows(data) {
+  const k = data.kpis || {};
+  const rows = [];
+  const add = (section, metric, value, unit = '', note = '') => rows.push([section, metric, val(value), unit, note]);
+
+  add('Tickets', 'Total tickets', k.total_tickets);
+  add('Tickets', 'Resolved tickets', k.resolved_tickets, '', 'Resolved plus closed');
+  add('Tickets', 'Open tickets', k.open_tickets);
+  add('Tickets', 'In progress tickets', k.in_progress_tickets);
+  add('Tickets', 'On hold tickets', k.on_hold_tickets);
+  add('Tickets', 'Closed tickets', k.closed_tickets);
+  add('Resolution', 'Average resolution time', k.avg_resolution_hours, 'hours');
+  add('SLA', 'SLA compliance rate', k.sla_compliance_rate, '%');
+  add('SLA', 'Within SLA', k.sla_met_count, 'tickets');
+  add('SLA', 'Breached', k.sla_breached_count, 'tickets');
+  add('Customer satisfaction', 'Average CSAT', k.csat_score, 'out of 5',
+    isPresent(k.csat_score) ? '' : 'Customer feedback service did not return a score');
+  add('Customer satisfaction', 'Feedback reviews', k.total_csat_reviews, 'reviews');
+  add('Staffing', 'Active employees', k.active_employees_count);
+
+  (data.recurring_issues?.top_categories || []).forEach((c) =>
+    add('Recurring issues: categories', c.name, c.count, 'tickets', isPresent(c.percentage) ? `${c.percentage}% of period tickets` : ''));
+  (data.recurring_issues?.top_equipment || []).forEach((m) =>
+    add('Recurring issues: equipment', m.name, m.count, 'tickets', isPresent(m.percentage) ? `${m.percentage}% of period tickets` : ''));
+
+  const byEmployee = data.workload?.by_employee;
+  (byEmployee?.labels || []).forEach((label, i) =>
+    add('Employee workload', label, byEmployee.data?.[i], 'open tickets'));
+
+  (data.departments?.departments || data.departments || []).forEach((d) => {
+    if (!d || !d.department) return;
+    add(`Department: ${d.department}`, 'Tickets handled', d.has_data === false ? 'No data for this period' : d.total_tickets);
+    add(`Department: ${d.department}`, 'SLA compliance', d.sla_compliance_rate, '%');
+    add(`Department: ${d.department}`, 'Open (within SLA)', d.open_tickets_count, 'tickets');
+    add(`Department: ${d.department}`, 'Overdue (breached)', d.overdue_tickets_count, 'tickets');
+  });
+
+  return rows;
 }
 
-/**
- * Generates CSV Export for Master Report (ALL 10 OPERATIONAL & PREDICTIVE METRICS).
- */
+/** Super Admin system dashboard payload after adaptSystemDashboard(). */
+function systemAnalyticsRows(data) {
+  const rows = [];
+  const add = (section, metric, value, unit = '', note = '') => rows.push([section, metric, val(value), unit, note]);
+  const u = data.totalUsers || {};
+  const kp = data.systemKpis || {};
+
+  add('Users', 'Total users', u.total);
+  add('Users', 'Customers', u.customer);
+  add('Users', 'Employees', u.employee);
+  add('Users', 'Customer service', u.cs);
+  add('Users', 'Admins', u.admin);
+  add('Users', 'Super admins', u.superAdmin);
+  add('Tickets', 'Total tickets', data.totalTickets);
+  add('Tickets', 'Active tickets', data.activeEscalated);
+  add('Tickets', 'Escalated tickets', data.escalatedTickets);
+  add('Tickets', 'SLA breaches', data.slaBreaches);
+  add('Tickets', 'Created today', data.ticketsCreatedToday, '', 'Always today, not filtered by period');
+  add('System KPIs', 'Overall SLA compliance', kp.overallSlaCompliance, '%');
+  add('System KPIs', 'Overall average CSAT', kp.overallAvgCsat, 'out of 5',
+    isPresent(kp.overallAvgCsat) ? '' : 'Customer feedback service did not return a score');
+  add('System KPIs', 'Overall resolution time', kp.overallResolutionTime, 'hours');
+
+  (data.branchComparison || []).forEach((b) => {
+    add(`Branch: ${b.name}`, 'Total tickets', b.totalTickets);
+    add(`Branch: ${b.name}`, 'Resolved tickets', b.resolvedTickets);
+    add(`Branch: ${b.name}`, 'SLA compliance', b.totalTickets === 0 ? 'No data for this period' : b.slaCompliance, '%');
+    add(`Branch: ${b.name}`, 'Average resolution time', b.avgResolutionTime, 'hours');
+    add(`Branch: ${b.name}`, 'Average CSAT', b.avgCsat, 'out of 5');
+  });
+
+  return rows;
+}
+
+/** One entry point for both dashboards. Returns Section / Metric / Value / Unit / Note rows. */
+export function buildAnalyticsExportRows(data) {
+  if (data?.kpis) return branchAnalyticsRows(data);
+  if (data?.systemKpis) return systemAnalyticsRows(data);
+  return [['Report', 'Dashboard data', UNAVAILABLE, '', 'No dashboard data was loaded when the export was requested']];
+}
+
+/** Predictive payload from `GET /admin-reports/predictive-insights`. */
+export function buildPredictiveExportRows(data) {
+  const rows = [];
+  const add = (section, metric, value, unit = '', note = '') => rows.push([section, metric, val(value), unit, note]);
+
+  if (!data || (!data.volume_forecast && !data.recurring_issues && !data.status)) {
+    return [['Forecast', 'Predictive data', UNAVAILABLE, '', 'The forecast was not available when the export was requested']];
+  }
+
+  const basis = data.historical_basis || {};
+  add('Basis', 'Model', basis.model);
+  add('Basis', 'Days of history used', basis.days_used, 'days', 'A forecast is an estimate, not a guarantee');
+  if (data.status === 'insufficient_data') {
+    add('Basis', 'Status', data.message || 'Not enough history for a reliable forecast', '', `At least ${basis.minimum_days_required ?? 14} days are needed`);
+  }
+
+  (data.volume_forecast || []).forEach((d) =>
+    add('Projected ticket volume', d.date, d.predicted_volume, 'tickets', `Range ${d.lower_bound ?? '?'} to ${d.upper_bound ?? '?'} (${d.day_of_week || ''})`.trim()));
+
+  const trendNote = (t) => {
+    const change = isPresent(t.change_percentage) ? `${Number(t.change_percentage) > 0 ? '+' : ''}${Number(t.change_percentage).toFixed(1)}% vs baseline` : '';
+    return [change, isPresent(t.baseline_frequency) ? `baseline ${t.baseline_frequency}` : ''].filter(Boolean).join(', ');
+  };
+  (data.recurring_issues?.categories || []).forEach((t) =>
+    add('Rising categories', t.item_name, t.recent_frequency, 'tickets (recent)', trendNote(t)));
+  (data.recurring_issues?.machines || []).forEach((t) =>
+    add('Rising equipment', t.item_name, t.recent_frequency, 'tickets (recent)', trendNote(t)));
+
+  return rows;
+}
+
+const todayStamp = () => new Date().toISOString().split('T')[0];
+
+/** CSV for the operational dashboards (Branch and System). */
+export function exportAnalyticsToCsv(data, period = '') {
+  const rows = buildAnalyticsExportRows(data);
+  const meta = [['Operational Analytics Report'], ['Generated', new Date().toISOString()], ...(period ? [['Period', period]] : [])];
+  downloadCsv(`Operational_Analytics_${todayStamp()}.csv`, rowsToCsv(EXPORT_HEADERS, rows, meta));
+}
+
+/** CSV for the predictive forecast. */
+export function exportPredictiveToCsv(data, period = '') {
+  const rows = buildPredictiveExportRows(data);
+  const meta = [['Predictive Analytics Report'], ['Generated', new Date().toISOString()], ...(period ? [['Period', period]] : [])];
+  downloadCsv(`Predictive_Analytics_${todayStamp()}.csv`, rowsToCsv(EXPORT_HEADERS, rows, meta));
+}
+
+/** Kept for existing callers: the master report is the operational analytics report. */
 export function exportMasterReportToCsv(data) {
-  const dateStr = new Date().toISOString().split('T')[0];
-  const filename = `Enterprise_Master_Analytics_Report_${dateStr}.csv`;
-
-  let csv = `ENTERPRISE MASTER ANALYTICS & PREDICTIVE REPORT\n`;
-  csv += `Generated Date,${dateStr}\n\n`;
-
-  // 1. Ticket Trends
-  csv += `--- 1. TICKET TRENDS ---\n`;
-  csv += `Status,Ticket Count\n`;
-  csv += `Open,${data?.trends?.open || 12}\n`;
-  csv += `In Progress,${data?.trends?.inProgress || 18}\n`;
-  csv += `Resolved,${data?.trends?.resolved || 15}\n`;
-  csv += `Closed,${data?.trends?.closed || 5}\n\n`;
-
-  // 2. SLA Compliance
-  csv += `--- 2. SLA COMPLIANCE ---\n`;
-  csv += `Metric,Value\n`;
-  csv += `Overall Compliance,${data?.sla?.overall_compliance || 92.5}%\n`;
-  csv += `SLA Met Count,${data?.sla?.sla_met || 45}\n`;
-  csv += `SLA Breached Count,${data?.sla?.sla_breached || 4}\n\n`;
-
-  // 3. Employee Performance
-  csv += `--- 3. EMPLOYEE PERFORMANCE ---\n`;
-  csv += `Employee Name,Department,Resolved Count,Avg Response Time,Avg Resolution Time,SLA Compliance %\n`;
-  const empList = data?.employees || [
-    { name: 'Alice Smith', dept: 'Support', resolved: 28, resp: '15 mins', res: '2.1 hrs', sla: '93%' },
-    { name: 'Bob Jones', dept: 'Infrastructure', resolved: 22, resp: '20 mins', res: '2.8 hrs', sla: '85%' },
-    { name: 'Charlie Brown', dept: 'Service', resolved: 35, resp: '10 mins', res: '1.5 hrs', sla: '96%' },
-  ];
-  empList.forEach((e) => {
-    csv += `"${e.name}","${e.dept}",${e.resolved},"${e.resp}","${e.res}","${e.sla}"\n`;
-  });
-  csv += `\n`;
-
-  // 4. Customer Satisfaction (CSAT)
-  csv += `--- 4. CUSTOMER SATISFACTION (CSAT) ---\n`;
-  csv += `Metric,Value\n`;
-  csv += `Average Score,${data?.csat?.average_score || 4.67} / 5.00\n`;
-  csv += `Total Feedback Ratings Received,${data?.csat?.total_surveys || 84}\n`;
-  csv += `Customer Retention Metric,${data?.csat?.retention_rate || 96.2}%\n\n`;
-
-  // 5. Volume Heatmap Breakdown
-  csv += `--- 5. VOLUME HEATMAP BREAKDOWN ---\n`;
-  csv += `Day,6AM-10AM,10AM-2PM,2PM-6PM,6PM-10PM\n`;
-  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-  days.forEach((d) => {
-    csv += `"${d}",12,25,18,6\n`;
-  });
-  csv += `\n`;
-
-  // 6. Workload Capacity
-  csv += `--- 6. WORKLOAD CAPACITY ---\n`;
-  csv += `Metric,Value\n`;
-  csv += `Active Technicians On Duty,${data?.workload?.active_technicians || 6}\n`;
-  csv += `System Capacity Utilization,${data?.workload?.utilization || 78}%\n\n`;
-
-  // 7. Department Escalation Distribution
-  csv += `--- 7. DEPARTMENT ESCALATION DISTRIBUTION ---\n`;
-  csv += `Department,Active Tickets,Escalated Count\n`;
-  const depts = data?.departments || [
-    { name: 'Service', active: 22, escalated: 2 },
-    { name: 'Customer Service', active: 31, escalated: 4 },
-    { name: 'Engineering', active: 14, escalated: 1 },
-    { name: 'Quality Assurance', active: 8, escalated: 0 },
-  ];
-  depts.forEach((dept) => {
-    csv += `"${dept.name}",${dept.active},${dept.escalated}\n`;
-  });
-  csv += `\n`;
-
-  // 8. Equipment Failure Risk & MTBF
-  csv += `--- 8. EQUIPMENT MAINTENANCE & MTBF ---\n`;
-  csv += `Equipment / Machine,Failure Probability %,Risk Level\n`;
-  const eqList = data?.equipment || [
-    { name: 'Centrifuge Alpha-5', fRate: 14.2, rLevel: 'Medium' },
-    { name: 'Hematology Analyzer 3000', fRate: 3.1, rLevel: 'Low' },
-    { name: 'Bio-Freezer Ultra 80', fRate: 22.8, rLevel: 'High' },
-  ];
-  eqList.forEach((eq) => {
-    const name = eq.name || eq.equipment_name;
-    const fRate = eq.fRate || eq.failure_rate_pct || 5.0;
-    const rLevel = eq.rLevel || eq.risk_level || 'Low';
-    csv += `"${name}",${fRate}%,${rLevel}\n`;
-  });
-  csv += `\n`;
-
-  // 9. Predictive Recurring Issues
-  csv += `--- 9. PREDICTIVE - RECURRING ISSUES ---\n`;
-  csv += `Category,Frequency Count,Severity\n`;
-  const recCats = data?.predictive?.categories || ['Machine Failure', 'Calibration Required'];
-  const recFreqs = data?.predictive?.recFreq?.[data?.period || 'Next 7 Days'] || [11, 20];
-  recCats.forEach((cat, i) => {
-    const freq = recFreqs[i] !== undefined ? recFreqs[i] : 10;
-    const sev = freq >= 15 ? 'High' : 'Medium';
-    csv += `"${cat}",${freq},${sev}\n`;
-  });
-
-  downloadCsv(filename, csv);
+  exportAnalyticsToCsv(data);
 }
 
 /**
@@ -228,141 +267,64 @@ export function exportStructuredCsv(filename, headers, rows, filterSummary = {})
   downloadCsv(filename.endsWith('.csv') ? filename : `${filename}.csv`, csv);
 }
 
-/**
- * Structured Excel (.xlsx-compatible XML Spreadsheet) Export (TS061)
- */
-export function exportStructuredExcel(filename, reportTitle, headers, rows, filterSummary = {}) {
-  const dateStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  const cleanFilename = filename.replace(/\.(xlsx|csv|pdf)$/i, '') + '.xlsx';
-
-  let xml = `<?xml version="1.0" encoding="UTF-8"?>
-<?mso-application progid="Excel.Sheet"?>
-<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
- xmlns:o="urn:schemas-microsoft-com:office:office"
- xmlns:x="urn:schemas-microsoft-com:office:excel"
- xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
- xmlns:html="http://www.w3.org/TR/REC-html40">
- <Styles>
-  <Style ss:ID="Header">
-   <Font ss:Bold="1" ss:Color="#FFFFFF" ss:FontName="Calibri" ss:Size="11"/>
-   <Interior ss:Color="#252578" ss:Pattern="Solid"/>
-   <Alignment ss:Horizontal="Center" ss:Vertical="Center"/>
-  </Style>
-  <Style ss:ID="MetaLabel">
-   <Font ss:Bold="1" ss:Color="#475569" ss:FontName="Calibri" ss:Size="10"/>
-  </Style>
-  <Style ss:ID="Title">
-   <Font ss:Bold="1" ss:Color="#1E293B" ss:FontName="Calibri" ss:Size="14"/>
-  </Style>
-  <Style ss:ID="DataRow">
-   <Font ss:Color="#1E293B" ss:FontName="Calibri" ss:Size="10"/>
-   <Alignment ss:Vertical="Center"/>
-  </Style>
- </Styles>
- <Worksheet ss:Name="Report">
-  <Table>
-   <Row>
-    <Cell ss:StyleID="Title"><Data ss:Type="String">${reportTitle}</Data></Cell>
-   </Row>
-   <Row>
-    <Cell ss:StyleID="MetaLabel"><Data ss:Type="String">Generated At:</Data></Cell>
-    <Cell><Data ss:Type="String">${dateStr}</Data></Cell>
-   </Row>
-   <Row>
-    <Cell ss:StyleID="MetaLabel"><Data ss:Type="String">Branch Scope:</Data></Cell>
-    <Cell><Data ss:Type="String">${filterSummary.branch || 'All Branches'}</Data></Cell>
-   </Row>
-   <Row>
-    <Cell ss:StyleID="MetaLabel"><Data ss:Type="String">Date Range:</Data></Cell>
-    <Cell><Data ss:Type="String">${filterSummary.dateRange || 'Standard Period'}</Data></Cell>
-   </Row>
-   <Row>
-    <Cell ss:StyleID="MetaLabel"><Data ss:Type="String">Department:</Data></Cell>
-    <Cell><Data ss:Type="String">${filterSummary.department || 'All Departments'}</Data></Cell>
-   </Row>
-   <Row/>
-   <Row>
-`;
-
-  headers.forEach((h) => {
-    xml += `    <Cell ss:StyleID="Header"><Data ss:Type="String">${h}</Data></Cell>\n`;
-  });
-  xml += `   </Row>\n`;
-
-  rows.forEach((r) => {
-    xml += `   <Row>\n`;
-    headers.forEach((h) => {
-      const val = r[h] !== undefined ? r[h] : (r[h.toLowerCase().replace(/\s+/g, '_')] ?? '');
-      const isNum = typeof val === 'number' || (!isNaN(val) && val !== '' && !String(val).startsWith('TKT') && !String(val).includes('-') && !String(val).includes('%'));
-      if (isNum && !String(val).includes(':')) {
-        xml += `    <Cell ss:StyleID="DataRow"><Data ss:Type="Number">${val}</Data></Cell>\n`;
-      } else {
-        xml += `    <Cell ss:StyleID="DataRow"><Data ss:Type="String">${String(val).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</Data></Cell>\n`;
-      }
-    });
-    xml += `   </Row>\n`;
-  });
-
-  xml += `  </Table>
- </Worksheet>
-</Workbook>`;
-
-  const blob = new Blob([xml], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8;' });
+function downloadBytes(filename, bytes, mime) {
+  const blob = new Blob([bytes], { type: mime });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.setAttribute('href', url);
-  link.setAttribute('download', cleanFilename);
+  link.setAttribute('download', filename);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
 
+const ensureXlsx = (filename) => filename.replace(/\.(xlsx|csv|pdf)$/i, '') + '.xlsx';
+
 /**
- * Generates structured Excel (.xlsx) export for Operational Analytics & CSAT.
+ * Structured Excel export (spec 0029 AC-16): a genuine .xlsx workbook with a title, filter summary,
+ * a frozen filterable header row and real numeric cells.
  */
+export function exportStructuredExcel(filename, reportTitle, headers, rows, filterSummary = {}) {
+  const generated = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const matrix = rows.map((r) =>
+    headers.map((h) => (r[h] !== undefined ? r[h] : (r[h.toLowerCase().replace(/\s+/g, '_')] ?? '')))
+  );
+
+  const bytes = buildXlsx({
+    sheetName: 'Report',
+    title: reportTitle,
+    meta: [
+      ['Generated At:', generated],
+      ['Branch Scope:', filterSummary.branch || 'All Branches'],
+      ['Date Range:', filterSummary.dateRange || 'Standard Period'],
+      ['Department:', filterSummary.department || 'All Departments'],
+    ],
+    headers,
+    rows: matrix,
+  });
+  downloadBytes(ensureXlsx(filename), bytes, XLSX_MIME);
+}
+
+/** Excel for the operational dashboards (Branch and System). */
 export function exportAnalyticsToExcel(data, period = 'Active Period') {
-  const dateStr = new Date().toISOString().split('T')[0];
-  const filename = `Enterprise_Operational_Analytics_${dateStr}.xlsx`;
-  const headers = ['Category / Section', 'Metric Name', 'Recorded Value', 'Benchmark / Target', 'Operational Status'];
-
-  const rows = [
-    { 'Category / Section': 'Ticket Trends', 'Metric Name': 'Open Tickets', 'Recorded Value': data?.trends?.open ?? 14, 'Benchmark / Target': '< 25', 'Operational Status': 'Normal' },
-    { 'Category / Section': 'Ticket Trends', 'Metric Name': 'In Progress Tickets', 'Recorded Value': data?.trends?.inProgress ?? 8, 'Benchmark / Target': '< 15', 'Operational Status': 'Active' },
-    { 'Category / Section': 'Ticket Trends', 'Metric Name': 'Resolved Tickets', 'Recorded Value': data?.trends?.resolved ?? 22, 'Benchmark / Target': '> 20', 'Operational Status': 'On Track' },
-    { 'Category / Section': 'Ticket Trends', 'Metric Name': 'Closed Tickets', 'Recorded Value': data?.trends?.closed ?? 31, 'Benchmark / Target': '—', 'Operational Status': 'Archived' },
-    { 'Category / Section': 'SLA Compliance', 'Metric Name': 'Overall SLA Compliance Rate', 'Recorded Value': `${data?.sla?.overall_compliance ?? 92.5}%`, 'Benchmark / Target': '>= 90.0%', 'Operational Status': (data?.sla?.overall_compliance ?? 92.5) >= 90 ? 'Compliant' : 'At Risk' },
-    { 'Category / Section': 'SLA Compliance', 'Metric Name': 'SLA Met Count', 'Recorded Value': data?.sla?.sla_met ?? 45, 'Benchmark / Target': '—', 'Operational Status': 'Achieved' },
-    { 'Category / Section': 'SLA Compliance', 'Metric Name': 'SLA Breached Count', 'Recorded Value': data?.sla?.sla_breached ?? 4, 'Benchmark / Target': '0', 'Operational Status': (data?.sla?.sla_breached ?? 4) > 0 ? 'Breached' : 'Zero Breaches' },
-    { 'Category / Section': 'Customer Satisfaction', 'Metric Name': 'CSAT Average Score', 'Recorded Value': `${data?.csat?.average_score ?? 4.67} / 5.00`, 'Benchmark / Target': '>= 4.50', 'Operational Status': 'Excellent' },
-    { 'Category / Section': 'Customer Satisfaction', 'Metric Name': 'Total Survey Responses', 'Recorded Value': data?.csat?.total_surveys ?? 84, 'Benchmark / Target': '—', 'Operational Status': 'Recorded' },
-    { 'Category / Section': 'Workload & Capacity', 'Metric Name': 'Active Technicians On Duty', 'Recorded Value': data?.workload?.active_technicians ?? 6, 'Benchmark / Target': '>= 4', 'Operational Status': 'Adequate' },
-  ];
-
-  exportStructuredExcel(filename, 'Enterprise Operational Analytics Report', headers, rows, {
+  const rows = buildAnalyticsExportRows(data).map(([section, metric, value, unit, note]) => ({
+    Section: section, Metric: metric, Value: value, Unit: unit, Note: note,
+  }));
+  exportStructuredExcel(`Operational_Analytics_${todayStamp()}.xlsx`, 'Operational Analytics Report', EXPORT_HEADERS, rows, {
     dateRange: period,
     department: 'All Departments',
   });
 }
 
-/**
- * Generates structured Excel (.xlsx) export for Predictive Analytics & Volume Forecasts.
- */
-export function exportPredictiveToExcel(data, period = 'Next 7 Days') {
-  const dateStr = new Date().toISOString().split('T')[0];
-  const filename = `Predictive_Analytics_Forecast_${dateStr}.xlsx`;
-  const headers = ['Model Dimension', 'Indicator / Variable', 'Projected Metric', 'Confidence Level', 'Recommended Action'];
-
-  const rows = [
-    { 'Model Dimension': 'Ticket Volume Forecast', 'Indicator / Variable': `${period} Projected Influx`, 'Projected Metric': data?.forecast_total ?? '130 - 150 tickets', 'Confidence Level': '92% Historical Fit', 'Recommended Action': 'Maintain current shift coverage' },
-    { 'Model Dimension': 'Peak Load Identification', 'Indicator / Variable': 'Anticipated Influx Peak', 'Projected Metric': data?.peak_day ?? 'Wednesday (10:00 AM - 2:00 PM)', 'Confidence Level': '88% Pattern Match', 'Recommended Action': 'Schedule Tier-2 engineers on standby' },
-    { 'Model Dimension': 'Recurring Issue Detection', 'Indicator / Variable': 'Top Recurring Anomaly', 'Projected Metric': data?.top_recurring ?? 'Calibration Required (+10% frequency)', 'Confidence Level': 'High Frequency Flag', 'Recommended Action': 'Review automated calibration checklists' },
-    { 'Model Dimension': 'Critical Risk Prediction', 'Indicator / Variable': 'High-Severity Equipment Breakdown', 'Projected Metric': data?.equipment_risk ?? 'Hematology Analyzers (Low Risk)', 'Confidence Level': '95% Stability Metric', 'Recommended Action': 'Standard scheduled preventive maintenance' },
-  ];
-
-  exportStructuredExcel(filename, `Predictive Analytics & Volume Forecast (${period})`, headers, rows, {
-    dateRange: period,
-    department: 'Organization-wide Predictive Model',
+/** Excel for the predictive forecast. */
+export function exportPredictiveToExcel(data, period = '') {
+  const rows = buildPredictiveExportRows(data).map(([section, metric, value, unit, note]) => ({
+    Section: section, Metric: metric, Value: value, Unit: unit, Note: note,
+  }));
+  exportStructuredExcel(`Predictive_Analytics_${todayStamp()}.xlsx`, 'Predictive Analytics Report', EXPORT_HEADERS, rows, {
+    dateRange: period || 'Next 7 and 30 days',
+    department: 'Branch forecast',
   });
 }
 

@@ -152,8 +152,8 @@ export default function Header({ sidebarHovered }) {
 
   const handleNotificationClick = async (n) => {
     setNotificationDropdownOpen(false);
-    const ticketId = n.ticket_id;
     const parsed = (() => { try { return typeof n.data === 'string' ? JSON.parse(n.data) : n.data || {}; } catch { return {}; } })();
+    const ticketId = n.ticket_id || parsed?.ticket_id || parsed?.ticketId;
 
     // Handle new message notification: navigate directly to messaging thread
     const isNewMessage = parsed.type === 'new_message' ||
@@ -194,6 +194,8 @@ export default function Header({ sidebarHovered }) {
     try {
       const ticketNum = Number(String(ticketId).replace(/\D/g, ''));
       const full = await getTicketDetails(ticketNum).catch(() => null);
+      // Fall back to the notification itself when the ticket can't be fetched, so the modal still opens.
+      const base = full || { id: `TKT-${String(ticketId).padStart(4, '0')}`, ticket_ID: ticketId, title: n.title, description: n.message, status: 'Open', priority: 'Medium', customer: '—', timeline: [{ id: 'creation', type: 'system', text: n.message, timestamp: n.created_at }] };
       const isReassignDenied = parsed.type === 'reassignment_denied' ||
         parsed.type === 'reassignment_rejected' ||
         /reassign.*(reject|deni|disapprov)/i.test(n.title || '') ||
@@ -206,7 +208,6 @@ export default function Header({ sidebarHovered }) {
           return match && match[1] ? match[1].trim() : '';
         })();
 
-      const base = full || {};
       const merged = {
         ...base,
         id: base.id || `TKT-${String(ticketId).padStart(4, '0')}`,

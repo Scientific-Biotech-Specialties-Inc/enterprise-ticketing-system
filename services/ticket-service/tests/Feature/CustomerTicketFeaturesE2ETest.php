@@ -207,10 +207,12 @@ class CustomerTicketFeaturesE2ETest extends TestCase
         DB::table('clients')->updateOrInsert(['id' => $testClientId], [
             'client_name' => 'Filter Test Client',
             'email' => 'filtertest@example.com',
+            'address' => '7 Filter St',
+            'contact_number' => '0000000006',
         ]);
 
         DB::table('problem_categories')->updateOrInsert(['problem_category_ID' => 1], ['category_name' => 'Hardware']);
-        DB::table('machines')->updateOrInsert(['machine_ID' => 1], [
+        $this->seedMachine(1, [
             'machine_name' => 'CGI Machine Pro',
             'serial_number' => 'CGI-9988-AA',
             'client_ID' => $testClientId,

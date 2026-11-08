@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import DOMPurify from 'dompurify';
 import {
   Bold,
   Italic,
@@ -133,7 +134,7 @@ export default function EmailVisualEditor({
     Object.entries(SAMPLE_PLACEHOLDERS).forEach(([token, val]) => {
       rendered = rendered.split(token).join(val);
     });
-    return rendered;
+    return DOMPurify.sanitize(rendered);
   }, [value]);
 
   const previewSubject = React.useMemo(() => {

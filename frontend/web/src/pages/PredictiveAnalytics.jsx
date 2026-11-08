@@ -201,9 +201,14 @@ export default function PredictiveAnalytics({
   // Check if calculation failed or if there is insufficient historical data
   const isApiError = analyticsData?.predictive_error === true;
   const rawPredictive = analyticsData?.predictive;
+  // The API reports a short history as `status: "insufficient_data"` (with `historical_basis`); older payloads used the boolean flag.
   const hasInsufficientData =
+    rawPredictive?.status === 'insufficient_data' ||
     rawPredictive?.insufficient_data === true ||
     (rawPredictive && rawPredictive.total_historical_tickets !== undefined && rawPredictive.total_historical_tickets < 5);
+
+  const daysUsed = rawPredictive?.historical_basis?.days_used ?? rawPredictive?.total_historical_tickets ?? 0;
+  const minDaysRequired = rawPredictive?.historical_basis?.minimum_days_required ?? 30;
 
   const trendData = CONTINUOUS_TIMELINE[activePeriod] || CONTINUOUS_TIMELINE['Last 7 Days'];
   const equipVals = defaultEquipFail[activePeriod] || defaultEquipFail['Last 7 Days'];
@@ -264,13 +269,13 @@ export default function PredictiveAnalytics({
           </div>
           <h3 className="text-base font-bold text-foreground">Not Enough Historical Data for {branchName}</h3>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Predictive modeling and trend forecasting require at least 30 days of ticket logs for this branch. As new operational tickets are handled, forecasting algorithms will automatically populate.
+            Predictive modeling and trend forecasting require at least {minDaysRequired} days of ticket history for this branch. As new operational tickets are handled, forecasting algorithms will automatically populate.
           </p>
         </div>
         <div className="pt-2">
           <div className="inline-flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 px-3 py-1.5 rounded-lg border border-border">
             <Info className="w-3.5 h-3.5 text-primary" />
-            <span>Currently logged: <strong>{rawPredictive?.total_historical_tickets ?? 0}</strong> historical tickets (minimum required: 30)</span>
+            <span>Currently logged: <strong>{daysUsed}</strong> days of history (minimum required: {minDaysRequired})</span>
           </div>
         </div>
       </div>

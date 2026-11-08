@@ -1,3 +1,5 @@
+import { safeUrl } from '@/utils/safeUrl';
+import { attachmentUrl } from '@/utils/attachmentFiles';
 import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -51,6 +53,7 @@ import InternalNotesSection, { NoteList } from './InternalNotesSection';
 import TicketFeedbackSection from './feedback/TicketFeedbackSection';
 import { hasFeedbackBeenSubmitted } from '@/data/mockFeedbackData';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
+import { priorityColors } from '@/constants/employeeTickets';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import EscalateTicketModal from './cs/EscalateTicketModal';
@@ -61,16 +64,16 @@ const isQuarantinedFile = (file) => {
   return Boolean(file.is_quarantined || file.quarantined || file.status === 'quarantined' || file.virus_detected);
 };
 
-const getFileUrl = (file) => {
+const getFileUrlRaw = (file) => {
   if (!file) return '';
   if (typeof file === 'string') return file;
   if (file.url) return file.url;
-  if (file.file_path) {
-    return file.file_path.startsWith('/') ? file.file_path : `/storage/${file.file_path}`;
-  }
+  // Spec 0037: a bare file_path is opened through the authenticated loader, never /storage/.
+  if (file.file_path) return attachmentUrl(file.file_path);
   if (file.path) return file.path;
   return '';
 };
+const getFileUrl = (file) => safeUrl(getFileUrlRaw(file));
 
 const getFileName = (file) => {
   if (!file) return 'Attachment';
@@ -1169,7 +1172,7 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
 
   const getRequestingEmployeeName = () => {
     if (ticket.reassignmentRequestedBy) {
-      const emp = employees.find(e => Number(e.id) === Number(ticket.reassignmentRequestedBy));
+      const emp = employees.find(e => String(e.id) === String(ticket.reassignmentRequestedBy));
       if (emp?.name) return emp.name;
       if (typeof ticket.reassignmentRequestedBy === 'string' && isNaN(Number(ticket.reassignmentRequestedBy))) {
         return ticket.reassignmentRequestedBy.replace(/^Employee ID:\s*/i, '').trim() || 'Assigned Employee';
@@ -1411,7 +1414,7 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                                 </p>
                               </div>
                               {fileUrl && (
-                                <a href={fileUrl} onClick={(e) => { e.preventDefault(); setPreviewFile({ name: fileName, url: fileUrl }); }} className="text-xs text-[#252578] hover:text-[#1e1e60] font-semibold px-2 py-1 hover:bg-blue-50 rounded transition-colors flex-shrink-0 cursor-pointer">
+                                <a href="#" role="button" onClick={(e) => { e.preventDefault(); setPreviewFile({ name: fileName, url: fileUrl }); }} className="text-xs text-[#252578] hover:text-[#1e1e60] font-semibold px-2 py-1 hover:bg-blue-50 rounded transition-colors flex-shrink-0 cursor-pointer">
                                   View
                                 </a>
                               )}
@@ -1458,7 +1461,7 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                                 </p>
                               </div>
                               {fileUrl && (
-                                <a href={fileUrl} onClick={(e) => { e.preventDefault(); openProofPreview(file); }} className="text-xs text-green-700 hover:text-green-900 font-semibold px-2 py-1 hover:bg-green-50 rounded transition-colors flex-shrink-0 cursor-pointer">
+                                <a href="#" role="button" onClick={(e) => { e.preventDefault(); openProofPreview(file); }} className="text-xs text-green-700 hover:text-green-900 font-semibold px-2 py-1 hover:bg-green-50 rounded transition-colors flex-shrink-0 cursor-pointer">
                                   View
                                 </a>
                               )}
@@ -1757,7 +1760,7 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                             const fileUrl = getFileUrl(f);
                             return (
                               <div key={i} className="text-gray-600 font-medium truncate flex justify-between items-center bg-gray-50 p-2 rounded-xl border border-gray-100 hover:bg-gray-100/50 transition-colors">
-                                <a href={fileUrl} onClick={(e) => { e.preventDefault(); openProofPreview(f); }} className="text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1.5 min-w-0 cursor-pointer">
+                                <a href="#" role="button" onClick={(e) => { e.preventDefault(); openProofPreview(f); }} className="text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1.5 min-w-0 cursor-pointer">
                                   <svg className="w-3.5 h-3.5 shrink-0 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
                                   <span className="truncate">{fileName}</span>
                                 </a>
@@ -1873,7 +1876,7 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                         </div>
                         {fileUrl && (
                           <a
-                            href={fileUrl}
+                            href="#" role="button"
                             onClick={(e) => {
                               e.preventDefault();
                               setPreviewFile({ name: fileName, url: fileUrl });
@@ -1939,7 +1942,7 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                         </div>
                         {fileUrl && (
                           <a
-                            href={fileUrl}
+                            href="#" role="button"
                             onClick={(e) => {
                               e.preventDefault();
                               openProofPreview(file);
@@ -2083,6 +2086,11 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                       }
                       setIsProcessing(true);
                       try {
+                        // The backend rejects On Hold -> Resolved, so a held ticket is resumed first.
+                        const isOnHold = String(currentStatus || ticket.status).toLowerCase().startsWith('on hold');
+                        if (isOnHold) {
+                          await resumeTicket(ticket.ticket_ID || ticket.id);
+                        }
                         const timestamp = new Date().toISOString();
                         await onStatusUpdate({
                           id: ticket.id,
@@ -2091,7 +2099,9 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                             {
                               id: `status-closed-${Date.now()}`,
                               type: 'status',
-                              text: 'Ticket resolved and closed by CS Representative.',
+                              text: isOnHold
+                                ? 'Ticket resumed from On Hold, then resolved and closed by CS Representative.'
+                                : 'Ticket resolved and closed by CS Representative.',
                               timestamp,
                             }
                           ]
@@ -2099,6 +2109,7 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                         onClose();
                       } catch (err) {
                         console.error(err);
+                        window.alert(err.response?.data?.message || 'Failed to resolve the ticket. Please try again.');
                       } finally {
                         setIsProcessing(false);
                       }
@@ -2345,8 +2356,16 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
 /* ─────────────────────────────────────────────
    ASSIGN MODAL
 ───────────────────────────────────────────── */
-export function AssignModal({ ticket, employees, departments, priorityOptions, onClose, onSave }) {
+export function AssignModal({ ticket, employees, departments, priorityOptions, onClose, onSave, onCloseTicket }) {
   const navigate = useNavigate();
+  // Close without assigning is offered only when the superadmin Transition Matrix
+  // allows the ticket's current state to move to Closed (backend sends allowed_transitions).
+  const canCloseWithoutAssigning = typeof onCloseTicket === 'function'
+    && Array.isArray(ticket?.allowed_transitions)
+    && ticket.allowed_transitions.includes('Closed');
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
+  const [closeError, setCloseError] = useState('');
   const [title, setTitle] = useState(ticket?.title || '');
   const [category, setCategory] = useState(ticket?.category || 'Biomedical Equipment');
   const [priority, setPriority] = useState(ticket?.priority || 'Low');
@@ -2841,7 +2860,10 @@ export function AssignModal({ ticket, employees, departments, priorityOptions, o
                     <div className="max-h-60 overflow-auto bg-page border border-border rounded-xl p-2 space-y-1.5">
                       {eligibleEmployeesList.map((emp) => {
                         const isSelected = selectedEmployees.some((x) => Number(x) === Number(emp.id));
-                        const isAvailable = emp.status === 'active' || emp.is_active || emp.availability === 'Available';
+                        // Presence (spec 0035): online when the heartbeat is fresh. Offline staff stay selectable with a warning.
+                        const isAvailable = emp.presence
+                          ? emp.presence === 'online'
+                          : (emp.status === 'active' || emp.is_active || emp.availability === 'Available');
                         const branchName = emp.branch || emp.branch_name || ticketBranch;
                         const defaultPos = (emp.department || '').toLowerCase() === 'service' ? 'Engineer' : 'Employee';
                         const posLevel = (emp.position_level && !['senior', 'mid', 'junior'].includes(String(emp.position_level).toLowerCase()))
@@ -3136,12 +3158,26 @@ export function AssignModal({ ticket, employees, departments, priorityOptions, o
           </div>
 
           {/* Sticky footer */}
+          {closeError && (
+            <div className="px-6 pt-3 text-xs font-medium text-destructive bg-card">{closeError}</div>
+          )}
           <div className="flex justify-end gap-3 px-6 py-4 border-t border-border shrink-0 bg-card">
+            {canCloseWithoutAssigning && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => { setCloseError(''); setShowCloseConfirm(true); }}
+                disabled={isSaving || isClosing}
+                className="mr-auto text-destructive border-destructive/40 hover:bg-destructive/10"
+              >
+                Close Ticket
+              </Button>
+            )}
             <Button
               type="button"
               variant="outline"
               onClick={onClose}
-              disabled={isSaving}
+              disabled={isSaving || isClosing}
             >
               Cancel
             </Button>
@@ -3149,7 +3185,7 @@ export function AssignModal({ ticket, employees, departments, priorityOptions, o
               type="button"
               variant="default"
               onClick={handleAcceptClick}
-              disabled={isSaving}
+              disabled={isSaving || isClosing}
             >
               {isSaving ? (
                 <span className="flex items-center gap-1.5">
@@ -3168,6 +3204,28 @@ export function AssignModal({ ticket, employees, departments, priorityOptions, o
           onConfirm={handleConfirm}
           onCancel={() => setShowConfirm(false)}
           isSaving={isSaving}
+        />
+      )}
+      {showCloseConfirm && (
+        <ConfirmDialog
+          title="Close this ticket without assigning?"
+          message="The ticket will be marked Closed without being assigned to anyone. The customer can still reopen it within the reopen window."
+          confirmText="Yes, Close Ticket"
+          isSaving={isClosing}
+          onCancel={() => setShowCloseConfirm(false)}
+          onConfirm={async () => {
+            setIsClosing(true);
+            setCloseError('');
+            try {
+              await onCloseTicket(ticket);
+              setShowCloseConfirm(false);
+            } catch (err) {
+              setShowCloseConfirm(false);
+              setCloseError(err?.response?.data?.message || 'Failed to close the ticket.');
+            } finally {
+              setIsClosing(false);
+            }
+          }}
         />
       )}
       {previewFile && (

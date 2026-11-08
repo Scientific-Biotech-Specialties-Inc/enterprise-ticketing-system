@@ -162,6 +162,7 @@
             RefreshToken::create([
                 'client_id' => $client->id,
                 'token_hash' => $hash,
+                'is_revoked' => false,
                 'expires_at' => $expiresAt,
             ]);
 
@@ -295,6 +296,7 @@
             RefreshToken::create([
                 'employee_id' => $employee->emp_id,
                 'token_hash' => $hash,
+                'is_revoked' => false,
                 'expires_at' => $expiresAt,
             ]);
 
@@ -315,8 +317,8 @@
                 return;
             }
 
-            $employee->is_active = false;
-            $employee->last_seen_at = Carbon::now();
+            // Logout clears presence only (spec 0035); is_active is the account flag and is left untouched.
+            $employee->last_seen_at = null;
             $employee->save();
 
             Cache::store('redis')->forget($this->employeePresenceKey($employee->emp_id));

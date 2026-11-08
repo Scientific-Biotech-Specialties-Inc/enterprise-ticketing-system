@@ -75,6 +75,7 @@ class CentralAuthBranchPayloadTest extends TestCase
         Branch::updateOrInsert(
             ['code' => 'TEST_CEB'],
             [
+                'slug' => 'test-ceb',
                 'name' => 'Cebu Testing Branch',
                 'region' => 'Visayas',
                 'address' => 'Test Cebu Blvd',

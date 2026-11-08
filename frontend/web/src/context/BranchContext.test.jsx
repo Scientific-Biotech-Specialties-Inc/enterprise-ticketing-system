@@ -16,13 +16,14 @@ const mockBranches = [
 ];
 
 function TestConsumer() {
-  const { currentBranch, branches, selectBranch, isAllBranches, loading } = useBranch();
+  const { currentBranch, selectedBranchId, branches, selectBranch, isAllBranches, loading } = useBranch();
   return (
     <div>
       <span data-testid="loading">{loading ? 'true' : 'false'}</span>
       <span data-testid="branch-count">{branches.length}</span>
       <span data-testid="current-branch-name">{currentBranch?.name || 'NONE'}</span>
       <span data-testid="current-branch-code">{currentBranch?.code || 'NONE'}</span>
+      <span data-testid="selected-branch-id">{selectedBranchId ?? 'NONE'}</span>
       <span data-testid="is-all">{isAllBranches ? 'true' : 'false'}</span>
       <button
         onClick={() => selectBranch(GLOBAL_BRANCH)}
@@ -138,7 +139,40 @@ describe('BranchContext and null branch support', () => {
 
     expect(ticketService.getBranches).not.toHaveBeenCalled();
     expect(ticketService.getPublicBranches).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('selected-branch-id').textContent).toBe('2');
     expect(screen.getByTestId('current-branch-name').textContent).toBe('Davao South Branch');
     expect(screen.getByTestId('current-branch-code').textContent).toBe('DVO');
+  });
+
+  it('isolates non-superadmin from stale superadmin_active_branch in localStorage', async () => {
+    localStorage.setItem('superadmin_active_branch', 'cebu-city-office');
+
+    vi.spyOn(authContextModule, 'useAuth').mockReturnValue({
+      user: {
+        id: 8,
+        email: 'admin@example.com',
+        role: 'admin',
+        branch: 'Cebu Main Branch',
+        branch_id: 1,
+      },
+    });
+
+    ticketService.getBranches.mockResolvedValue({
+      data: mockBranches,
+    });
+
+    render(
+      <BranchProvider>
+        <TestConsumer />
+      </BranchProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('loading').textContent).toBe('false');
+    });
+
+    expect(screen.getByTestId('current-branch-name').textContent).toBe('Cebu Main Branch');
+    expect(screen.getByTestId('selected-branch-id').textContent).not.toBe('cebu-city-office');
+    expect(screen.getByTestId('selected-branch-id').textContent).toBe('1');
   });
 });

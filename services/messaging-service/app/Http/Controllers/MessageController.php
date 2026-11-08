@@ -52,6 +52,42 @@ class MessageController extends Controller
         return $defaultConfig;
     }
 
+    /** Convert a php.ini size such as "8M" to bytes. */
+    public static function iniSizeToBytes(string $value): int
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return 0;
+        }
+        $number = (int) $value;
+        return match (strtolower(substr($value, -1))) {
+            'g' => $number * 1024 * 1024 * 1024,
+            'm' => $number * 1024 * 1024,
+            'k' => $number * 1024,
+            default => $number,
+        };
+    }
+
+    /** True when PHP discarded the request body because it was over post_max_size. */
+    public static function bodyExceededPostLimit(Request $request): bool
+    {
+        $limit = self::iniSizeToBytes((string) ini_get('post_max_size'));
+        $length = (int) $request->server('CONTENT_LENGTH', 0);
+        return $limit > 0 && $length > $limit;
+    }
+
+    /**
+     * True when a chat message carries one or more attachments (spec 0037, AC-18).
+     */
+    public static function hasAttachments($message): bool
+    {
+        $attachments = $message->attachments ?? null;
+        if ($attachments instanceof \Traversable) {
+            $attachments = iterator_to_array($attachments);
+        }
+        return is_array($attachments) && count($attachments) > 0;
+    }
+
     /**
      * Get all messages for a specific ticket.
      */
@@ -204,7 +240,7 @@ class MessageController extends Controller
         }
 
         $request->validate([
-            'message' => 'required|string|max:5000',
+            'message' => ['required', 'string', 'max:5000', new \App\Rules\NoMarkup()],
             'sender_name' => 'required|string|max:255',
             'sender_type' => 'required|string|max:50',
             'sender_id' => 'nullable|integer',
@@ -236,6 +272,27 @@ class MessageController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
+        // When a request body is larger than PHP's post_max_size, PHP drops the whole body,
+        // text included. Say so plainly instead of "provide a message or an attachment".
+        if (self::bodyExceededPostLimit($request)) {
+            return response()->json([
+                'message' => 'The attached files are too large to send together. Please send fewer or smaller files.',
+                'code' => 'PAYLOAD_TOO_LARGE',
+                'errors' => ['attachments' => ['The upload is larger than the server accepts.']],
+            ], 413);
+        }
+
+        // A file PHP rejected (for example over upload_max_filesize) must not vanish silently.
+        foreach (\Illuminate\Support\Arr::wrap($request->file('attachments')) as $uploaded) {
+            if ($uploaded instanceof \Illuminate\Http\UploadedFile && !$uploaded->isValid()) {
+                return response()->json([
+                    'message' => "File '{$uploaded->getClientOriginalName()}' could not be uploaded: " . $uploaded->getErrorMessage(),
+                    'code' => 'ATTACHMENT_UPLOAD_FAILED',
+                    'errors' => ['attachments' => ["File '{$uploaded->getClientOriginalName()}' could not be uploaded."]],
+                ], 422);
+            }
+        }
+
         $rawMessage = $request->input('message');
         $hasText = is_string($rawMessage) && trim($rawMessage) !== '';
         $hasUploadFiles = $request->hasFile('attachments');
@@ -248,6 +305,14 @@ class MessageController extends Controller
                 'errors' => [
                     'message' => ['At least message text or an attached file is required.']
                 ]
+            ], 422);
+        }
+
+        if ($hasText && \App\Rules\NoMarkup::contains($rawMessage)) {
+            return response()->json([
+                'message' => 'Message must not contain HTML or script markup.',
+                'code' => 'MARKUP_NOT_ALLOWED',
+                'errors' => ['message' => ['The message must not contain HTML or script markup.']]
             ], 422);
         }
 
@@ -443,7 +508,8 @@ class MessageController extends Controller
                         'id' => $u['id'] ?? null,
                         'name' => $u['name'] ?? 'attachment',
                         'url' => $u['url'] ?? '',
-                        'file_path' => !empty($u['url']) ? ltrim(str_replace('/storage/', '', $u['url']), '/') : '',
+                        // attachment-service returns file_path; the URL fallback covers older responses.
+                        'file_path' => $u['file_path'] ?? (!empty($u['url']) ? ltrim(str_replace('/storage/', '', $u['url']), '/') : ''),
                         'file_type' => $u['file_type'] ?? null,
                         'file_size' => $u['file_size'] ?? null,
                         'scan_status' => 'clean',
@@ -821,7 +887,7 @@ class MessageController extends Controller
 
                             if ($recipientEmail) {
                                 $configServiceUrl = env('CONFIGURATION_SERVICE_URL', 'http://configuration-service:8000');
-                                \Illuminate\Support\Facades\Http::timeout(5)->retry(2, 100)->post("{$configServiceUrl}/api/email/dispatch", [
+                                \Illuminate\Support\Facades\Http::timeout(5)->withHeaders(['X-Internal-Token' => (string) env('INTERNAL_TOKEN', '')])->retry(2, 100)->post("{$configServiceUrl}/api/email/dispatch", [
                                     'to' => $recipientEmail,
                                     'subject' => $notificationTitle,
                                     'html' => "<p><strong>{$senderName}</strong> ({$senderRole}) posted a new message on ticket #{$ticket_id}:</p><blockquote>" . e($previewText) . "</blockquote><p><a href=\"" . url($deepLink) . "\">View ticket conversation</a></p>",
@@ -862,16 +928,7 @@ class MessageController extends Controller
     public function update(Request $request, $ticket_id, $message_id)
     {
         $user = Auth::user();
-        if (!$user && ($request->input('user_id') || $request->header('X-User-Id'))) {
-            $fallbackId = $request->input('user_id') ?: $request->header('X-User-Id');
-            $fallbackType = $request->input('user_type') ?: $request->header('X-User-Type', 'customer');
-            $fallbackName = $request->input('user_name') ?: $request->header('X-User-Name', 'User');
-            $user = new \Illuminate\Auth\GenericUser([
-                'id' => $fallbackId,
-                'name' => $fallbackName,
-                'user_type' => $fallbackType,
-            ]);
-        }
+        // Spec 0034: identity comes only from the verified token, never from headers or body ids.
 
         if (!$user) {
             return response()->json([
@@ -921,6 +978,15 @@ class MessageController extends Controller
                 'message' => 'You cannot edit a message sent by someone else.',
                 'code' => 'UNAUTHORIZED_SENDER',
             ], 403);
+        }
+
+        // Spec 0037 (AC-18): a message that carries files stays exactly as sent, in every role.
+        // Checked before the ticket state and edit window so nothing about it can change.
+        if (self::hasAttachments($message)) {
+            return response()->json([
+                'message' => 'Messages with attachments cannot be edited.',
+                'code' => 'ATTACHMENT_MESSAGE_LOCKED',
+            ], 422);
         }
 
         // Check ticket status for closed or archived state
@@ -1064,16 +1130,7 @@ class MessageController extends Controller
     public function history(Request $request, $ticket_id, $message_id)
     {
         $user = Auth::user();
-        if (!$user && ($request->input('user_id') || $request->header('X-User-Id'))) {
-            $fallbackId = $request->input('user_id') ?: $request->header('X-User-Id');
-            $fallbackType = $request->input('user_type') ?: $request->header('X-User-Type', 'customer');
-            $fallbackName = $request->input('user_name') ?: $request->header('X-User-Name', 'User');
-            $user = new \Illuminate\Auth\GenericUser([
-                'id' => $fallbackId,
-                'name' => $fallbackName,
-                'user_type' => $fallbackType,
-            ]);
-        }
+        // Spec 0034: identity comes only from the verified token, never from headers or body ids.
 
         if (!$user) {
             return response()->json(['message' => 'Unauthorized'], 401);

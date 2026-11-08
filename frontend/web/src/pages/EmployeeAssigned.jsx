@@ -7,6 +7,7 @@ import {
   sortTicketsByPriority,
 } from '@/constants/employeeTickets';
 import TicketDetailModal from '@/components/employee/TicketDetailModal';
+import ActionErrorModal, { getActionError } from '@/components/employee/ActionErrorModal';
 import TicketInfoModal from '@/components/employee/TicketInfoModal';
 import ReassignmentModal from '@/components/employee/ReassignmentModal';
 import { formatDisplayDate, parseUTCDate } from '@/utils/dateUtils';
@@ -130,12 +131,14 @@ export default function EmployeeAssigned() {
   // Modal state — which modal to show
   const [pendingTicket, setPendingTicket] = useState(null);   // not-yet-accepted → TicketDetailModal
   const [infoTicket, setInfoTicket] = useState(null);         // accepted & active → TicketInfoModal
+  const [actionError, setActionError] = useState(null);       // why a status change failed
   const [reassignTicket, setReassignTicket] = useState(null); // reassign flow
   const [deniedReassignTicket, setDeniedReassignTicket] = useState(null); // denied reassign → skip accept, show update
 
-  const loadTickets = useCallback(async ({ forceRefresh = false } = {}) => {
+  const loadTickets = useCallback(async ({ forceRefresh = false, source = 'manual' } = {}) => {
     const email = user?.email || 'frontend@example.com';
-    setLoading(true);
+    // Realtime ticks (websocket/poll) refresh silently instead of flashing the skeleton.
+    if (source !== 'websocket' && source !== 'poll') setLoading(true);
     setLoadError('');
     try {
       const list = await getEmployeeAssignedTickets({ employeeEmail: email, forceRefresh });
@@ -176,9 +179,9 @@ export default function EmployeeAssigned() {
 
 
 
-  const handleRealtimeRefresh = useCallback(() => {
+  const handleRealtimeRefresh = useCallback((context) => {
     clearEmployeeTicketsCache();
-    loadTickets({ forceRefresh: true });
+    loadTickets({ forceRefresh: true, source: context?.source || 'poll' });
   }, [loadTickets]);
 
   useRealtimeRefresh({
@@ -364,15 +367,8 @@ export default function EmployeeAssigned() {
       );
     } catch (err) {
       console.error('Failed to update ticket status on backend:', err);
-      // fallback
-      updateEmployeeTicketOverride(id, {
-        status: newStatus,
-        proofRejected: false,
-        rejectionReason: null,
-      });
-      setTickets((prev) =>
-        prev.map((t) => (t.id === id ? { ...t, status: newStatus } : t))
-      );
+      // A failed change must not be shown as saved: tell the employee what went wrong instead.
+      setActionError(getActionError(err, 'Failed to update ticket status.'));
     }
   }, [tickets, user]);
 
@@ -681,6 +677,8 @@ export default function EmployeeAssigned() {
           isAccepting={isAccepting}
         />
       )}
+
+      <ActionErrorModal error={actionError} onClose={() => setActionError(null)} />
 
       {/* Modal: Accepted active ticket — lightweight info + Update button */}
       {infoTicket && (

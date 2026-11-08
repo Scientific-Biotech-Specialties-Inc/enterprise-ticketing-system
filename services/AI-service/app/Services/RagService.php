@@ -2,96 +2,104 @@
 
 namespace App\Services;
 
+use App\Exceptions\ArticleMissingEmbeddingsException;
+use App\Exceptions\EmbeddingFailedException;
+use App\Exceptions\IndexingInProgressException;
 use App\Models\KbArticle;
 use App\Models\KbChunk;
 use App\Models\KbEmbedding;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class RagService
 {
-    protected string $apiKey;
-    protected string $embeddingUrl;
+    public const STATUS_INDEXING = 'Indexing';
+    public const STATUS_READY = 'Ready for AI Search';
+    public const STATUS_FAILED = 'Indexing failed';
 
-    public function __construct()
+    /** Spec 0036 (AC-5): the article must rank in the top N of its own probe. */
+    public const PROBE_TOP_N = 3;
+
+    /** Seconds the per article index lock is held at most. */
+    protected const INDEX_LOCK_SECONDS = 120;
+
+    protected EmbeddingClient $embeddings;
+
+    public function __construct(?EmbeddingClient $embeddings = null)
     {
-        $this->apiKey = config('services.gemini.api_key') ?? env('GEMINI_API_KEY', '');
-        $this->embeddingUrl = 'https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent';
+        $this->embeddings = $embeddings ?? app(EmbeddingClient::class);
     }
 
     /**
-     * Generate 768-dimensional vector embedding for text using Google Gemini text-embedding-004
-     * with deterministic unit-normalized fallback for resilience and offline testing.
+     * The embedding model every stored and compared vector must come from.
      */
-    public function generateEmbedding(string $text): array
+    public function embeddingModel(): string
     {
-        $text = trim($text);
-        if (empty($text)) {
-            return array_fill(0, 768, 0.0);
-        }
-
-        if (!empty($this->apiKey)) {
-            try {
-                $response = Http::withHeaders([
-                    'Content-Type' => 'application/json',
-                ])->timeout(8)->post("{$this->embeddingUrl}?key={$this->apiKey}", [
-                    'model' => 'models/text-embedding-004',
-                    'content' => [
-                        'parts' => [
-                            ['text' => mb_substr($text, 0, 2048)]
-                        ]
-                    ]
-                ]);
-
-                if ($response->successful()) {
-                    $json = $response->json();
-                    $values = $json['embedding']['values'] ?? null;
-                    if (is_array($values) && count($values) > 0) {
-                        return $values;
-                    }
-                }
-            } catch (\Throwable $e) {
-                Log::warning('Gemini text-embedding-004 failed, using fallback embedding: ' . $e->getMessage());
-            }
-        }
-
-        return $this->computeFallbackEmbedding($text);
+        return $this->embeddings->model();
     }
 
     /**
-     * Deterministic, high-entropy TF-IDF normalized vector generator (768 dimensions)
-     * used when Gemini API is unavailable or in offline testing.
+     * Retrieval and probe threshold (KB_MIN_SCORE).
      */
-    public function computeFallbackEmbedding(string $text): array
+    public function minScore(): float
     {
-        $dim = 768;
-        $vec = array_fill(0, $dim, 0.0);
-        $words = preg_split('/[\s\p{P}]+/u', mb_strtolower($text), -1, PREG_SPLIT_NO_EMPTY);
+        return (float) config('services.kb.min_score', 0.55);
+    }
 
-        foreach ($words as $i => $word) {
-            $h1 = crc32($word) % $dim;
-            if ($h1 < 0) $h1 += $dim;
-            $h2 = abs(crc32($word . '_salt')) % $dim;
+    /**
+     * Use a different embedding client (kb:reembed swaps in one that retries on 429).
+     */
+    public function withEmbeddingClient(EmbeddingClient $client): static
+    {
+        $clone = clone $this;
+        $clone->embeddings = $client;
 
-            $weight = 1.0 + (1.0 / (1.0 + $i));
-            $vec[$h1] += $weight;
-            $vec[$h2] += ($weight * 0.5);
-        }
+        return $clone;
+    }
 
-        // Normalize to unit length
-        $norm = 0.0;
-        for ($d = 0; $d < $dim; $d++) {
-            $norm += $vec[$d] * $vec[$d];
-        }
-        $norm = sqrt($norm);
-        if ($norm > 0.000001) {
-            for ($d = 0; $d < $dim; $d++) {
-                $vec[$d] = round($vec[$d] / $norm, 6);
+    /**
+     * The exact text that gets chunked and embedded: content, else description, else title.
+     */
+    public function indexableText(KbArticle $article): string
+    {
+        foreach ([$article->content, $article->description, $article->title] as $candidate) {
+            $text = trim((string) $candidate);
+            if ($text !== '') {
+                return $text;
             }
         }
 
-        return $vec;
+        return '';
+    }
+
+    /**
+     * SHA256 of the indexable text (stored as kb_articles.content_hash).
+     */
+    public function contentHash(KbArticle $article): string
+    {
+        return hash('sha256', $this->indexableText($article));
+    }
+
+    /**
+     * True when the article's indexed text differs from what is currently embedded,
+     * or the current embeddings are missing or from another model.
+     */
+    public function needsReindex(KbArticle $article): bool
+    {
+        if ($article->content_hash === null || !hash_equals((string) $article->content_hash, $this->contentHash($article))) {
+            return true;
+        }
+
+        return !$this->hasCurrentModelEmbeddings($article);
+    }
+
+    public function hasCurrentModelEmbeddings(KbArticle $article): bool
+    {
+        return KbEmbedding::where('article_id', $article->id)
+            ->where('embedding_model', $this->embeddingModel())
+            ->exists();
     }
 
     /**
@@ -149,53 +157,136 @@ class RagService
     }
 
     /**
-     * Index or re-index an article's content into chunks and embeddings.
+     * Spec 0036 (AC-1, AC-2, AC-6, AC-7): index an article's text into chunks and embeddings.
+     *
+     * - Same content hash and current model embeddings exist (and not forced): no embedding call,
+     *   chunk metadata is refreshed in place. Returns 'unchanged'.
+     * - Otherwise every chunk is embedded first. Only when all succeed does one transaction write
+     *   the new set, delete the old set, and activate the new one (if the article is Published).
+     *   Returns 'indexed'.
+     * - On an embedding failure nothing new is written, the previous set keeps serving, the article
+     *   becomes 'Indexing failed' with a readable index_error, and EmbeddingFailedException is thrown.
+     *
+     * @throws EmbeddingFailedException
+     * @throws IndexingInProgressException
      */
-    public function indexArticle(KbArticle $article, ?string $contentOverride = null): void
+    public function indexArticle(KbArticle $article, ?string $contentOverride = null, bool $force = false): string
     {
         if ($contentOverride !== null) {
             $article->content = $contentOverride;
             $article->save();
         }
-        $content = $contentOverride ?? $article->content ?? $article->description ?? $article->title;
-        $chunks = $this->chunkText($content);
 
-        // Remove previous chunks and embeddings by primary key to prevent MySQL InnoDB gap lock deadlocks
-        $existingChunkIds = KbChunk::where('article_id', $article->id)->pluck('id');
-        if ($existingChunkIds->isNotEmpty()) {
-            KbEmbedding::whereIn('chunk_id', $existingChunkIds)->delete();
-            KbChunk::whereIn('id', $existingChunkIds)->delete();
+        $lock = Cache::lock("kb:index:{$article->id}", self::INDEX_LOCK_SECONDS);
+        if (!$lock->get()) {
+            throw new IndexingInProgressException();
         }
 
-        $isActive = ($article->status === 'Published');
+        try {
+            $article->refresh();
 
-        foreach ($chunks as $index => $chunkText) {
-            $chunk = KbChunk::create([
-                'article_id' => $article->id,
-                'chunk_index' => $index,
-                'content' => $chunkText,
-                'token_count' => (int) ceil(mb_strlen($chunkText) / 4),
-                'metadata' => [
-                    'title' => $article->title,
-                    'category' => $article->category,
-                    'machine' => $article->machine,
-                    'version' => $article->version,
-                ],
-            ]);
+            if (!$force && !$this->needsReindex($article)) {
+                $this->refreshChunkMetadata($article);
+                if ($article->processing_status !== self::STATUS_READY || $article->index_error !== null) {
+                    $article->update(['processing_status' => self::STATUS_READY, 'index_error' => null]);
+                }
 
-            $embeddingVector = $this->generateEmbedding($chunkText);
+                return 'unchanged';
+            }
 
-            KbEmbedding::create([
-                'chunk_id' => $chunk->id,
-                'article_id' => $article->id,
-                'embedding' => $embeddingVector,
-                'dimensions' => count($embeddingVector),
-                'is_active' => $isActive,
-            ]);
+            $text = $this->indexableText($article);
+            $hash = hash('sha256', $text);
+            $chunks = $this->chunkText($text);
+
+            $article->update(['processing_status' => self::STATUS_INDEXING]);
+
+            try {
+                $vectors = $this->embeddings->embedMany($chunks, EmbeddingClient::TASK_DOCUMENT, (string) $article->title);
+            } catch (EmbeddingFailedException $e) {
+                $article->update([
+                    'processing_status' => self::STATUS_FAILED,
+                    'index_error' => $e->getMessage(),
+                ]);
+                Log::warning('Knowledge Base article indexing failed.', [
+                    'article_id' => $article->id,
+                    'reason' => $e->getMessage(),
+                ]);
+                throw $e;
+            }
+
+            $model = $this->embeddingModel();
+
+            DB::transaction(function () use ($article, $chunks, $vectors, $hash, $model) {
+                $oldChunkIds = KbChunk::where('article_id', $article->id)->pluck('id');
+                $newEmbeddingIds = [];
+
+                // 1. Build the new set as inactive.
+                foreach ($chunks as $index => $chunkText) {
+                    $chunk = KbChunk::create([
+                        'article_id' => $article->id,
+                        'chunk_index' => $index,
+                        'content' => $chunkText,
+                        'token_count' => (int) ceil(mb_strlen($chunkText) / 4),
+                        'metadata' => $this->chunkMetadata($article),
+                    ]);
+
+                    $newEmbeddingIds[] = KbEmbedding::create([
+                        'chunk_id' => $chunk->id,
+                        'article_id' => $article->id,
+                        'embedding' => $vectors[$index],
+                        'dimensions' => count($vectors[$index]),
+                        'embedding_model' => $model,
+                        'is_active' => false,
+                    ])->id;
+                }
+
+                // 2. Delete the old set by primary key (avoids InnoDB gap lock deadlocks).
+                if ($oldChunkIds->isNotEmpty()) {
+                    KbEmbedding::whereIn('chunk_id', $oldChunkIds)->delete();
+                    KbChunk::whereIn('id', $oldChunkIds)->delete();
+                }
+
+                // 3. Activate the new set when the article is live.
+                if ($article->status === 'Published') {
+                    KbEmbedding::whereIn('id', $newEmbeddingIds)->update(['is_active' => true]);
+                }
+
+                $article->update([
+                    'processing_status' => self::STATUS_READY,
+                    'content_hash' => $hash,
+                    'index_error' => null,
+                ]);
+            });
+
+            $this->refreshIndex($article->id);
+
+            return 'indexed';
+        } finally {
+            $lock->release();
         }
+    }
 
-        $article->update([
-            'processing_status' => 'Ready for AI Search',
+    /**
+     * Metadata copied onto every chunk.
+     */
+    protected function chunkMetadata(KbArticle $article): array
+    {
+        return [
+            'title' => $article->title,
+            'category' => $article->category,
+            'machine' => $article->machine,
+            'version' => $article->version,
+        ];
+    }
+
+    /**
+     * Spec 0036 (AC-7): update kb_chunks.metadata in place without touching embeddings.
+     */
+    public function refreshChunkMetadata(KbArticle $article): void
+    {
+        KbChunk::where('article_id', $article->id)->update([
+            'metadata' => json_encode($this->chunkMetadata($article)),
+            'updated_at' => now(),
         ]);
     }
 
@@ -213,45 +304,67 @@ class RagService
     }
 
     /**
-     * Publish an article and immediately activate its existing embeddings in the search index
-     * without re-triggering extraction if the file is unchanged.
-     * Blocks publishing if the article has no successfully processed embeddings.
+     * True when publish may proceed: the article is 'Ready for AI Search' and has at least one
+     * embedding from the configured model (spec 0036, AC-3).
+     */
+    public function isIndexedForPublish(KbArticle $article): bool
+    {
+        return $article->processing_status === self::STATUS_READY && $this->hasCurrentModelEmbeddings($article);
+    }
+
+    /**
+     * Spec 0036 (AC-3, AC-4, AC-5): publish an already indexed article.
+     *
+     * Publish never indexes. It activates the article's current model embeddings (chunk and
+     * embedding IDs stay identical), flips the status, then runs the self retrieval probe and
+     * stores its score. The article is searchable as soon as this returns.
+     *
+     * @throws ArticleMissingEmbeddingsException when the article is not indexed with the current model
      */
     public function publishArticle(KbArticle $article, string $actor = 'Super Admin'): KbArticle
     {
-        // 1. Guard check: blocks publishing when the article has no successfully processed embeddings
-        $embeddingsCount = KbEmbedding::where('article_id', $article->id)->count();
-        $isProcessed = ($article->processing_status === 'Ready for AI Search' || $article->processing_status === 'Ready');
+        $article->refresh();
 
-        if ($embeddingsCount === 0 || !$isProcessed) {
-            throw new \App\Exceptions\ArticleMissingEmbeddingsException(
-                "Cannot publish article: no successfully processed embeddings exist for this article. Please extract and process document content before publishing."
+        // 1. Guard: only an article indexed with the current model may go live.
+        if (!$this->isIndexedForPublish($article)) {
+            throw new ArticleMissingEmbeddingsException(
+                'Cannot publish article: it is not indexed for AI search with the current embedding model. '
+                . 'Wait for indexing to finish, or use Retry if indexing failed, then publish again.'
             );
         }
 
-        // 2. Activate existing embeddings in the active index without re-extracting
-        KbEmbedding::where('article_id', $article->id)->update([
-            'is_active' => true,
-            'updated_at' => now(),
-        ]);
+        // 2. Activate the existing current model embeddings without indexing again.
+        $model = $this->embeddingModel();
+        DB::transaction(function () use ($article, $model) {
+            KbEmbedding::where('article_id', $article->id)
+                ->where('embedding_model', $model)
+                ->update(['is_active' => true, 'updated_at' => now()]);
+
+            $article->status = 'Published';
+            $article->published_at = now();
+            $article->save();
+        });
+
+        // 3. Refresh RAG active index so the next retrieve() sees it.
+        $this->refreshIndex($article->id);
+
+        // 4. Self retrieval probe (the article is Published now, so retrieve() can see it).
+        $probe = $this->probeArticle($article);
 
         $history = is_array($article->history) ? $article->history : [];
         $history[] = [
-            'id' => (string) \Illuminate\Support\Str::uuid(),
+            'id' => (string) Str::uuid(),
             'type' => 'published',
             'timestamp' => now()->format('Y-m-d H:i:s'),
             'actor' => $actor,
             'action' => 'Published',
             'details' => 'Article published; activated existing embeddings in RAG index without re-extraction.',
+            'probe' => $probe,
         ];
 
-        $article->status = 'Published';
-        $article->published_at = now();
         $article->history = $history;
+        $article->probe_score = $probe['score'];
         $article->save();
-
-        // 3. Refresh RAG active index
-        $this->refreshIndex($article->id);
 
         // 4. Publish event to event bus
         try {
@@ -261,6 +374,68 @@ class RagService
         }
 
         return $article->fresh(['chunks', 'embeddings']);
+    }
+
+    /**
+     * Spec 0036 (AC-5): search for the article using its own title plus description and report
+     * where it lands. Never throws: if the query cannot be embedded the score is null, which
+     * counts as low retrievability.
+     *
+     * @return array{score: float|null, rank: int|null, low_retrievability: bool, error?: string}
+     */
+    public function probeArticle(KbArticle $article): array
+    {
+        $query = trim($article->title . "\n" . ($article->description ?? ''));
+
+        try {
+            $ranked = $this->rankArticles($query);
+        } catch (EmbeddingFailedException $e) {
+            Log::warning('Knowledge Base publish probe could not embed its query.', [
+                'article_id' => $article->id,
+                'reason' => $e->getMessage(),
+            ]);
+
+            return ['score' => null, 'rank' => null, 'low_retrievability' => true, 'error' => $e->getMessage()];
+        }
+
+        $rank = null;
+        $score = null;
+        foreach (array_values($ranked) as $position => $group) {
+            if ((int) $group['article_id'] === (int) $article->id) {
+                $rank = $position + 1;
+                $score = round((float) $group['max_score'], 4);
+                break;
+            }
+        }
+
+        return [
+            'score' => $score,
+            'rank' => $rank,
+            'low_retrievability' => self::isLowRetrievability($score, $rank, $this->minScore()),
+        ];
+    }
+
+    /**
+     * Derived flag shared by publish, kb:reembed and formatArticle.
+     */
+    public static function isLowRetrievability(?float $score, ?int $rank, float $minScore): bool
+    {
+        return $score === null || $rank === null || $rank > self::PROBE_TOP_N || $score < $minScore;
+    }
+
+    /**
+     * The probe recorded with the most recent publish or kb:reembed history entry.
+     */
+    public static function lastProbe(KbArticle $article): ?array
+    {
+        $history = is_array($article->history) ? $article->history : [];
+        for ($i = count($history) - 1; $i >= 0; $i--) {
+            if (isset($history[$i]['probe']) && is_array($history[$i]['probe'])) {
+                return $history[$i]['probe'];
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -423,34 +598,32 @@ class RagService
         ?string $filePath
     ): void {
         try {
-            if (\Illuminate\Support\Facades\Schema::hasTable('ticket_audit_logs')) {
-                $empId = $actorEmpId;
-                if (!$empId && \Illuminate\Support\Facades\Schema::hasTable('employees')) {
-                    $empId = DB::table('employees')
-                        ->where('role', 'like', '%admin%')
-                        ->value('emp_id')
-                        ?? DB::table('employees')->value('emp_id')
-                        ?? 1;
-                }
-                $empId = $empId ?: 1;
-
-                DB::table('ticket_audit_logs')->insert([
-                    'ticket_ID' => null,
-                    'action_type' => 'kb_article_deleted',
-                    'action_by_ID' => $empId,
-                    'actor_type' => 'superadmin',
-                    'details' => json_encode([
-                        'module' => 'Knowledge Base',
-                        'target' => $title,
-                        'text' => "Permanently deleted knowledge article \"{$title}\" and purged all associated files and vector embeddings.",
-                        'article_id' => $articleId,
-                        'category' => $category,
-                        'actor' => $actor,
-                        'file_path' => $filePath,
-                    ]),
-                    'created_at' => now(),
-                ]);
+            $empId = $actorEmpId;
+            if (!$empId) {
+                $empId = DB::table('employees')
+                    ->where('role', 'like', '%admin%')
+                    ->value('emp_id')
+                    ?? DB::table('employees')->value('emp_id')
+                    ?? 1;
             }
+            $empId = $empId ?: 1;
+
+            DB::table('ticket_audit_logs')->insert([
+                'ticket_ID' => null,
+                'action_type' => 'kb_article_deleted',
+                'action_by_ID' => $empId,
+                'actor_type' => 'superadmin',
+                'details' => json_encode([
+                    'module' => 'Knowledge Base',
+                    'target' => $title,
+                    'text' => "Permanently deleted knowledge article \"{$title}\" and purged all associated files and vector embeddings.",
+                    'article_id' => $articleId,
+                    'category' => $category,
+                    'actor' => $actor,
+                    'file_path' => $filePath,
+                ]),
+                'created_at' => now(),
+            ]);
         } catch (\Throwable $e) {
             Log::error('Failed to record deletion audit log: ' . $e->getMessage(), [
                 'article_id' => $articleId,
@@ -491,34 +664,117 @@ class RagService
      * - Defense-in-depth safety check: inspects each candidate chunk against real-time DB state.
      * - Measures and logs execution latency against 5-second target.
      *
+     * Spec 0036 (AC-8, AC-9): only active embeddings from the configured model on Published
+     * articles are compared, and the threshold defaults to KB_MIN_SCORE. If the query cannot be
+     * embedded, EmbeddingFailedException is thrown so the caller escalates to a manual ticket.
+     *
      * @param string $query User query
      * @param int $topK Number of chunks to retrieve
-     * @param float $minScore Minimum relevance threshold
+     * @param float|null $minScore Minimum relevance threshold (null means KB_MIN_SCORE)
      * @return array {chunks: array, duration_ms: float, matched: bool}
+     *
+     * @throws EmbeddingFailedException
      */
-    public function retrieve(string $query, int $topK = 5, float $minScore = 0.20): array
+    public function retrieve(string $query, int $topK = 5, ?float $minScore = null): array
     {
         $startTime = hrtime(true);
+        $minScore ??= $this->minScore();
 
-        $queryEmbedding = $this->generateEmbedding($query);
+        $articleGroups = $this->rankArticles($query, $candidateCount);
 
+        // Filter articles meeting minScore (rankArticles already sorted them).
+        $matchedArticles = array_filter($articleGroups, fn ($a) => $a['max_score'] >= $minScore);
+
+        // Select chunks from the top ranked articles in chronological order (chunk_index ASC)
+        // so Gemini receives complete numbered troubleshooting steps in sequence.
+        $selectedChunks = [];
+        foreach ($matchedArticles as $art) {
+            $chunks = $art['chunks'];
+            usort($chunks, fn ($c1, $c2) => $c1['chunk_index'] <=> $c2['chunk_index']);
+
+            foreach ($chunks as $c) {
+                $selectedChunks[] = [
+                    'score' => $c['score'],
+                    'embedding_id' => $c['embedding_id'],
+                    'article_id' => $art['article_id'],
+                    'chunk_id' => $c['chunk_id'],
+                    'chunk_index' => $c['chunk_index'],
+                    'article_title' => $art['article_title'],
+                    'article_category' => $art['article_category'],
+                    'article_machine' => $art['article_machine'],
+                    'article_status' => $art['article_status'],
+                    'article_updated_at' => $art['article_updated_at'],
+                    'content' => $c['content'],
+                ];
+                if (count($selectedChunks) >= $topK) {
+                    break 2;
+                }
+            }
+        }
+
+        // Cybersec defense-in-depth safety check & monitoring
+        $verifiedPublishedChunks = $this->verifyPublishedChunks($selectedChunks, $query);
+
+        $durationMs = round((hrtime(true) - $startTime) / 1e6, 2);
+
+        // Performance monitoring log
+        Log::info('RAG retrieval executed', [
+            'query_length' => mb_strlen($query),
+            'candidates_evaluated' => $candidateCount,
+            'matched_articles' => count($matchedArticles),
+            'matched_chunks' => count($verifiedPublishedChunks),
+            'duration_ms' => $durationMs,
+            'under_5s_target' => $durationMs < 5000.0,
+        ]);
+
+        // Dual-compatible array: accessible both as list of chunks and via keys
+        $output = array_values($verifiedPublishedChunks);
+        $output['chunks'] = $verifiedPublishedChunks;
+        $output['duration_ms'] = $durationMs;
+        $output['matched'] = count($verifiedPublishedChunks) > 0;
+
+        return $output;
+    }
+
+    /**
+     * Score every candidate article against the query and return them best first.
+     *
+     * Candidates are strictly active embeddings from the configured model on Published articles.
+     * Vectors from any other model (for example the old 'hash-fallback-v1') are never compared.
+     *
+     * @return array<int, array> article groups with max_score and chunks, sorted best first
+     *
+     * @throws EmbeddingFailedException when the query cannot be embedded
+     */
+    public function rankArticles(string $query, ?int &$candidateCount = null): array
+    {
         // Extract symptom/problem line if user provided multi-line structured input (e.g. 1. Machine 2. Serial 4. Symptom)
         $lines = explode("\n", $query);
         $symptomText = '';
         foreach ($lines as $line) {
-            $trimmed = trim(preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item|serial)[:\-])\s*/i', '', $line));
+            $trimmed = trim(preg_replace('/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item|serial)[:\-])\s*/i', '', $line));
             if (mb_strlen($trimmed) > 20) {
                 $symptomText .= " " . $trimmed;
             }
         }
-        $symptomEmbedding = !empty($symptomText) ? $this->generateEmbedding(trim($symptomText)) : null;
+        $symptomText = trim($symptomText);
 
-        // Candidate selection: strictly Published articles and active embeddings in search index
+        // Embed the query (and the symptom text, when present) in one request.
+        $queryTexts = [trim($query) !== '' ? $query : ' '];
+        if ($symptomText !== '' && $symptomText !== trim($query)) {
+            $queryTexts[] = $symptomText;
+        }
+        $queryVectors = $this->embeddings->embedMany($queryTexts, EmbeddingClient::TASK_QUERY);
+        $queryEmbedding = $queryVectors[0];
+        $symptomEmbedding = $queryVectors[1] ?? null;
+
+        // Candidate selection: strictly Published articles and active, current model embeddings
         $candidates = DB::table('kb_embeddings as e')
             ->join('kb_chunks as c', 'c.id', '=', 'e.chunk_id')
             ->join('kb_articles as a', 'a.id', '=', 'e.article_id')
             ->where('a.status', '=', 'Published')
             ->where('e.is_active', true)
+            ->where('e.embedding_model', '=', $this->embeddingModel())
             ->select([
                 'e.id as embedding_id',
                 'e.article_id',
@@ -575,12 +831,11 @@ class RagService
             ];
         }
 
-        // Filter articles meeting minScore
-        $matchedArticles = array_filter($articleGroups, fn ($a) => $a['max_score'] >= $minScore);
+        $candidateCount = count($candidates);
 
         // Sort articles: prioritize semantic match, and if 2 articles both match the problem (close score margin < 0.15),
         // prioritize the most recently updated article so newer KB procedures take precedence.
-        uasort($matchedArticles, function ($a, $b) {
+        uasort($articleGroups, function ($a, $b) {
             $scoreDiff = $b['max_score'] - $a['max_score'];
             if (abs($scoreDiff) < 0.15) {
                 $timeA = strtotime($a['article_updated_at'] ?? '1970-01-01');
@@ -592,55 +847,7 @@ class RagService
             return $b['max_score'] <=> $a['max_score'];
         });
 
-        // Select chunks from the top ranked articles in chronological order (chunk_index ASC)
-        // so Gemini receives complete numbered troubleshooting steps in sequence.
-        $selectedChunks = [];
-        foreach ($matchedArticles as $art) {
-            $chunks = $art['chunks'];
-            usort($chunks, fn ($c1, $c2) => $c1['chunk_index'] <=> $c2['chunk_index']);
-
-            foreach ($chunks as $c) {
-                $selectedChunks[] = [
-                    'score' => $c['score'],
-                    'embedding_id' => $c['embedding_id'],
-                    'article_id' => $art['article_id'],
-                    'chunk_id' => $c['chunk_id'],
-                    'chunk_index' => $c['chunk_index'],
-                    'article_title' => $art['article_title'],
-                    'article_category' => $art['article_category'],
-                    'article_machine' => $art['article_machine'],
-                    'article_status' => $art['article_status'],
-                    'article_updated_at' => $art['article_updated_at'],
-                    'content' => $c['content'],
-                ];
-                if (count($selectedChunks) >= $topK) {
-                    break 2;
-                }
-            }
-        }
-
-        // Cybersec defense-in-depth safety check & monitoring
-        $verifiedPublishedChunks = $this->verifyPublishedChunks($selectedChunks, $query);
-
-        $durationMs = round((hrtime(true) - $startTime) / 1e6, 2);
-
-        // Performance monitoring log
-        Log::info('RAG retrieval executed', [
-            'query_length' => mb_strlen($query),
-            'candidates_evaluated' => count($candidates),
-            'matched_articles' => count($matchedArticles),
-            'matched_chunks' => count($verifiedPublishedChunks),
-            'duration_ms' => $durationMs,
-            'under_5s_target' => $durationMs < 5000.0,
-        ]);
-
-        // Dual-compatible array: accessible both as list of chunks and via keys
-        $output = array_values($verifiedPublishedChunks);
-        $output['chunks'] = $verifiedPublishedChunks;
-        $output['duration_ms'] = $durationMs;
-        $output['matched'] = count($verifiedPublishedChunks) > 0;
-
-        return $output;
+        return $articleGroups;
     }
 
     /**

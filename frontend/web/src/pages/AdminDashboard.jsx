@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -12,9 +12,35 @@ import {
   Filler,
 } from 'chart.js';
 import { Line, Bar } from 'react-chartjs-2';
-import { ChevronDown, TrendingUp, FileSpreadsheet, FileCode, ShieldCheck, Users, Smile, Briefcase, Info, RefreshCw, Cpu, BarChart3, LineChart, Inbox, Clock, FileText, Download, Printer, Calendar } from 'lucide-react';
-import { exportAnalyticsToCsv, exportPredictiveToCsv, exportAnalyticsToExcel, exportPredictiveToExcel, downloadPdfFromElement, triggerPdfPrint } from '@/utils/reportExportUtils';
+import {
+  ChevronDown,
+  TrendingUp,
+  FileSpreadsheet,
+  FileCode,
+  ShieldCheck,
+  Users,
+  Smile,
+  Briefcase,
+  RefreshCw,
+  Cpu,
+  Inbox,
+  Clock,
+  FileText,
+  Download,
+  Printer,
+  Calendar,
+} from 'lucide-react';
+import {
+  exportAnalyticsToCsv,
+  exportPredictiveToCsv,
+  exportAnalyticsToExcel,
+  exportPredictiveToExcel,
+  downloadPdfFromElement,
+  triggerPdfPrint,
+} from '@/utils/reportExportUtils';
 import PredictiveAnalytics from './PredictiveAnalytics';
+import DepartmentPerformanceView from '@/components/admin/DepartmentPerformanceView';
+import EmployeePerformanceView from '@/components/admin/EmployeePerformanceView';
 import { useBranch } from '@/context/BranchContext';
 import {
   DropdownMenu,
@@ -27,14 +53,20 @@ import BranchSelector from '@/components/BranchSelector';
 import { PageHeader } from '@/components/ui/page-header';
 import { MetricCard } from '@/components/ui/metric-card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import {
+  getAdminDashboard,
+  getAdminEmployeePerformance,
+  getAdminDepartmentPerformance,
+  getAdminPredictiveInsights,
+  triggerEtlSync,
+} from '@/services/ticketService';
 
 // Custom plugin to show data labels at bar ends (no external dependency)
 const barLabelsPlugin = {
   id: 'barLabels',
   afterDraw(chart) {
-    const { ctx, data, scales } = chart;
+    const { ctx, data } = chart;
     if (!data || !data.datasets || chart.options?.indexAxis !== 'y') return;
     ctx.save();
     ctx.font = '600 10px Poppins, sans-serif';
@@ -82,127 +114,12 @@ const BAR_PALETTE = [
   'rgba(251, 146, 60, 0.75)',
 ];
 
-// ─── Mock Data Generator ─────────────────────────────────────────────────────
-const LABELS = {
-  'Today': ['6AM', '8AM', '10AM', '12PM', '2PM', '4PM', '6PM', '8PM'],
-  'Last 7 Days': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-  'Last 30 Days': ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
-  'Last 90 Days': ['Jan', 'Feb', 'Mar'],
-};
-
-const EMPLOYEES = ['Mark Reyes', 'Ava Santos', 'Jose Cruz', 'Maria Dela Cruz', 'Carlo Tan', 'Anna Lim'];
-const DEPARTMENTS = ['Service', 'Customer Service', 'Engineering', 'Quality Assurance', 'Admin'];
-
-// ─── Section 1: Ticket Trends Mock Data ──────────────────────────────────────
-const ticketTrendsMock = {
-  'Today': { new: [3, 5, 8, 12, 9, 6, 4, 2], resolved: [1, 3, 6, 10, 11, 8, 5, 3] },
-  'Last 7 Days': { new: [12, 19, 15, 22, 18, 8, 5], resolved: [10, 14, 13, 20, 16, 7, 4] },
-  'Last 30 Days': { new: [45, 62, 58, 71], resolved: [38, 55, 52, 68] },
-  'Last 90 Days': { new: [180, 210, 195], resolved: [165, 198, 188] },
-};
-
-const ticketStatusMock = {
-  'Today': { open: 14, inProgress: 8, resolved: 22, closed: 31 },
-  'Last 7 Days': { open: 42, inProgress: 28, resolved: 85, closed: 120 },
-  'Last 30 Days': { open: 78, inProgress: 45, resolved: 236, closed: 410 },
-  'Last 90 Days': { open: 95, inProgress: 62, resolved: 583, closed: 1240 },
-};
-
-// ─── Section 2: SLA Compliance Mock Data ─────────────────────────────────────
-const slaComplianceMock = {
-  'Today': [95, 92, 88, 91, 93, 90, 94, 96],
-  'Last 7 Days': [91, 89, 93, 87, 94, 92, 90],
-  'Last 30 Days': [88, 91, 85, 93],
-  'Last 90 Days': [89, 91, 93],
-};
-
-const slaBreachesMock = {
-  'Today': [1, 2, 3, 2, 1, 2, 1, 0],
-  'Last 7 Days': [3, 5, 2, 6, 3, 1, 2],
-  'Last 30 Days': [12, 8, 15, 6],
-  'Last 90 Days': [35, 28, 22],
-};
-
-const resolutionSlaMock = {
-  'Today': [2.1, 1.8, 2.5, 1.9, 2.3, 2.0, 1.7, 1.5],
-  'Last 7 Days': [2.4, 2.1, 2.8, 1.9, 2.2, 3.1, 2.5],
-  'Last 30 Days': [2.5, 2.2, 2.8, 2.0],
-  'Last 90 Days': [2.6, 2.3, 2.1],
-};
-
-const slaDeptMock = {
-  'Today': [96, 88, 92, 85, 98],
-  'Last 7 Days': [93, 86, 90, 82, 95],
-  'Last 30 Days': [91, 84, 88, 80, 94],
-  'Last 90 Days': [90, 83, 87, 79, 93],
-};
-
-// ─── Section 3: Employee Performance Mock Data ───────────────────────────────
-const empResolvedMock = {
-  'Today': [5, 3, 7, 4, 6, 2],
-  'Last 7 Days': [28, 22, 35, 18, 31, 14],
-  'Last 30 Days': [112, 95, 140, 78, 125, 62],
-  'Last 90 Days': [340, 290, 420, 235, 380, 190],
-};
-
-const empResponseTimeMock = {
-  'Today': [12, 18, 8, 22, 10, 25],
-  'Last 7 Days': [15, 20, 10, 25, 13, 28],
-  'Last 30 Days': [14, 19, 11, 23, 12, 26],
-  'Last 90 Days': [13, 18, 10, 22, 11, 24],
-};
-
-const empResTimeMock = {
-  'Today': [1.8, 2.4, 1.2, 2.8, 1.5, 3.2],
-  'Last 7 Days': [2.1, 2.8, 1.5, 3.1, 1.8, 3.5],
-  'Last 30 Days': [2.0, 2.6, 1.4, 2.9, 1.7, 3.3],
-  'Last 90 Days': [1.9, 2.5, 1.3, 2.7, 1.6, 3.1],
-};
-
-const empSlaMock = {
-  'Today': [96, 88, 98, 82, 94, 78],
-  'Last 7 Days': [93, 85, 96, 80, 91, 75],
-  'Last 30 Days': [91, 83, 95, 78, 89, 73],
-  'Last 90 Days': [92, 84, 94, 79, 90, 74],
-};
-
-const activeEmployeesMock = {
-  'Today': 6,
-  'Last 7 Days': 6,
-  'Last 30 Days': 6,
-  'Last 90 Days': 6,
-};
-
-// ─── Section 4: Customer Satisfaction Mock Data ──────────────────────────────
-const csatMock = {
-  'Today': [4.2, 4.5, 4.1, 4.6, 4.3, 4.7, 4.4, 4.8],
-  'Last 7 Days': [4.3, 4.1, 4.5, 4.2, 4.6, 4.4, 4.7],
-  'Last 30 Days': [4.1, 4.3, 4.4, 4.6],
-  'Last 90 Days': [4.2, 4.4, 4.5],
-};
-
-// ─── Section 5: Workload Distribution Mock Data ──────────────────────────────
-const workloadEmpMock = {
-  'Today': [8, 5, 10, 6, 9, 3],
-  'Last 7 Days': [35, 28, 45, 22, 38, 15],
-  'Last 30 Days': [140, 110, 180, 90, 155, 65],
-  'Last 90 Days': [420, 330, 540, 270, 465, 195],
-};
-
-const workloadDeptMock = {
-  'Today': [18, 12, 8, 5, 2],
-  'Last 7 Days': [75, 52, 35, 20, 8],
-  'Last 30 Days': [300, 210, 140, 80, 30],
-  'Last 90 Days': [900, 630, 420, 240, 90],
-};
-
 // ─── Chart Configuration Defaults ────────────────────────────────────────────
 const defaultLineOptions = (title, yLabel = '') => ({
   responsive: true,
   maintainAspectRatio: false,
-  interaction: { mode: 'index', intersect: false },
   plugins: {
-    legend: { position: 'top', labels: { usePointStyle: true, pointStyle: 'circle', padding: 12, font: { family: 'Poppins', size: 11 } } },
+    legend: { display: false },
     tooltip: {
       backgroundColor: 'rgba(30, 30, 60, 0.92)',
       titleFont: { family: 'Poppins', size: 13 },
@@ -213,8 +130,12 @@ const defaultLineOptions = (title, yLabel = '') => ({
     },
   },
   scales: {
-    x: { grid: { display: false }, ticks: { font: { family: 'Poppins', size: 10 }, color: '#94a3b8' } },
-    y: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { font: { family: 'Poppins', size: 10 }, color: '#94a3b8' }, title: yLabel ? { display: true, text: yLabel, font: { family: 'Poppins', size: 11 }, color: '#64748b' } : undefined },
+    x: { grid: { display: false }, ticks: { font: { family: 'Poppins', size: 11 }, color: '#94a3b8' } },
+    y: {
+      grid: { color: 'rgba(0,0,0,0.04)' },
+      ticks: { font: { family: 'Poppins', size: 11 }, color: '#94a3b8' },
+      title: yLabel ? { display: true, text: yLabel, font: { family: 'Poppins', size: 11 } } : undefined,
+    },
   },
 });
 
@@ -258,24 +179,6 @@ const defaultBarOptions = (title) => ({
     y: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { font: { family: 'Poppins', size: 11 }, color: '#94a3b8' } },
   },
 });
-
-// ─── Reusable Components ─────────────────────────────────────────────────────
-function FilterDropdown({ value, onChange }) {
-  return (
-    <div className="relative">
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="appearance-none bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1.5 pr-7 text-[11px] font-medium text-gray-600 cursor-pointer hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-200"
-      >
-        {FILTER_OPTIONS.map((opt) => (
-          <option key={opt} value={opt}>{opt}</option>
-        ))}
-      </select>
-      <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400 pointer-events-none" />
-    </div>
-  );
-}
 
 function ChartViewDropdown({ value, onChange, options }) {
   return (
@@ -325,6 +228,19 @@ function SectionCard({ icon, title, instruction, subInstruction, children, viewO
   );
 }
 
+function EmptyStateCard({
+  title = 'No ticket activity recorded for this period',
+  description = 'There are no ticket logs matching the selected branch and date window.',
+}) {
+  return (
+    <div className="h-[220px] flex flex-col items-center justify-center text-center p-6 bg-slate-50/60 rounded-xl border border-dashed border-slate-200">
+      <Inbox className="w-8 h-8 text-slate-400 mb-2 stroke-1" />
+      <p className="text-sm font-semibold text-slate-700">{title}</p>
+      <p className="text-xs text-slate-500 mt-1 max-w-sm">{description}</p>
+    </div>
+  );
+}
+
 class AnalyticsErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -334,7 +250,7 @@ class AnalyticsErrorBoundary extends React.Component {
     return { hasError: true };
   }
   componentDidCatch(error, errorInfo) {
-    console.error("PredictiveAnalytics error caught by ErrorBoundary:", error, errorInfo);
+    console.error('PredictiveAnalytics error caught by ErrorBoundary:', error, errorInfo);
   }
   render() {
     if (this.state.hasError) {
@@ -355,33 +271,12 @@ class AnalyticsErrorBoundary extends React.Component {
   }
 }
 
-function StatCard({ label, value, icon, color }) {
-  const colorMap = {
-    blue: 'from-[#252578] to-[#3b82f6]',
-    emerald: 'from-emerald-500 to-emerald-600',
-    rose: 'from-rose-500 to-rose-600',
-    amber: 'from-amber-500 to-amber-600',
-  };
-  return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 flex items-center gap-4 hover:shadow-md transition-all duration-200">
-      <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${colorMap[color] || colorMap.blue} flex items-center justify-center flex-shrink-0`}>
-        {icon}
-      </div>
-      <div>
-        <p className="text-sm text-gray-500 font-medium">{label}</p>
-        <p className="text-2xl font-bold text-gray-800">{value}</p>
-      </div>
-    </div>
-  );
-}
-
 // ─── Main Dashboard ──────────────────────────────────────────────────────────
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState('overview');
-  const { selectedBranch, selectedBranchId } = useBranch();
-
-  // Filter Options
-  const FILTER_OPTIONS = ['Today', 'Last 7 Days', 'Last 30 Days', 'Last 90 Days', 'Custom Range'];
+  const { selectedBranch, selectedBranchId, selectBranch, isSuperAdmin } = useBranch();
+  const [branchSortBy, setBranchSortBy] = useState('total_tickets');
+  const [branchSortDir, setBranchSortDir] = useState('desc');
 
   // Global Date Range State
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
@@ -392,12 +287,6 @@ export default function AdminDashboard() {
   const [selectedPreset, setSelectedPreset] = useState('Last 7 Days');
   const [customStartDate, setCustomStartDate] = useState(default7DaysAgo);
   const [customEndDate, setCustomEndDate] = useState(todayStr);
-
-  // Active Date Preset fallback for mock lookups
-  const activeDatePreset = useMemo(() => {
-    if (selectedPreset !== 'Custom Range') return selectedPreset;
-    return 'Last 7 Days';
-  }, [selectedPreset]);
 
   const globalDateFrom = useMemo(() => {
     if (selectedPreset === 'Custom Range') return customStartDate;
@@ -426,56 +315,98 @@ export default function AdminDashboard() {
   const [empView, setEmpView] = useState('Tickets Resolved');
   const [workloadView, setWorkloadView] = useState('By Employee');
 
-  // Live Analytics Data State
+  // Live Analytics Data State (AC-4, AC-5)
+  const [dashboardData, setDashboardData] = useState(null);
   const [analyticsData, setAnalyticsData] = useState({
-    trends: [],
-    workload: [],
-    performance: { active_employees_count: 0, data: [] },
-    volume: { by_category: [], by_priority: [], by_status: [] },
-    equipment: [],
+    dashboard: null,
+    performance: { active_employees_count: 0, employees: [] },
+    departments: { departments: [] },
     predictive: null,
   });
+  const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatusMsg, setSyncStatusMsg] = useState('');
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
-  const ANALYTICS_BASE = import.meta.env.VITE_ANALYTICS_API_URL || '/api/analytics';
+  // Each fetch takes a sequence number; a response is applied only if no newer fetch started since (spec 0031 AC-15).
+  const analyticsRequestSeq = useRef(0);
 
+  // Fetch live operational and performance records in a single unified request
   const fetchAnalytics = async (fromDate = globalDateFrom, toDate = globalDateTo) => {
+    const seq = ++analyticsRequestSeq.current;
+    setIsLoading(true);
     try {
-      const queryParams = new URLSearchParams();
-      if (fromDate) queryParams.append('date_from', fromDate);
-      if (toDate) queryParams.append('date_to', toDate);
-      if (selectedBranchId) queryParams.append('branch_id', selectedBranchId);
-      const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
+      const params = {};
+      if (fromDate) params.date_from = fromDate;
+      if (toDate) params.date_to = toDate;
+      if (selectedPreset && selectedPreset !== 'Custom Range') params.preset = selectedPreset;
+      if (isSuperAdmin && selectedBranchId !== null && selectedBranchId !== undefined) {
+        params.branch_id = selectedBranchId;
+      }
 
-      const [trendsRes, workloadRes, perfRes, volumeRes, equipmentRes, csatRes, predRes] = await Promise.all([
-        fetch(`${ANALYTICS_BASE}/trends${queryString}`).then(r => r.json()).catch(() => null),
-        fetch(`${ANALYTICS_BASE}/workload${queryString}`).then(r => r.json()).catch(() => null),
-        fetch(`${ANALYTICS_BASE}/employee-performance${queryString}`).then(r => r.json()).catch(() => null),
-        fetch(`${ANALYTICS_BASE}/volume-reports${queryString}`).then(r => r.json()).catch(() => null),
-        fetch(`${ANALYTICS_BASE}/equipment-reports${queryString}`).then(r => r.json()).catch(() => null),
-        fetch(`${ANALYTICS_BASE}/csat-stats${queryString}`).then(r => r.json()).catch(() => null),
-        fetch(`${ANALYTICS_BASE}/predictive-metrics${queryString}`).then(r => r.json()).catch(() => null),
-      ]);
-
-      setAnalyticsData({
-        trends: trendsRes?.data || [],
-        workload: workloadRes?.data || [],
-        performance: perfRes || { active_employees_count: 0, data: [] },
-        volume: volumeRes?.data || { by_category: [], by_priority: [], by_status: [] },
-        equipment: equipmentRes?.data || [],
-        csat: csatRes?.data || null,
-        predictive: predRes?.data || null,
+      const dashRes = await getAdminDashboard(params).catch((err) => {
+        console.warn('Admin dashboard live fetch error:', err);
+        return null;
       });
+
+      // A newer range was selected while this request was in flight: drop the stale response.
+      if (seq !== analyticsRequestSeq.current) return;
+
+      const unifiedEmployees = dashRes?.employee_performance?.employees
+        || dashRes?.employee_performance?.list
+        || (Array.isArray(dashRes?.employee_performance) ? dashRes.employee_performance : []);
+      const unifiedDepartments = Array.isArray(dashRes?.departments)
+        ? dashRes.departments
+        : (dashRes?.departments?.departments || []);
+
+      setDashboardData(dashRes || null);
+      setAnalyticsData((prev) => ({
+        ...prev,
+        dashboard: dashRes || null,
+        performance: {
+          active_employees_count: dashRes?.kpis?.active_employees_count ?? unifiedEmployees.length,
+          employees: unifiedEmployees,
+        },
+        departments: {
+          departments: unifiedDepartments,
+        },
+      }));
     } catch (err) {
-      console.warn('Analytics API offline, using fallback UI metrics', err);
+      console.warn('Operational data fetch failed:', err);
+    } finally {
+      if (seq === analyticsRequestSeq.current) {
+        setIsLoading(false);
+      }
     }
   };
 
+  // Decoupled predictive insights fetch (only re-runs on branch scope changes or ETL sync)
+  const fetchPredictiveInsights = async () => {
+    try {
+      const predRes = await getAdminPredictiveInsights(
+        isSuperAdmin && selectedBranchId ? { branch_id: selectedBranchId } : {}
+      ).catch((err) => {
+        console.warn('Admin predictive insights live fetch error:', err);
+        return null;
+      });
+      setAnalyticsData((prev) => ({
+        ...prev,
+        predictive: predRes || null,
+      }));
+    } catch (err) {
+      console.warn('Predictive insights fetch failed:', err);
+    }
+  };
+
+  const effectiveBranchKey = isSuperAdmin ? String(selectedBranchId || 'all') : 'locked';
+
   useEffect(() => {
     fetchAnalytics(globalDateFrom, globalDateTo);
-  }, [globalDateFrom, globalDateTo, selectedBranchId]);
+  }, [globalDateFrom, globalDateTo, effectiveBranchKey, selectedPreset]);
+
+  useEffect(() => {
+    fetchPredictiveInsights();
+  }, [effectiveBranchKey, isSuperAdmin]);
 
   const handleExportPdf = async () => {
     setIsGeneratingPdf(true);
@@ -491,51 +422,70 @@ export default function AdminDashboard() {
 
   const handleExportExcel = () => {
     if (activeTab === 'predictive') {
-      exportPredictiveToExcel(analyticsData?.predictive || {}, selectedPreset);
+      exportPredictiveToExcel(analyticsData?.predictive, selectedPreset);
     } else {
-      exportAnalyticsToExcel(analyticsData, selectedPreset);
+      exportAnalyticsToExcel(dashboardData || analyticsData, selectedPreset);
     }
   };
 
   const handleExportCsv = () => {
     if (activeTab === 'predictive') {
-      exportPredictiveToCsv(analyticsData?.predictive || {}, selectedPreset);
+      exportPredictiveToCsv(analyticsData?.predictive, selectedPreset);
     } else {
-      exportAnalyticsToCsv(analyticsData);
+      exportAnalyticsToCsv(dashboardData || analyticsData, selectedPreset);
     }
   };
 
+  // Synchronous ETL Trigger (AC-7, AC-8)
   const handleRunEtl = async (fullSync = false) => {
     setIsSyncing(true);
     setSyncStatusMsg(fullSync ? 'Executing Full ETL Sync...' : 'Running Incremental ETL...');
     try {
-      const res = await fetch(`${ANALYTICS_BASE}/etl/trigger`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ full_sync: fullSync }),
-      });
-      const data = await res.json();
-      if (data.status === 'success') {
-        setSyncStatusMsg(`ETL Complete! Processed ${data.records_processed} records.`);
-        await fetchAnalytics();
+      const payload = {
+        full_sync: fullSync,
+        branch_id: isSuperAdmin ? (selectedBranchId || 'all') : 'current',
+      };
+      const data = await triggerEtlSync(payload);
+      if (data?.status === 'success') {
+        const count = data.records_processed ?? 0;
+        const duration = data.duration_ms ?? 0;
+        setSyncStatusMsg(`ETL Complete! Processed ${count} records (${duration}ms).`);
+        await Promise.all([fetchAnalytics(), fetchPredictiveInsights()]);
       } else {
-        setSyncStatusMsg(`ETL Failed: ${data.error || 'Check logs'}`);
+        setSyncStatusMsg(`ETL: ${data?.message || 'Sync failed'}`);
       }
     } catch (e) {
-      setSyncStatusMsg('ETL Trigger request sent to analytics service.');
+      const errMsg = e?.response?.data?.message || e.message || 'Error executing ETL pipeline';
+      setSyncStatusMsg(`ETL Failed: ${errMsg}`);
     } finally {
       setIsSyncing(false);
       setTimeout(() => setSyncStatusMsg(''), 5000);
     }
   };
 
+  // AC-6: Explicit empty state evaluation
+  const hasData = useMemo(() => {
+    if (!dashboardData) return false;
+    if (dashboardData.has_data === false) return false;
+    const total = dashboardData.kpis?.total_tickets ?? 0;
+    return total > 0;
+  }, [dashboardData]);
+
   // ─── Section 1: Ticket Trends Charts ─────────────────────────────────────
   const ticketChart = useMemo(() => {
-    const labels = LABELS[activeDatePreset] || LABELS['Last 7 Days'];
+    if (!hasData) {
+      return <EmptyStateCard />;
+    }
+
+    const trends = dashboardData?.trends || {};
+    const labels = trends.labels || [];
+
     if (ticketView === 'Ticket Trends') {
-      const data = ticketTrendsMock[activeDatePreset] || ticketTrendsMock['Last 7 Days'];
-      const lastNew = data.new[data.new.length - 1];
-      const lastResolved = data.resolved[data.resolved.length - 1];
+      const newSeries = trends.new || [];
+      const resSeries = trends.resolved || [];
+      const lastNew = newSeries.length > 0 ? newSeries[newSeries.length - 1] : 0;
+      const lastResolved = resSeries.length > 0 ? resSeries[resSeries.length - 1] : 0;
+
       return (
         <div>
           <div className="h-[220px]">
@@ -546,7 +496,7 @@ export default function AdminDashboard() {
                 datasets: [
                   {
                     label: 'New Tickets',
-                    data: data.new,
+                    data: newSeries,
                     borderColor: COLORS.blue.border,
                     backgroundColor: COLORS.blue.bg,
                     fill: true,
@@ -559,7 +509,7 @@ export default function AdminDashboard() {
                   },
                   {
                     label: 'Resolved Tickets',
-                    data: data.resolved,
+                    data: resSeries,
                     borderColor: COLORS.emerald.border,
                     backgroundColor: COLORS.emerald.bg,
                     fill: true,
@@ -578,7 +528,12 @@ export default function AdminDashboard() {
         </div>
       );
     } else {
-      const data = ticketStatusMock[activeDatePreset] || ticketStatusMock['Last 7 Days'];
+      const st = dashboardData?.status_distribution || {};
+      const openCount = st.open || 0;
+      const inProgressCount = st.inProgress || 0;
+      const resolvedCount = st.resolved || 0;
+      const closedCount = st.closed || 0;
+
       return (
         <div>
           <div className="h-[220px]">
@@ -588,7 +543,7 @@ export default function AdminDashboard() {
                 labels: ['Open', 'In Progress', 'Resolved', 'Closed'],
                 datasets: [{
                   label: 'Tickets',
-                  data: [data.open, data.inProgress, data.resolved, data.closed],
+                  data: [openCount, inProgressCount, resolvedCount, closedCount],
                   backgroundColor: [BAR_PALETTE[2], BAR_PALETTE[0], BAR_PALETTE[1], BAR_PALETTE[3]],
                   borderRadius: 6,
                   barThickness: 18,
@@ -596,18 +551,26 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Active tickets: {data.open + data.inProgress} ({data.open} open, {data.inProgress} in progress).</p>
+          <p className="text-[11px] text-gray-500 mt-1">
+            Active tickets: {openCount + inProgressCount} ({openCount} open, {inProgressCount} in progress).
+          </p>
         </div>
       );
     }
-  }, [activeDatePreset, ticketView]);
+  }, [hasData, dashboardData, ticketView]);
 
   // ─── Section 2: SLA Compliance Charts ─────────────────────────────────────
   const slaChart = useMemo(() => {
-    const labels = LABELS[activeDatePreset] || LABELS['Last 7 Days'];
+    if (!hasData) {
+      return <EmptyStateCard title="No SLA records available" description="No tickets were evaluated for SLA compliance in this period." />;
+    }
+
+    const sla = dashboardData?.sla || {};
+    const labels = dashboardData?.trends?.labels || [];
+
     if (slaView === 'Compliance') {
-      const data = slaComplianceMock[activeDatePreset] || slaComplianceMock['Last 7 Days'];
-      const avgVal = (data.reduce((a, b) => a + b, 0) / data.length).toFixed(1);
+      const data = sla.compliance_trend || [];
+      const overallRate = dashboardData?.kpis?.sla_compliance_rate ?? null;
       return (
         <div>
           <div className="h-[220px]">
@@ -631,12 +594,16 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Average SLA compliance is {avgVal}% for selected period.</p>
+          <p className="text-[11px] text-gray-500 mt-1">
+            {overallRate === null
+              ? 'No data: no ticket reached an SLA outcome in the selected period.'
+              : `Average SLA compliance is ${overallRate}% for selected period.`}
+          </p>
         </div>
       );
     } else if (slaView === 'Breaches') {
-      const data = slaBreachesMock[activeDatePreset] || slaBreachesMock['Last 7 Days'];
-      const totalBreaches = data.reduce((a, b) => a + b, 0);
+      const data = sla.breaches_trend || [];
+      const totalBreaches = sla.sla_breached ?? 0;
       return (
         <div>
           <div className="h-[220px]">
@@ -658,8 +625,8 @@ export default function AdminDashboard() {
         </div>
       );
     } else if (slaView === 'Resolution SLA') {
-      const data = resolutionSlaMock[activeDatePreset] || resolutionSlaMock['Last 7 Days'];
-      const avgTime = (data.reduce((a, b) => a + b, 0) / data.length).toFixed(1);
+      const data = sla.resolution_time_trend || [];
+      const avgTime = dashboardData?.kpis?.avg_resolution_hours ?? null;
       return (
         <div>
           <div className="h-[220px]">
@@ -683,44 +650,88 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Average resolution time: {avgTime} hours.</p>
+          <p className="text-[11px] text-gray-500 mt-1">
+            {avgTime === null ? 'Average resolution time: No data.' : `Average resolution time: ${avgTime} hours.`}
+          </p>
         </div>
       );
     } else {
-      const data = slaDeptMock[activeDatePreset] || slaDeptMock['Last 7 Days'];
+      const deptList = Array.isArray(sla.by_department) ? sla.by_department : [];
+      const labelsDept = deptList.map(d => d.name || d.department || 'General');
+      const dataDept = deptList.map(d => d.compliance_rate ?? d.compliance_percentage ?? null);
+      const noDataDepts = labelsDept.filter((_, i) => dataDept[i] === null);
+
+      if (labelsDept.length === 0) {
+        return <EmptyStateCard title="No department SLA data" description="No department reached an SLA outcome in this period." />;
+      }
+
       return (
         <div>
           <div className="h-[220px]">
             <Bar
               options={defaultHorizontalBarOptions('SLA by Department')}
               data={{
-                labels: DEPARTMENTS,
+                labels: labelsDept,
                 datasets: [{
                   label: 'SLA %',
-                  data,
-                  backgroundColor: BAR_PALETTE.slice(0, DEPARTMENTS.length),
+                  data: dataDept,
+                  backgroundColor: BAR_PALETTE.slice(0, Math.max(1, labelsDept.length)),
                   borderRadius: 6,
                   barThickness: 18,
                 }],
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Engineering maintains highest SLA compliance.</p>
+          <p className="text-[11px] text-gray-500 mt-1">
+            Operational department SLA adherence breakdown.
+            {noDataDepts.length > 0 && ` No data: ${noDataDepts.join(', ')}.`}
+          </p>
         </div>
       );
     }
-  }, [activeDatePreset, slaView]);
+  }, [hasData, dashboardData, slaView]);
 
   // ─── Section 3: Employee Performance Chart ──────────────────────────────
   const empChart = useMemo(() => {
-    const perfList = analyticsData.performance?.data || [];
-    const hasLivePerf = perfList.length > 0;
-    const labels = hasLivePerf ? perfList.map(p => p.employee_name) : EMPLOYEES;
+    const perfEmployees = Array.isArray(analyticsData.performance?.employees) && analyticsData.performance.employees.length > 0
+      ? analyticsData.performance.employees
+      : Array.isArray(analyticsData.performance?.data) && analyticsData.performance.data.length > 0
+        ? analyticsData.performance.data
+        : null;
+
+    const dashPerf = dashboardData?.employee_performance;
+    let rawList = [];
+
+    if (perfEmployees) {
+      rawList = perfEmployees;
+    } else if (Array.isArray(dashPerf)) {
+      rawList = dashPerf;
+    } else if (dashPerf && Array.isArray(dashPerf.list) && dashPerf.list.length > 0) {
+      rawList = dashPerf.list.map((item, idx) => ({
+        ...item,
+        tickets_resolved: item.resolved_tickets ?? item.tickets_resolved ?? (Array.isArray(dashPerf.resolved) ? dashPerf.resolved[idx] : 0),
+        avg_response_time_minutes: item.avg_response_time_minutes ?? (Array.isArray(dashPerf.response_time) ? dashPerf.response_time[idx] : null),
+        avg_resolution_hours: item.avg_resolution_hours ?? (Array.isArray(dashPerf.resolution_time) ? dashPerf.resolution_time[idx] : null),
+        sla_compliance_rate: item.sla_compliance_rate ?? (Array.isArray(dashPerf.sla_compliance) ? dashPerf.sla_compliance[idx] : null),
+      }));
+    } else if (dashPerf && Array.isArray(dashPerf.labels) && dashPerf.labels.length > 0) {
+      rawList = dashPerf.labels.map((name, idx) => ({
+        name,
+        tickets_resolved: Array.isArray(dashPerf.resolved) ? dashPerf.resolved[idx] : 0,
+        avg_response_time_minutes: Array.isArray(dashPerf.response_time) ? dashPerf.response_time[idx] : null,
+        avg_resolution_hours: Array.isArray(dashPerf.resolution_time) ? dashPerf.resolution_time[idx] : null,
+        sla_compliance_rate: Array.isArray(dashPerf.sla_compliance) ? dashPerf.sla_compliance[idx] : null,
+      }));
+    }
+
+    if (!hasData || !Array.isArray(rawList) || rawList.length === 0) {
+      return <EmptyStateCard title="No technician activity" description="No technicians have tickets assigned or resolved in this period." />;
+    }
+
+    const labels = rawList.map(p => p.employee_name || p.name || `Emp #${p.emp_id || p.employee_id}`);
 
     if (empView === 'Tickets Resolved') {
-      const data = hasLivePerf
-        ? perfList.map(p => p.ticket_count || p.resolved_tickets_count || 0)
-        : (empResolvedMock[activeDatePreset] || empResolvedMock['Last 7 Days']);
+      const data = rawList.map(p => p.resolved_tickets_count ?? p.tickets_resolved ?? p.resolved_tickets ?? p.ticket_count ?? 0);
       return (
         <div>
           <div className="h-[220px]">
@@ -738,22 +749,24 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Top performer: Jose Cruz with highest resolved count.</p>
+          <p className="text-[11px] text-gray-500 mt-1">Resolved tickets across active facility technicians.</p>
         </div>
       );
     } else if (empView === 'Avg Response Time') {
-      const data = hasLivePerf
-        ? perfList.map(p => p.avg_response_hours || p.avg_response_time_minutes || 0)
-        : (empResponseTimeMock[activeDatePreset] || empResponseTimeMock['Last 7 Days']);
+      const data = rawList.map(p => {
+        if (p.avg_response_hours !== undefined && p.avg_response_hours !== null) return p.avg_response_hours;
+        const mins = p.average_response_minutes ?? p.avg_response_minutes ?? p.avg_response_time_minutes ?? null;
+        return mins === null ? null : Math.round((mins / 60) * 10) / 10;
+      });
       return (
         <div>
           <div className="h-[220px]">
             <Bar
-              options={defaultHorizontalBarOptions('Avg Response Time')}
+              options={defaultHorizontalBarOptions('Avg Response Time (hrs)')}
               data={{
                 labels,
                 datasets: [{
-                  label: 'Response Time',
+                  label: 'Response Time (h)',
                   data,
                   backgroundColor: BAR_PALETTE[4],
                   borderRadius: 6,
@@ -762,13 +775,11 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Fastest response: Anna Lim (8 mins average).</p>
+          <p className="text-[11px] text-gray-500 mt-1">Average first response time per technician.</p>
         </div>
       );
     } else if (empView === 'Avg Resolution Time') {
-      const data = hasLivePerf
-        ? perfList.map(p => p.avg_resolution_hours || Math.round((p.avg_resolution_time_minutes || 0) / 60 * 10) / 10)
-        : (empResTimeMock[activeDatePreset] || empResTimeMock['Last 7 Days']);
+      const data = rawList.map(p => p.avg_resolution_hours ?? p.average_resolution_hours ?? (p.avg_resolution_time_minutes ? Math.round((p.avg_resolution_time_minutes / 60) * 10) / 10 : null));
       return (
         <div>
           <div className="h-[220px]">
@@ -786,13 +797,12 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Fastest resolution: Mark Reyes (2.1 hrs average).</p>
+          <p className="text-[11px] text-gray-500 mt-1">Average duration to resolve assigned tickets.</p>
         </div>
       );
     } else {
-      const data = hasLivePerf
-        ? perfList.map(p => p.sla_compliance || 95)
-        : (empSlaMock[activeDatePreset] || empSlaMock['Last 7 Days']);
+      const data = rawList.map(p => p.sla_compliance_rate ?? p.sla_compliance ?? null);
+      const noDataNames = labels.filter((_, i) => data[i] === null);
       return (
         <div>
           <div className="h-[220px]">
@@ -810,17 +820,30 @@ export default function AdminDashboard() {
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">All employees meeting minimum 90% SLA target.</p>
+          <p className="text-[11px] text-gray-500 mt-1">
+            Individual SLA compliance rates against 90% target.
+            {noDataNames.length > 0 && ` No data: ${noDataNames.join(', ')}.`}
+          </p>
         </div>
       );
     }
-  }, [activeDatePreset, empView, analyticsData.performance]);
+  }, [hasData, analyticsData.performance, dashboardData, empView]);
 
   // ─── Section 4: Customer Satisfaction Chart ──────────────────────────────
   const csatChart = useMemo(() => {
-    const labels = LABELS[activeDatePreset] || LABELS['Last 7 Days'];
-    const data = csatMock[activeDatePreset] || csatMock['Last 7 Days'];
-    const lastScore = data[data.length - 1];
+    if (!hasData) {
+      return <EmptyStateCard title="No CSAT feedback recorded" description="No customer reviews were submitted in this period." />;
+    }
+
+    const csat = dashboardData?.csat || {};
+    if (csat.available === false || (csat.average_score ?? dashboardData?.kpis?.csat_score) == null) {
+      return <EmptyStateCard title="CSAT data unavailable" description="Customer satisfaction ratings could not be loaded right now, so no score is shown." />;
+    }
+    const labels = Array.isArray(csat.labels) ? csat.labels : (Array.isArray(dashboardData?.trends?.labels) ? dashboardData.trends.labels : []);
+    const data = Array.isArray(csat.trend) ? csat.trend : (Array.isArray(csat.trends) ? csat.trends : []);
+    const avgScore = Number(csat.average_score ?? dashboardData?.kpis?.csat_score ?? 0).toFixed(1);
+    const totalReviews = csat.total_reviews ?? dashboardData?.kpis?.total_csat_reviews ?? 0;
+
     return (
       <div>
         <div className="h-[220px]">
@@ -844,73 +867,127 @@ export default function AdminDashboard() {
             }}
           />
         </div>
-        <p className="text-[11px] text-gray-500 mt-1">CSAT score: {lastScore}/5 — customer satisfaction is stable.</p>
+        <p className="text-[11px] text-gray-500 mt-1">CSAT score: {avgScore}/5 across {totalReviews} reviews.</p>
       </div>
     );
-  }, [activeDatePreset]);
+  }, [hasData, dashboardData]);
 
   // ─── Section 5: Workload Distribution Chart ──────────────────────────────
   const workloadChart = useMemo(() => {
+    if (!hasData) {
+      return <EmptyStateCard title="No workload data" description="No open or assigned tickets for this period." />;
+    }
+
+    const workload = dashboardData?.workload || {};
+
     if (workloadView === 'By Employee') {
+      const empWorkload = workload.by_employee;
+      let labels = [];
+      let data = [];
+
+      if (Array.isArray(empWorkload)) {
+        labels = empWorkload.map(e => e.name || e.employee_name || 'Staff');
+        data = empWorkload.map(e => e.active_tickets ?? e.ticket_count ?? 0);
+      } else if (empWorkload && Array.isArray(empWorkload.labels)) {
+        labels = empWorkload.labels;
+        data = Array.isArray(empWorkload.data) ? empWorkload.data : [];
+      } else if (Array.isArray(workload.details)) {
+        labels = workload.details.map(e => e.name || e.employee_name || 'Staff');
+        data = workload.details.map(e => e.active_tickets ?? e.ticket_count ?? 0);
+      }
+
       return (
         <div>
           <div className="h-[220px]">
             <Bar
               options={defaultHorizontalBarOptions('Workload by Employee')}
               data={{
-                labels: EMPLOYEES,
+                labels: labels.length > 0 ? labels : ['Technicians'],
                 datasets: [{
                   label: 'Tickets Assigned',
-                  data: workloadEmpMock[activeDatePreset] || workloadEmpMock['Last 7 Days'],
-                  backgroundColor: BAR_PALETTE.slice(0, EMPLOYEES.length),
+                  data: data.length > 0 ? data : [0],
+                  backgroundColor: BAR_PALETTE.slice(0, Math.max(1, labels.length)),
                   borderRadius: 6,
                   barThickness: 16,
                 }],
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Workload evenly distributed across employees.</p>
+          <p className="text-[11px] text-gray-500 mt-1">Active ticket distribution across branch technicians.</p>
         </div>
       );
     } else {
+      const deptWorkload = workload.by_department;
+      let labels = [];
+      let data = [];
+
+      if (Array.isArray(deptWorkload)) {
+        labels = deptWorkload.map(d => d.name || d.department || 'General');
+        data = deptWorkload.map(d => d.active_tickets ?? d.total_tickets ?? 0);
+      } else if (deptWorkload && Array.isArray(deptWorkload.labels)) {
+        labels = deptWorkload.labels;
+        data = Array.isArray(deptWorkload.data) ? deptWorkload.data : [];
+      } else if (Array.isArray(analyticsData.departments?.departments)) {
+        const deptArr = analyticsData.departments.departments;
+        labels = deptArr.map(d => d.name || d.department || 'General');
+        data = deptArr.map(d => d.active_tickets ?? d.total_tickets ?? 0);
+      }
+
       return (
         <div>
           <div className="h-[220px]">
             <Bar
               options={defaultHorizontalBarOptions('Workload by Department')}
               data={{
-                labels: DEPARTMENTS,
+                labels: labels.length > 0 ? labels : ['Service'],
                 datasets: [{
                   label: 'Tickets Assigned',
-                  data: workloadDeptMock[activeDatePreset] || workloadDeptMock['Last 7 Days'],
-                  backgroundColor: BAR_PALETTE.slice(0, DEPARTMENTS.length),
+                  data: data.length > 0 ? data : [0],
+                  backgroundColor: BAR_PALETTE.slice(0, Math.max(1, labels.length)),
                   borderRadius: 6,
                   barThickness: 18,
                 }],
               }}
             />
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">Service department handles the majority of tickets.</p>
+          <p className="text-[11px] text-gray-500 mt-1">Active tickets distributed by operational department.</p>
         </div>
       );
     }
-  }, [activeDatePreset, workloadView]);
+  }, [hasData, dashboardData, analyticsData.departments, workloadView]);
 
-  // KPI data
+  // KPI cards
   const kpis = useMemo(() => {
-    const realCounts = analyticsData.predictive?.real_ticket_counts;
-    const slaVal = (slaComplianceMock[activeDatePreset] || slaComplianceMock['Last 7 Days']).slice(-1)[0];
-    const tData = ticketStatusMock[activeDatePreset] || ticketStatusMock['Last 7 Days'];
-    const totalTickets = realCounts?.total ?? (tData.open + tData.inProgress + tData.resolved + tData.closed);
-    const csatVal = (csatMock[activeDatePreset] || csatMock['Last 7 Days']).slice(-1)[0];
+    const k = dashboardData?.kpis || {};
     return [
-      { label: 'Total Tickets', value: totalTickets, icon: Inbox },
-      { label: 'SLA Compliance', value: `${slaVal}%`, icon: ShieldCheck },
-      { label: 'Active Employees', value: analyticsData.performance?.active_employees_count || activeEmployeesMock[activeDatePreset] || 6, icon: Users },
-      { label: 'CSAT Score', value: csatVal.toFixed(1), icon: Smile },
-      { label: 'Avg Resolution', value: `${(resolutionSlaMock[activeDatePreset] || resolutionSlaMock['Last 7 Days']).slice(-1)[0]}h`, icon: Clock },
+      { label: 'Total Tickets', value: k.total_tickets ?? 0, icon: Inbox, definition: 'Tickets created in the selected period for the branch in view.' },
+      { label: 'SLA Compliance', value: k.sla_compliance_rate == null ? 'No data' : `${k.sla_compliance_rate}%`, icon: ShieldCheck, definition: 'Tickets that met their SLA target divided by all tickets with an SLA outcome in the selected period.' },
+      { label: 'Active Employees', value: k.active_employees_count ?? analyticsData.performance?.active_employees_count ?? 0, icon: Users, definition: 'Active staff members in the branch directory. This count does not change with the period.' },
+      { label: 'CSAT Score', value: k.csat_available === false ? 'Unavailable' : (k.csat_score != null ? Number(k.csat_score).toFixed(1) : 'No data'), icon: Smile, definition: 'Average customer rating from feedback on tickets in the selected period, out of 5.' },
+      { label: 'Avg Resolution', value: k.avg_resolution_hours == null ? 'No data' : `${k.avg_resolution_hours}h`, icon: Clock, definition: 'Average hours from ticket creation to resolution, not counting time on hold, for tickets resolved in the selected period.' },
     ];
-  }, [activeDatePreset, analyticsData]);
+  }, [dashboardData, analyticsData.performance]);
+
+  const sortedBranchComparisons = useMemo(() => {
+    const list = Array.isArray(dashboardData?.branch_comparisons) ? [...dashboardData.branch_comparisons] : [];
+    list.sort((a, b) => {
+      const valA = a[branchSortBy] ?? 0;
+      const valB = b[branchSortBy] ?? 0;
+      if (valA === valB) return 0;
+      if (branchSortDir === 'asc') return valA > valB ? 1 : -1;
+      return valA < valB ? 1 : -1;
+    });
+    return list;
+  }, [dashboardData?.branch_comparisons, branchSortBy, branchSortDir]);
+
+  const handleBranchSort = (column) => {
+    if (branchSortBy === column) {
+      setBranchSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setBranchSortBy(column);
+      setBranchSortDir('desc');
+    }
+  };
 
   const dateStr = new Intl.DateTimeFormat('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
@@ -1022,7 +1099,7 @@ export default function AdminDashboard() {
 
       {/* Top Navigation & Toolbar Bar: Left Tabs (Overview / Predictive) & Right Controls (Branch + Date Range) */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-200 mb-5 print:hidden">
-        {/* Left: Tab Switcher (Underline sits flush on the horizontal border line) */}
+        {/* Left: Tab Switcher */}
         <div className="flex items-center gap-6 sm:gap-8 shrink-0 -mb-px">
           <button
             type="button"
@@ -1047,6 +1124,30 @@ export default function AdminDashboard() {
             )}
           >
             Predictive Analytics
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('departments')}
+            className={cn(
+              "pb-3 pt-1 text-xs sm:text-sm transition-all relative cursor-pointer border-b-2 font-medium",
+              activeTab === 'departments'
+                ? "text-[#252578] border-[#252578] font-semibold"
+                : "text-slate-500 hover:text-slate-800 border-transparent"
+            )}
+          >
+            Departments
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('employees')}
+            className={cn(
+              "pb-3 pt-1 text-xs sm:text-sm transition-all relative cursor-pointer border-b-2 font-medium",
+              activeTab === 'employees'
+                ? "text-[#252578] border-[#252578] font-semibold"
+                : "text-slate-500 hover:text-slate-800 border-transparent"
+            )}
+          >
+            Employees
           </button>
         </div>
 
@@ -1108,6 +1209,7 @@ export default function AdminDashboard() {
                   key={k.label}
                   title={k.label}
                   value={k.value}
+                  definition={k.definition}
                   icon={<Icon className="w-5 h-5" />}
                   iconBg="bg-primary/10 text-primary"
                 />
@@ -1117,7 +1219,6 @@ export default function AdminDashboard() {
 
           {/* 2-Column Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
             {/* Section 1: SLA Compliance */}
             <SectionCard
               icon={<ShieldCheck className="w-4 h-4 text-white" />}
@@ -1177,8 +1278,90 @@ export default function AdminDashboard() {
                 {workloadChart}
               </SectionCard>
             </div>
+
+            {/* Section 6: Cross-Branch Performance Comparison (SuperAdmin Global View) */}
+            {isSuperAdmin && sortedBranchComparisons.length > 0 && (
+              <div className="lg:col-span-2">
+                <div className="p-4 bg-white border border-gray-200 rounded-xl shadow-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-800">Cross-Branch Performance Comparison</h3>
+                      <p className="text-xs text-gray-500">
+                        Organization-wide comparison across all active facilities. Click any column header to sort or select a branch to inspect.
+                      </p>
+                    </div>
+                    <span className="text-xs font-medium text-[#252578] bg-[#252578]/10 px-2.5 py-1 rounded-md">
+                      {sortedBranchComparisons.length} Active Branches
+                    </span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-gray-200 bg-[#F8F9FA]">
+                          {[
+                            { key: 'branch_name', label: 'Branch' },
+                            { key: 'total_tickets', label: 'Total Tickets' },
+                            { key: 'active_tickets', label: 'Active' },
+                            { key: 'escalated_tickets', label: 'Escalated' },
+                            { key: 'sla_breaches', label: 'SLA Breaches' },
+                            { key: 'sla_compliance_rate', label: 'SLA Compliance' },
+                            { key: 'avg_resolution_hours', label: 'Avg Resolution' },
+                            { key: 'csat_score', label: 'CSAT Score' },
+                          ].map((col) => (
+                            <th
+                              key={col.key}
+                              onClick={() => handleBranchSort(col.key)}
+                              className="px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-[#94A3B8] cursor-pointer hover:text-[#1E293B] select-none"
+                            >
+                              {col.label}
+                              {branchSortBy === col.key ? (branchSortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {sortedBranchComparisons.map((b) => (
+                          <tr
+                            key={b.branch_id}
+                            onClick={() => selectBranch && selectBranch(b.branch_id)}
+                            className="hover:bg-slate-50 transition-colors cursor-pointer"
+                          >
+                            <td className="px-3 py-2.5 text-xs font-semibold text-[#1E293B]">
+                              {b.branch_name}
+                              {b.branch_code && (
+                                <span className="ml-1.5 text-[10px] font-medium text-[#8D8B8F]">({b.branch_code})</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2.5 text-xs font-medium text-[#1E293B]">{b.total_tickets ?? 0}</td>
+                            <td className="px-3 py-2.5 text-xs text-[#8D8B8F]">{b.active_tickets ?? 0}</td>
+                            <td className="px-3 py-2.5 text-xs text-[#8D8B8F]">{b.escalated_tickets ?? 0}</td>
+                            <td className="px-3 py-2.5 text-xs font-medium text-rose-600">{b.sla_breaches ?? 0}</td>
+                            <td className="px-3 py-2.5 text-xs font-semibold text-emerald-700">{b.sla_compliance_rate == null ? '—' : `${b.sla_compliance_rate}%`}</td>
+                            <td className="px-3 py-2.5 text-xs text-[#8D8B8F]">{b.avg_resolution_hours == null ? '—' : `${b.avg_resolution_hours}h`}</td>
+                            <td className="px-3 py-2.5 text-xs font-medium text-[#1E293B]">{b.csat_score != null ? `${b.csat_score} / 5.0` : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
+      ) : activeTab === 'employees' ? (
+        <EmployeePerformanceView
+          selectedPeriod={selectedPreset}
+          dateFrom={globalDateFrom}
+          dateTo={globalDateTo}
+        />
+      ) : activeTab === 'departments' ? (
+        <DepartmentPerformanceView
+          branchName={selectedBranch?.name || 'your branch'}
+          selectedPeriod={selectedPreset}
+          dateFrom={globalDateFrom}
+          dateTo={globalDateTo}
+        />
       ) : (
         <AnalyticsErrorBoundary>
           <PredictiveAnalytics

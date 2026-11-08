@@ -48,27 +48,27 @@ class TicketConfigurationService
 
     public const DEFAULT_TRANSITIONS = [
         'Open' => [
-            'allowed' => ['In Progress (CS-owned)', 'Assigned', 'Cancelled'],
+            'allowed' => ['In Progress (CS-owned)', 'Assigned', 'In Progress (Employee-owned)', 'Closed', 'Cancelled', 'Escalated'],
             'type' => 'editable',
             'description' => 'Initial ticket state upon customer or internal creation.',
         ],
         'In Progress (CS-owned)' => [
-            'allowed' => ['On Hold/Pending', 'Assigned', 'Resolved'],
+            'allowed' => ['On Hold/Pending', 'Assigned', 'Resolved', 'Closed', 'Escalated'],
             'type' => 'editable',
             'description' => 'Ticket being triaged or actively handled directly by Customer Service.',
         ],
         'Assigned' => [
-            'allowed' => ['Reassigned', 'In Progress (Employee-owned)', 'Assigned', 'On Hold/Pending'],
+            'allowed' => ['Reassigned', 'In Progress (Employee-owned)', 'Assigned', 'On Hold/Pending', 'Escalated'],
             'type' => 'editable',
             'description' => 'Ticket dispatched to an engineer/technician and awaiting their acceptance.',
         ],
         'Reassigned' => [
-            'allowed' => ['In Progress (Employee-owned)', 'Assigned', 'On Hold/Pending'],
+            'allowed' => ['In Progress (Employee-owned)', 'Assigned', 'On Hold/Pending', 'Escalated'],
             'type' => 'editable',
             'description' => 'Ticket reassignment requested or approved for re-dispatch.',
         ],
         'In Progress (Employee-owned)' => [
-            'allowed' => ['On Hold/Pending', 'Reassigned', 'Resolved', 'Assigned'],
+            'allowed' => ['On Hold/Pending', 'Reassigned', 'Resolved', 'Assigned', 'Closed', 'Escalated'],
             'type' => 'editable',
             'description' => 'Service engineer has accepted the assignment and is actively working on the machine.',
         ],
@@ -101,6 +101,11 @@ class TicketConfigurationService
             'caption' => 'Terminal status: No further transitions permitted from Cancelled.',
             'description' => 'Ticket discarded or cancelled before assignment.',
         ],
+        'Escalated' => [
+            'allowed' => ['Assigned', 'In Progress (Employee-owned)', 'In Progress (CS-owned)', 'Resolved', 'Closed'],
+            'type' => 'editable',
+            'description' => 'Ticket escalated to supervisory or department leadership.',
+        ],
     ];
 
     private const TRANSITIONS_CACHE_KEY = 'ticket:config:transitions';
@@ -110,6 +115,57 @@ class TicketConfigurationService
     private const LIMIT_CACHE_KEY = 'ticket:config:limits';
 
     private const LIMIT_LAST_KNOWN_GOOD_KEY = 'ticket:config:limits:last-known-good';
+
+    /**
+     * Default SLA working hours (mirrors configuration-service 'business_hours').
+     * workingDays uses ISO-8601 numbering: 1 = Monday ... 7 = Sunday.
+     */
+    public const DEFAULT_BUSINESS_HOURS = [
+        'enabled' => true,
+        'timezone' => 'UTC',
+        'startTime' => '08:00',
+        'endTime' => '17:00',
+        'workingDays' => [1, 2, 3, 4, 5],
+    ];
+
+    /**
+     * Retrieve the SLA business hours configuration (who counts SLA minutes, and in which timezone).
+     */
+    public static function getBusinessHoursConfig(): array
+    {
+        try {
+            return Cache::remember('ticket:config:business_hours', 300, function () {
+                $configUrl = env('CONFIGURATION_SERVICE_URL', 'http://configuration-service:8000');
+                $response = Http::timeout(5)->get("{$configUrl}/api/ticket-configurations/business_hours");
+
+                if (!$response->successful()) {
+                    return self::DEFAULT_BUSINESS_HOURS;
+                }
+
+                $json = $response->json();
+                $val = (array) ($json['value'] ?? $json);
+                $timezone = (string) ($val['timezone'] ?? 'UTC');
+                if (!in_array($timezone, \DateTimeZone::listIdentifiers(), true)) {
+                    $timezone = 'UTC';
+                }
+                $days = array_values(array_filter(
+                    array_map('intval', (array) ($val['workingDays'] ?? [1, 2, 3, 4, 5])),
+                    fn ($d) => $d >= 1 && $d <= 7
+                ));
+
+                return [
+                    'enabled' => (bool) ($val['enabled'] ?? true),
+                    'timezone' => $timezone,
+                    'startTime' => (string) ($val['startTime'] ?? '08:00'),
+                    'endTime' => (string) ($val['endTime'] ?? '17:00'),
+                    'workingDays' => $days ?: [1, 2, 3, 4, 5],
+                ];
+            });
+        } catch (\Throwable $e) {
+            Log::warning('Failed to fetch business hours configuration from configuration-service: ' . $e->getMessage());
+            return self::DEFAULT_BUSINESS_HOURS;
+        }
+    }
 
     /**
      * Retrieve the active ticket reopen & auto-close windows configuration.
@@ -139,6 +195,32 @@ class TicketConfigurationService
         } catch (\Throwable $e) {
             Log::warning('Failed to fetch window configuration from configuration-service: ' . $e->getMessage());
             return self::DEFAULT_WINDOWS;
+        }
+    }
+
+    /**
+     * Maximum number of attachments allowed on one ticket submission (file_limits.maxFileCount).
+     * attachment-service only checks the count per upload request, and the ticket form uploads
+     * files one by one for scanning, so the ticket endpoints must enforce the total themselves.
+     */
+    public static function getMaxFileCount(): int
+    {
+        $default = 5;
+        try {
+            return (int) Cache::remember('ticket:config:file_limits:max_count', 30, function () use ($default) {
+                $configUrl = env('CONFIGURATION_SERVICE_URL', 'http://configuration-service:8000');
+                $response = Http::timeout(5)->get("{$configUrl}/api/ticket-configurations/file_limits");
+                if ($response->successful()) {
+                    $json = $response->json();
+                    $val = $json['value'] ?? $json;
+                    $count = (int) ($val['maxFileCount'] ?? 0);
+                    return $count > 0 ? $count : $default;
+                }
+                return $default;
+            });
+        } catch (\Throwable $e) {
+            Log::warning('Failed to fetch file limits from configuration-service: ' . $e->getMessage());
+            return $default;
         }
     }
 

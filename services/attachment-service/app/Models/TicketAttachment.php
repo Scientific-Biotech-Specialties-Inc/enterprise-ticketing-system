@@ -15,7 +15,9 @@ class TicketAttachment extends Model
         'file_name',
         'file_path',
         'file_type',
-        'uploaded_at'
+        'uploaded_at',
+        'uploaded_by_id',
+        'uploaded_by_type'
     ];
 
     protected $casts = [

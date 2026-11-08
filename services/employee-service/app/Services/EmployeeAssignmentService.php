@@ -464,6 +464,10 @@ class EmployeeAssignmentService
             Log::error("Failed to send internal assignment message in assignTicket: " . $e->getMessage());
         }
 
+        if (array_key_exists('priority_ID', $validated) && $validated['priority_ID'] !== null && (int) $validated['priority_ID'] !== (int) ($ticket->priority_ID ?? 0)) {
+            $this->requestSlaRecalculation($ticketId);
+        }
+
         $updatedTicket = DB::table('tickets')->where('ticket_ID', $ticketId)->first();
         $this->cacheService->clearTicketCaches();
 
@@ -772,6 +776,10 @@ class EmployeeAssignmentService
             'previous_employee_ids' => $removedEmpIds,
         ]);
 
+        if (collect($changes)->contains(fn ($c) => $c['field'] === 'priority_ID')) {
+            $this->requestSlaRecalculation($ticketId);
+        }
+
         $this->cacheService->clearTicketCaches();
 
         $ticketRef = 'TKT-' . str_pad((string) $ticketId, 4, '0', STR_PAD_LEFT);
@@ -901,7 +909,19 @@ class EmployeeAssignmentService
         $attachmentIds = $validated['attachments'] ?? [];
         $attachmentNames = [];
 
-        DB::transaction(function () use ($ticketId, $ticket, $empId, $newStatusName, $remarksText, $internalNoteText, $isProof, $assignment, $attachmentIds, &$attachmentNames) {
+        // Internal tickets store a placeholder in created_by, so there is no customer to notify.
+        $notifyCustomer = !(bool) $ticket->is_internal;
+
+        // Validate the status change before any side effects: replacing proofs and binding
+        // attachments call attachment-service, which a database rollback cannot undo.
+        if ($newStatusName) {
+            $transitionError = $this->validateEmployeeStatusChange($ticket, $newStatusName);
+            if ($transitionError !== null) {
+                return $transitionError;
+            }
+        }
+
+        DB::transaction(function () use ($ticketId, $ticket, $empId, $newStatusName, $remarksText, $internalNoteText, $isProof, $assignment, $attachmentIds, &$attachmentNames, $notifyCustomer) {
             if ($isProof) {
                 try {
                     $resp = Http::get("http://attachment-service:8000/api/attachments?assignment_id={$assignment->assignment_ID}");
@@ -942,33 +962,8 @@ class EmployeeAssignmentService
                     ->whereRaw('LOWER(status_name) = ?', [strtolower($newStatusName)])
                     ->value('ticket_status_ID');
 
+                // The transition was validated against the Transition Matrix before this transaction.
                 if ($statusId && $statusId != $ticket->ticket_status_ID) {
-                    $targetState = match(strtolower(trim($newStatusName))) {
-                        'resolved' => TicketStateMachine::STATE_RESOLVED,
-                        'closed' => TicketStateMachine::STATE_CLOSED,
-                        'on hold', 'hold', 'pending' => TicketStateMachine::STATE_ON_HOLD,
-                        'in progress', 'pending evaluation' => TicketStateMachine::STATE_IN_PROGRESS_EMPLOYEE,
-                        default => null
-                    };
-
-                    $currentState = $this->stateMachine->resolveState($ticket);
-                    if ($targetState && $currentState !== $targetState) {
-                        try {
-                            $this->stateMachine->validateTransition($ticket, $currentState, $targetState);
-                        } catch (\App\Exceptions\InvalidTicketTransitionException $e) {
-                            return [
-                                'status' => 422,
-                                'data' => [
-                                    'message' => $e->getMessage(),
-                                    'code' => 'INVALID_TICKET_TRANSITION',
-                                    'from_status' => $e->fromStatus,
-                                    'to_status' => $e->toStatus,
-                                    'allowed_statuses' => $e->allowedStatuses,
-                                ]
-                            ];
-                        }
-                    }
-
                     $statusChanged = true;
                     $updateFields = [
                         'updated_at' => now(),
@@ -1028,13 +1023,15 @@ class EmployeeAssignmentService
                         ];
                     }
 
-                    $this->notificationService->notifyCustomer(
-                        $customerId,
-                        $customerTitle,
-                        "Your ticket {$ticketRef} status has been updated to \"" . $statusNameToNotify . "\". Remark: \"" . $remarksText . "\".",
-                        $ticketId,
-                        $customerNotificationData
-                    );
+                    if ($notifyCustomer) {
+                        $this->notificationService->notifyCustomer(
+                            $customerId,
+                            $customerTitle,
+                            "Your ticket {$ticketRef} status has been updated to \"" . $statusNameToNotify . "\". Remark: \"" . $remarksText . "\".",
+                            $ticketId,
+                            $customerNotificationData
+                        );
+                    }
 
                     $this->notificationService->notifyCS(
                         'Ticket Status Updated',
@@ -1054,7 +1051,8 @@ class EmployeeAssignmentService
 
                     $catName = DB::table('problem_categories')->where('problem_category_ID', $ticket->problem_category_ID)->value('category_name') ?? '';
                     $prioName = DB::table('ticket_priorities')->where('priority_ID', $ticket->priority_ID ?? 1)->value('priority_name') ?? '';
-                    $this->notificationService->sendCustomerEmail(
+                    $this->sendCustomerEmailAfterResponse(
+                        $notifyCustomer,
                         $customerId,
                         $customerTitle,
                         "Your ticket {$ticketRef}: \"" . $ticket->title . "\" status has been updated to \"" . $statusNameToNotify . "\".",
@@ -1076,16 +1074,19 @@ class EmployeeAssignmentService
                 ]);
 
                 if (!$statusChanged && !$isProof) {
-                    $this->notificationService->notifyCustomer(
-                        $customerId,
-                        'New Remark Added',
-                        "Engineer " . $empName . " added a remark: \"" . $remarksText . "\" on ticket TKT-" . str_pad((string) $ticketId, 4, '0', STR_PAD_LEFT) . ".",
-                        $ticketId
-                    );
+                    if ($notifyCustomer) {
+                        $this->notificationService->notifyCustomer(
+                            $customerId,
+                            'New Remark Added',
+                            "Engineer " . $empName . " added a remark: \"" . $remarksText . "\" on ticket TKT-" . str_pad((string) $ticketId, 4, '0', STR_PAD_LEFT) . ".",
+                            $ticketId
+                        );
+                    }
 
                     $catNameRem = DB::table('problem_categories')->where('problem_category_ID', $ticket->problem_category_ID)->value('category_name') ?? '';
                     $prioNameRem = DB::table('ticket_priorities')->where('priority_ID', $ticket->priority_ID ?? 1)->value('priority_name') ?? '';
-                    $this->notificationService->sendCustomerEmail(
+                    $this->sendCustomerEmailAfterResponse(
+                        $notifyCustomer,
                         $customerId,
                         'New Remark Added',
                         "Engineer " . $empName . " added a remark: \"" . $remarksText . "\" on your ticket TKT-" . str_pad((string) $ticketId, 4, '0', STR_PAD_LEFT) . ".",
@@ -1172,7 +1173,8 @@ class EmployeeAssignmentService
 
                     $catNameProof = DB::table('problem_categories')->where('problem_category_ID', $ticket->problem_category_ID)->value('category_name') ?? '';
                     $prioNameProof = DB::table('ticket_priorities')->where('priority_ID', $ticket->priority_ID ?? 1)->value('priority_name') ?? '';
-                    $this->notificationService->sendCustomerEmail(
+                    $this->sendCustomerEmailAfterResponse(
+                        $notifyCustomer,
                         $customerId,
                         'Proof of Completion Uploaded',
                         "Proof of completion has been uploaded for your ticket {$ticketRefProof} by " . $empName . ". Status is now Pending Evaluation.",
@@ -1199,6 +1201,198 @@ class EmployeeAssignmentService
     }
 
     /**
+     * Check an employee-requested status change against the superadmin Transition Matrix.
+     *
+     * Submitting proof (Pending Evaluation) is the employee's request to resolve the ticket, so it
+     * is checked as a move to Resolved. Otherwise a blocked "-> Resolved" transition would let the
+     * employee submit proof and only fail later, when Customer Service approves it.
+     *
+     * Returns a 422 response payload when the transition is not allowed, or null when it is.
+     */
+    private function validateEmployeeStatusChange(object $ticket, string $newStatusName): ?array
+    {
+        $statusId = DB::table('ticket_statuses')
+            ->whereRaw('LOWER(status_name) = ?', [strtolower($newStatusName)])
+            ->value('ticket_status_ID');
+
+        if (!$statusId || $statusId == $ticket->ticket_status_ID) {
+            return null;
+        }
+
+        $targetState = match (strtolower(trim($newStatusName))) {
+            'resolved', 'pending evaluation' => TicketStateMachine::STATE_RESOLVED,
+            'closed' => TicketStateMachine::STATE_CLOSED,
+            'on hold', 'hold', 'pending' => TicketStateMachine::STATE_ON_HOLD,
+            'in progress' => TicketStateMachine::STATE_IN_PROGRESS_EMPLOYEE,
+            default => null,
+        };
+
+        $currentState = $this->stateMachine->resolveState($ticket);
+        if ($targetState === null || $currentState === $targetState) {
+            return null;
+        }
+
+        try {
+            $this->stateMachine->validateTransition($ticket, $currentState, $targetState);
+        } catch (\App\Exceptions\InvalidTicketTransitionException $e) {
+            return [
+                'status' => 422,
+                'data' => [
+                    'message' => $e->getMessage(),
+                    'code' => 'INVALID_TICKET_TRANSITION',
+                    'from_status' => $e->fromStatus,
+                    'to_status' => $e->toStatus,
+                    'allowed_statuses' => $e->allowedStatuses,
+                ],
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * Send a customer email once the response has been returned, so a slow mail
+     * provider can never hold the request (and its database transaction) open.
+     */
+    /**
+     * Ask ticket-service (owner of SLA rules) to recalculate SLA deadlines after a
+     * priority change made here. Failures are logged and never block assignment.
+     */
+    private function requestSlaRecalculation(int $ticketId): void
+    {
+        try {
+            $ticketServiceUrl = rtrim((string) env('TICKET_SERVICE_URL', 'http://ticket-service:8000'), '/');
+            $response = Http::timeout(5)
+                ->withHeaders(['X-Internal-Token' => (string) env('INTERNAL_TOKEN', '')])
+                ->post("{$ticketServiceUrl}/api/internal/tickets/{$ticketId}/sla/recalculate");
+            if (!$response->successful()) {
+                Log::warning("SLA recalculation request failed for ticket {$ticketId}: HTTP " . $response->status());
+            }
+        } catch (\Throwable $e) {
+            Log::warning("SLA recalculation request failed for ticket {$ticketId}: " . $e->getMessage());
+        }
+    }
+
+    private function sendCustomerEmailAfterResponse(
+        bool $enabled,
+        int $customerId,
+        string $subject,
+        string $message,
+        int $ticketId,
+        ?string $ticketTitle,
+        string $category,
+        string $priority
+    ): void {
+        if (!$enabled) {
+            return;
+        }
+
+        app()->terminating(function () use ($customerId, $subject, $message, $ticketId, $ticketTitle, $category, $priority) {
+            try {
+                $this->notificationService->sendCustomerEmail(
+                    $customerId,
+                    $subject,
+                    $message,
+                    $ticketId,
+                    (string) $ticketTitle,
+                    $category,
+                    $priority
+                );
+            } catch (\Throwable $e) {
+                Log::warning("Deferred customer email failed for ticket {$ticketId}: {$e->getMessage()}");
+            }
+        });
+    }
+
+    /**
+     * Get department summary statistics for a department manager.
+     */
+    public function getDepartmentSummaryForEmployee(string $employeeEmail): ?array
+    {
+        $employeeId = DB::table('employees')->where('email', $employeeEmail)->value('emp_id');
+        if (!$employeeId) {
+            return null;
+        }
+
+        $emp = DB::table('employees')->where('emp_id', $employeeId)->first();
+        if (!$emp) {
+            return null;
+        }
+
+        $isManager = (
+            strtolower((string)($emp->position_level ?? '')) === 'manager' ||
+            str_contains(strtolower((string)($emp->role ?? '')), 'manager') ||
+            str_contains(strtolower((string)($emp->technical_role ?? '')), 'manager')
+        );
+
+        if (!$isManager) {
+            return null;
+        }
+
+        $dept = strtolower(trim((string)($emp->department ?? '')));
+        if ($dept === '') {
+            return null;
+        }
+
+        $breachedQuery = DB::table('tickets as t')
+            ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
+            ->leftJoin('machines as m', 'm.machine_ID', '=', 't.machine_ID')
+            ->leftJoin('clients as c', 'c.id', '=', 't.created_by')
+            ->whereNotIn('t.ticket_status_ID', [3, 4])
+            ->where(function ($d) use ($dept) {
+                if (str_contains($dept, 'service')) {
+                    $d->whereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%service%'])
+                      ->orWhereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%biomedical%'])
+                      ->orWhereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%machine%'])
+                      ->orWhereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%maintenance%']);
+                } elseif (str_contains($dept, 'it')) {
+                    $d->whereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%it%'])
+                      ->orWhereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%software%'])
+                      ->orWhereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%hardware%'])
+                      ->orWhereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%network%'])
+                      ->orWhereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ['%system%']);
+                } else {
+                    $d->whereRaw('LOWER(COALESCE(pc.category_name, "")) LIKE ?', ["%{$dept}%"]);
+                }
+            })
+            ->where(function ($s) {
+                $s->where('t.sla_status', 'Breached')
+                  ->orWhere(function ($r) {
+                      $r->whereNotNull('t.resolution_due_at')->where('t.resolution_due_at', '<', now());
+                  });
+            });
+
+        $count = (clone $breachedQuery)->count();
+        $first = (clone $breachedQuery)
+            ->orderByDesc('t.updated_at')
+            ->select('t.ticket_ID', 't.title', 'm.machine_name', 'c.client_name', 't.sla_status', 't.resolution_due_at', 'pc.category_name')
+            ->first();
+
+        $sampleTicket = null;
+        if ($first) {
+            $sampleTicket = [
+                'id' => 'TKT-' . str_pad((string) $first->ticket_ID, 4, '0', STR_PAD_LEFT),
+                'ticket_ID' => $first->ticket_ID,
+                'title' => $first->title,
+                'category' => $first->category_name ?? 'General',
+                'facility' => $first->machine_name ?? $first->client_name ?? 'On-site',
+                'equipment' => $first->machine_name ?? null,
+                'sla_status' => 'Breached',
+                'slaStatus' => 'Breached',
+                'is_breached' => true,
+                'resolution_due_at' => $first->resolution_due_at,
+            ];
+        }
+
+        return [
+            'is_manager' => true,
+            'department' => $emp->department,
+            'sla_breached_count' => $count,
+            'sla_breached_ticket' => $sampleTicket,
+        ];
+    }
+
+    /**
      * Get tickets assigned to an employee.
      */
     public function getEmployeeTickets(string $employeeEmail): array
@@ -1208,16 +1402,52 @@ class EmployeeAssignmentService
             return [];
         }
 
-        $rows = DB::table('ticket_assignments as ta')
-            ->join('tickets as t', 't.ticket_ID', '=', 'ta.ticket_ID')
+        $emp = DB::table('employees')->where('emp_id', $employeeId)->first();
+        $isManager = $emp && (
+            strtolower((string)($emp->position_level ?? '')) === 'manager' ||
+            str_contains(strtolower((string)($emp->role ?? '')), 'manager') ||
+            str_contains(strtolower((string)($emp->technical_role ?? '')), 'manager')
+        );
+        $dept = strtolower(trim((string)($emp->department ?? '')));
+
+        $query = DB::table('tickets as t')
+            ->leftJoin('ticket_assignments as ta', function ($join) use ($employeeId) {
+                $join->on('ta.ticket_ID', '=', 't.ticket_ID')
+                     ->where('ta.employee_ID', '=', $employeeId);
+            })
             ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
             ->leftJoin('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
             ->leftJoin('ticket_priorities as tp', 'tp.priority_ID', '=', 't.priority_ID')
             ->leftJoin('machines as m', 'm.machine_ID', '=', 't.machine_ID')
             ->leftJoin('clients as c', 'c.id', '=', 't.created_by')
             ->leftJoin('ticket_types as tt', 'tt.ticket_type_ID', '=', 't.ticket_type_ID')
-            ->where('ta.employee_ID', $employeeId)
-            ->orderByDesc('ta.assigned_at')
+            ->where(function ($q) use ($employeeId, $isManager, $dept) {
+                $q->where('ta.employee_ID', $employeeId)
+                  ->orWhere('t.assigned_to', $employeeId);
+
+                if ($isManager && $dept !== '') {
+                    $q->orWhere(function ($sub) use ($dept) {
+                        $sub->where('t.ticket_status_ID', 5)
+                        ->where(function ($d) use ($dept) {
+                            if (str_contains($dept, 'service')) {
+                                $d->whereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%service%'])
+                                  ->orWhereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%biomedical%'])
+                                  ->orWhereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%machine%'])
+                                  ->orWhereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%maintenance%']);
+                            } elseif (str_contains($dept, 'it')) {
+                                $d->whereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%it%'])
+                                  ->orWhereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%software%'])
+                                  ->orWhereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%hardware%'])
+                                  ->orWhereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%network%'])
+                                  ->orWhereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ['%system%']);
+                            } else {
+                                $d->whereRaw('LOWER(COALESCE(pc.category_name, "" )) LIKE ?', ["%{$dept}%"]);
+                            }
+                        });
+                    });
+                }
+            })
+            ->orderByDesc('t.updated_at')
             ->select(
                 't.ticket_ID',
                 't.title',
@@ -1233,12 +1463,16 @@ class EmployeeAssignmentService
                 'm.machine_name',
                 'm.serial_number',
                 'c.client_name',
-                'ta.assignment_status',
+                DB::raw("COALESCE(ta.assignment_status, 'assigned') as assignment_status"),
                 't.proof_rejected',
                 't.rejection_reason',
+                't.hold_reason',
+                't.escalation_reason',
                 'tt.type_name as ticket_type'
             )
-            ->get();
+            ->distinct();
+
+        $rows = $query->get();
 
         $ticketIds = $rows->pluck('ticket_ID')->toArray();
         $pendingReassigns = collect();
@@ -1367,9 +1601,11 @@ class EmployeeAssignmentService
                 'is_breached' => $slaMetrics['is_breached'],
                 'is_at_risk' => $slaMetrics['is_at_risk'],
                 'is_paused' => $slaMetrics['is_paused'],
-                'lastUpdate' => $updatedAtObj ? $updatedAtObj->format('M d, Y') : ($createdAtObj ? $createdAtObj->format('M d, Y') : now()->format('M d, Y')),
+                'lastUpdate' => ($updatedAtObj ?: $createdAtObj ?: now())->toIso8601String(),
                 'accepted' => $row->assignment_status === 'accepted',
-                'escalated' => false,
+                'escalated' => (strtolower((string)($row->status_name ?? '')) === 'escalated'),
+                'escalation_reason' => $row->escalation_reason ?? null,
+                'hold_reason' => $row->hold_reason ?? null,
                 'reassignmentRequested' => !empty($pendingReassign),
                 'reassignmentReason' => $pendingReassign ? $pendingReassign->reason : null,
                 'deniedReassignment' => empty($pendingReassign) && !empty($deniedReassign),
@@ -1440,7 +1676,7 @@ class EmployeeAssignmentService
                 'customer' => $row->client_name ?: 'Unknown Customer',
                 'equipment' => ($row->machine_name || $row->serial_number) ? ($row->machine_name . ($row->serial_number ? ' - ' . $row->serial_number : '')) : 'Unspecified Equipment',
                 'date' => $createdAtObj ? $createdAtObj->format('Y-m-d') : now()->format('Y-m-d'),
-                'lastUpdate' => $updatedAtObj ? $updatedAtObj->format('M d, Y') : ($createdAtObj ? $createdAtObj->format('M d, Y') : now()->format('M d, Y')),
+                'lastUpdate' => ($updatedAtObj ?: $createdAtObj ?: now())->toIso8601String(),
                 'slaStatus' => $slaMetrics['status'],
                 'sla_status' => $slaMetrics['status'],
                 'resolution_due_at' => $slaMetrics['due_at'],

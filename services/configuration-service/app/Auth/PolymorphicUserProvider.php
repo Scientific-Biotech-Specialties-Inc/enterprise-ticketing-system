@@ -87,4 +87,16 @@ class PolymorphicUserProvider implements UserProvider
         $provider = $user instanceof \App\Models\Client ? $this->clientProvider : $this->employeeProvider;
         return $provider->validateCredentials($user, $credentials);
     }
+
+    /**
+     * Required by Laravel 11.x's UserProvider contract. Without it this class cannot load and any
+     * request that touches the auth guard fails with a fatal error.
+     */
+    public function rehashPasswordIfRequired(Authenticatable $user, array $credentials, bool $force = false)
+    {
+        $provider = $user instanceof \App\Models\Client ? $this->clientProvider : $this->employeeProvider;
+        if (method_exists($provider, 'rehashPasswordIfRequired')) {
+            $provider->rehashPasswordIfRequired($user, $credentials, $force);
+        }
+    }
 }

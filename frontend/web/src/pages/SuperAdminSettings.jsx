@@ -19,6 +19,7 @@ import {
   ChevronDown,
   ShieldCheck,
   MapPin,
+  Lock,
 } from 'lucide-react';
 import NotificationModal from '@/components/NotificationModal';
 import BranchSelector from '@/components/BranchSelector';
@@ -55,6 +56,11 @@ const INITIAL_BRANCH_COMPANY_INFO = {
   },
 };
 
+// Company info and system status are stored as single global keys in configuration-service
+// (company_info, system_status). They are not branch scoped, so local state uses one fixed key and
+// every save goes to the backend regardless of which branch is selected in the header.
+const CONFIG_SCOPE = 'main';
+
 const SOCIAL_PLATFORMS = ['LinkedIn', 'Facebook', 'Twitter / X', 'YouTube', 'Instagram', 'Other'];
 
 const LOG_LEVELS = [
@@ -82,8 +88,12 @@ const LOG_LEVELS = [
 
 // Validation helpers
 
+// Mirrors the backend rule (email:rfc,filter + TLD): no consecutive dots, no leading or trailing dot
+// in the local part, letters/digits/hyphens only in each domain label, and a 2+ letter TLD.
 const isValidEmail = (email) => {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
+  const value = email.trim();
+  if (value.includes('..')) return false;
+  return /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$/.test(value);
 };
 
 const isValidPhone = (phone) => {
@@ -110,7 +120,7 @@ export default function SuperAdminSettings() {
   const [companyErrors, setCompanyErrors] = useState({});
 
   // Active branch company info (defaults to empty strings/array if unconfigured)
-  const currentCompanyInfo = branchCompanyInfo[selectedBranch.id] || {
+  const currentCompanyInfo = branchCompanyInfo[CONFIG_SCOPE] || {
     address: '',
     contactNumber: '',
     contactEmail: '',
@@ -133,7 +143,7 @@ export default function SuperAdminSettings() {
   const [branchSystemStatus, setBranchSystemStatus] = useState({});
 
   // Active branch system status (defaults to 'Operational')
-  const currentBranchStatus = branchSystemStatus[selectedBranch.id] || 'Operational';
+  const currentBranchStatus = branchSystemStatus[CONFIG_SCOPE] || 'Operational';
 
   // 3. Log Level State (global, untouched)
   const [logLevel, setLogLevel] = useState('Info');
@@ -191,7 +201,7 @@ export default function SuperAdminSettings() {
   // ── Company Information Handlers (Branch-Scoped) ──────────────────────────
   const handleCompanyFieldChange = (field, value) => {
     setBranchCompanyInfo((prev) => {
-      const existing = prev[selectedBranch.id] || {
+      const existing = prev[CONFIG_SCOPE] || {
         address: '',
         contactNumber: '',
         contactEmail: '',
@@ -199,7 +209,7 @@ export default function SuperAdminSettings() {
       };
       return {
         ...prev,
-        [selectedBranch.id]: {
+        [CONFIG_SCOPE]: {
           ...existing,
           [field]: value,
         },
@@ -216,7 +226,7 @@ export default function SuperAdminSettings() {
 
   const handleSocialLinkChange = (id, key, value) => {
     setBranchCompanyInfo((prev) => {
-      const existing = prev[selectedBranch.id] || {
+      const existing = prev[CONFIG_SCOPE] || {
         address: '',
         contactNumber: '',
         contactEmail: '',
@@ -224,7 +234,7 @@ export default function SuperAdminSettings() {
       };
       return {
         ...prev,
-        [selectedBranch.id]: {
+        [CONFIG_SCOPE]: {
           ...existing,
           socialLinks: (existing.socialLinks || []).map((link) =>
             link.id === id ? { ...link, [key]: value } : link
@@ -245,7 +255,7 @@ export default function SuperAdminSettings() {
   const handleAddSocialLink = () => {
     const newId = `soc-${Date.now()}`;
     setBranchCompanyInfo((prev) => {
-      const existing = prev[selectedBranch.id] || {
+      const existing = prev[CONFIG_SCOPE] || {
         address: '',
         contactNumber: '',
         contactEmail: '',
@@ -253,7 +263,7 @@ export default function SuperAdminSettings() {
       };
       return {
         ...prev,
-        [selectedBranch.id]: {
+        [CONFIG_SCOPE]: {
           ...existing,
           socialLinks: [
             ...(existing.socialLinks || []),
@@ -266,7 +276,7 @@ export default function SuperAdminSettings() {
 
   const handleRemoveSocialLink = (id) => {
     setBranchCompanyInfo((prev) => {
-      const existing = prev[selectedBranch.id] || {
+      const existing = prev[CONFIG_SCOPE] || {
         address: '',
         contactNumber: '',
         contactEmail: '',
@@ -274,7 +284,7 @@ export default function SuperAdminSettings() {
       };
       return {
         ...prev,
-        [selectedBranch.id]: {
+        [CONFIG_SCOPE]: {
           ...existing,
           socialLinks: (existing.socialLinks || []).filter((link) => link.id !== id),
         },
@@ -326,20 +336,18 @@ export default function SuperAdminSettings() {
     setIsSavingCompany(true);
 
     try {
-      if (selectedBranch.id === 'main') {
-        const res = await updateCompanyInfo(currentCompanyInfo);
-        if (res) {
-          const updated = {
-            address: res.address || currentCompanyInfo.address,
-            contactNumber: res.contactNumber || currentCompanyInfo.contactNumber,
-            contactEmail: res.contactEmail || currentCompanyInfo.contactEmail,
-            socialLinks: Array.isArray(res.socialLinks) ? res.socialLinks : currentCompanyInfo.socialLinks,
-          };
-          setBranchCompanyInfo((prev) => ({
-            ...prev,
-            [selectedBranch.id]: updated,
-          }));
-        }
+      const res = await updateCompanyInfo(currentCompanyInfo);
+      if (res) {
+        const updated = {
+          address: res.address || currentCompanyInfo.address,
+          contactNumber: res.contactNumber || currentCompanyInfo.contactNumber,
+          contactEmail: res.contactEmail || currentCompanyInfo.contactEmail,
+          socialLinks: Array.isArray(res.socialLinks) ? res.socialLinks : currentCompanyInfo.socialLinks,
+        };
+        setBranchCompanyInfo((prev) => ({
+          ...prev,
+          [CONFIG_SCOPE]: updated,
+        }));
       }
       showSuccess(
         'Company Information Saved',
@@ -365,23 +373,16 @@ export default function SuperAdminSettings() {
         closeNotif();
         setIsSavingCompany(true);
         try {
-          if (selectedBranch.id === 'main') {
-            await resetCompanyInfo();
-          }
-          const resetTarget = selectedBranch.id === 'main' ? { ...INITIAL_COMPANY_INFO } : {
-            address: '',
-            contactNumber: '',
-            contactEmail: '',
-            socialLinks: [],
-          };
+          await resetCompanyInfo();
+          const resetTarget = { ...INITIAL_COMPANY_INFO };
           setBranchCompanyInfo((prev) => ({
             ...prev,
-            [selectedBranch.id]: resetTarget,
+            [CONFIG_SCOPE]: resetTarget,
           }));
           setCompanyErrors({});
           showSuccess(
             'Company Information Reset',
-            `Values for ${selectedBranch.name} have been restored to ${selectedBranch.id === 'main' ? 'initial defaults' : 'empty state'}.`
+            'Company information has been restored to initial defaults.'
           );
         } catch (err) {
           showError('Reset Failed', err.response?.data?.message || 'Failed to reset company information.');
@@ -404,13 +405,11 @@ export default function SuperAdminSettings() {
           closeNotif();
           setIsSavingStatus(true);
           try {
-            if (selectedBranch.id === 'main') {
-              await updateSystemStatus('Under Maintenance');
-            }
+            await updateSystemStatus('Under Maintenance');
             window.dispatchEvent(new CustomEvent('system:status-changed', { detail: { status: 'Under Maintenance' } }));
             setBranchSystemStatus((prev) => ({
               ...prev,
-              [selectedBranch.id]: 'Under Maintenance',
+              [CONFIG_SCOPE]: 'Under Maintenance',
             }));
             showSuccess(
               'System Status Updated',
@@ -430,13 +429,11 @@ export default function SuperAdminSettings() {
     } else {
       setIsSavingStatus(true);
       try {
-        if (selectedBranch.id === 'main') {
-          await updateSystemStatus('Operational');
-        }
+        await updateSystemStatus('Operational');
         window.dispatchEvent(new CustomEvent('system:status-changed', { detail: { status: 'Operational' } }));
         setBranchSystemStatus((prev) => ({
           ...prev,
-          [selectedBranch.id]: newStatus,
+          [CONFIG_SCOPE]: newStatus,
         }));
         showSuccess(
           'System Status Restored',
@@ -583,31 +580,41 @@ export default function SuperAdminSettings() {
                   <div>
                     <p className="font-bold text-amber-900">No company information set for this branch yet.</p>
                     <p className="mt-0.5 text-amber-700 leading-relaxed">
-                      Enter the physical address, phone, email, and social profiles for <strong>{selectedBranch.name}</strong> below and click Save.
+                      The address, phone, and email for <strong>{selectedBranch.name}</strong> come from the Auth Module. Set them there first.
                     </p>
                   </div>
                 </div>
               )}
 
+              {/* Branch contact details are owned by the Auth Module, so they are read only here. */}
+              <div role="note" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900 flex items-start gap-2">
+                <Lock size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">Branch address, phone number, and email address are read only.</p>
+                  <p className="mt-1 text-amber-700 leading-relaxed">
+                    These details are managed centrally for all branches. If they must be changed, update them in the Auth Module.
+                  </p>
+                </div>
+              </div>
+
               {/* Address Field */}
               <div className="space-y-1.5">
                 <label htmlFor="company-address" className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                  {selectedBranch.id === 'main' ? 'Headquarters Address' : `${selectedBranch.name} Address`} <span className="text-red-500">*</span>
+                  {selectedBranch.id === 'main' ? 'Headquarters Address' : `${selectedBranch.name} Address`} <Lock size={11} className="inline text-gray-400" aria-label="Read only" />
                 </label>
                 <textarea
                   id="company-address"
                   rows={3}
                   value={currentCompanyInfo.address}
-                  onChange={(e) => handleCompanyFieldChange('address', e.target.value)}
+                  readOnly
+                  aria-readonly="true"
                   placeholder={
                     selectedBranch.id === 'main'
                       ? 'e.g. SBSI Building, 28 East Capitol Drive, Pasig City...'
                       : `Enter physical facility address for ${selectedBranch.name}...`
                   }
-                  className={`w-full rounded-xl border px-4 py-3 text-sm font-medium outline-none transition-all resize-y ${
-                    companyErrors.address
-                      ? 'border-red-300 bg-red-50/40 text-red-900 focus:ring-2 focus:ring-red-400'
-                      : 'border-gray-200 bg-white text-gray-900 focus:ring-2 focus:ring-[#252578]'
+                  className={`w-full rounded-xl border px-4 py-3 text-sm font-medium outline-none transition-all resize-none ${
+                    companyErrors.address ? 'border-red-300 bg-red-50/40 text-red-900' : 'border-gray-200 bg-gray-50 text-gray-600 cursor-not-allowed'
                   }`}
                 />
                 {companyErrors.address && (
@@ -623,7 +630,7 @@ export default function SuperAdminSettings() {
                 {/* Contact Phone */}
                 <div className="space-y-1.5">
                   <label htmlFor="company-phone" className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                    Contact Phone Number <span className="text-red-500">*</span>
+                    Contact Phone Number <Lock size={11} className="inline text-gray-400" aria-label="Read only" />
                   </label>
                   <div className="relative">
                     <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
@@ -633,12 +640,11 @@ export default function SuperAdminSettings() {
                       id="company-phone"
                       type="text"
                       value={currentCompanyInfo.contactNumber}
-                      onChange={(e) => handleCompanyFieldChange('contactNumber', e.target.value)}
+                      readOnly
+                      aria-readonly="true"
                       placeholder="e.g. +63 2 8635 9999"
                       className={`w-full rounded-xl border pl-10 pr-4 py-3 text-sm font-semibold outline-none transition-all ${
-                        companyErrors.contactNumber
-                          ? 'border-red-300 bg-red-50/40 text-red-900 focus:ring-2 focus:ring-red-400'
-                          : 'border-gray-200 bg-white text-gray-900 focus:ring-2 focus:ring-[#252578]'
+                        companyErrors.contactNumber ? 'border-red-300 bg-red-50/40 text-red-900' : 'border-gray-200 bg-gray-50 text-gray-600 cursor-not-allowed'
                       }`}
                     />
                   </div>
@@ -653,7 +659,7 @@ export default function SuperAdminSettings() {
                 {/* Contact Email */}
                 <div className="space-y-1.5">
                   <label htmlFor="company-email" className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                    Contact Email Address <span className="text-red-500">*</span>
+                    Contact Email Address <Lock size={11} className="inline text-gray-400" aria-label="Read only" />
                   </label>
                   <div className="relative">
                     <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
@@ -663,12 +669,11 @@ export default function SuperAdminSettings() {
                       id="company-email"
                       type="email"
                       value={currentCompanyInfo.contactEmail}
-                      onChange={(e) => handleCompanyFieldChange('contactEmail', e.target.value)}
+                      readOnly
+                      aria-readonly="true"
                       placeholder="e.g. support@sbsi.com.ph"
                       className={`w-full rounded-xl border pl-10 pr-4 py-3 text-sm font-semibold outline-none transition-all ${
-                        companyErrors.contactEmail
-                          ? 'border-red-300 bg-red-50/40 text-red-900 focus:ring-2 focus:ring-red-400'
-                          : 'border-gray-200 bg-white text-gray-900 focus:ring-2 focus:ring-[#252578]'
+                        companyErrors.contactEmail ? 'border-red-300 bg-red-50/40 text-red-900' : 'border-gray-200 bg-gray-50 text-gray-600 cursor-not-allowed'
                       }`}
                     />
                   </div>
