@@ -560,6 +560,71 @@ export const getCSIncomingTickets = async ({ limit = 50, page = 1, paginate = fa
 };
 
 
+/** Spec 0037: dropdown label to the server's SLA filter key. */
+export const SLA_FILTER_KEYS = {
+  Breached: 'breached',
+  'At Risk': 'at_risk',
+  'On Track': 'on_track',
+  Paused: 'paused',
+  Compliant: 'compliant',
+  'No SLA': 'no_sla',
+  'No SLA Configured': 'no_sla',
+  'SLA Unavailable': 'unavailable',
+};
+
+/**
+ * Spec 0037: one page of the CS Incoming or Assigned queue. The server applies the tab,
+ * every filter, the SLA filter, sorting, and pagination, and counts the tab badges and
+ * SLA summary cards, so the cards always match the rows across every page.
+ * (getCSIncomingTickets stays as it was for the pages that need every ticket.)
+ */
+export const getCSQueuePage = async ({
+  scope,
+  page = 1,
+  limit = 10,
+  tab,
+  search,
+  category,
+  customerName,
+  machine,
+  department,
+  type,
+  sla,
+  assignment,
+  sortBy,
+  sortDir,
+} = {}) => {
+  const params = { scope, page, limit, forceRefresh: true };
+  const optional = {
+    tab,
+    search: search?.trim(),
+    category,
+    customer_name: customerName,
+    machine,
+    department,
+    type: type && type !== 'all' ? type : undefined,
+    sla_status: sla ? (SLA_FILTER_KEYS[sla] || sla) : undefined,
+    assignment,
+    sort_by: sortBy,
+    sort_dir: sortDir,
+  };
+  Object.entries(optional).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') params[key] = value;
+  });
+
+  const response = await ticketClient.get('/cs-incoming', { params });
+  const d = response.data || {};
+  return {
+    tickets: d.data ?? d.incoming_tickets ?? [],
+    total: d.total ?? d.pagination?.total ?? 0,
+    page: d.page ?? d.pagination?.current_page ?? page,
+    perPage: d.per_page ?? d.pagination?.per_page ?? limit,
+    lastPage: Math.max(1, d.last_page ?? d.pagination?.last_page ?? 1),
+    slaSummary: d.slaSummary ?? d.sla_summary ?? null,
+    tabCounts: d.tab_counts ?? null,
+  };
+};
+
 export const clearIncomingTicketsCache = () => {
   incomingTicketsCache = null;
   incomingTicketsCacheAt = 0;
@@ -737,6 +802,21 @@ export const reopenTicket = async (ticketId, reason) => {
     reason: String(reason || '').trim(),
   });
   // Clear caches since ticket updates affect customer and CS dashboards
+  clearCustomerDashboardCache();
+  clearIncomingTicketsCache();
+  clearCSDashboardCache();
+  clearEmployeeTicketsCache();
+  notifyCsTicketRefresh();
+  return response.data;
+};
+
+/**
+ * Close a ticket through the state machine (allowed only if the superadmin
+ * Transition Matrix permits the current state -> Closed).
+ */
+export const closeTicket = async (ticketId) => {
+  const numericId = Number(String(ticketId).replace(/\D/g, ''));
+  const response = await ticketClient.post(`/tickets/${numericId}/close`);
   clearCustomerDashboardCache();
   clearIncomingTicketsCache();
   clearCSDashboardCache();
@@ -1128,6 +1208,9 @@ export const updateEmployeeTicket = async (ticketId, formData) => {
   try {
     response = await employeeClient.post(`/tickets/${ticketId}/employee-update`, processedPayload);
   } catch (err) {
+    // Only retry when employee-service could not be reached. A real response (e.g. a 422 blocked
+    // by the Transition Matrix) must reach the caller instead of being replaced by the retry's error.
+    if (err?.response) throw err;
     response = await ticketClient.post(`/tickets/${ticketId}/employee-update`, processedPayload);
   }
   clearEmployeeTicketsCache();
@@ -1318,6 +1401,18 @@ export const updateSLARule = async (id, payload) => {
 
 export const deleteSLARule = async (id) => {
   const response = await ticketClient.delete(`/superadmin/sla-rules/${id}`);
+  return response.data;
+};
+
+/**
+ * Recalculate SLA deadlines of all open tickets with the current rules and business hours.
+ */
+export const recalculateOpenTicketSlas = async () => {
+  const response = await ticketClient.post('/superadmin/sla/recalculate-open-tickets');
+  clearIncomingTicketsCache();
+  clearCSDashboardCache();
+  clearEmployeeTicketsCache();
+  notifyCsTicketRefresh();
   return response.data;
 };
 

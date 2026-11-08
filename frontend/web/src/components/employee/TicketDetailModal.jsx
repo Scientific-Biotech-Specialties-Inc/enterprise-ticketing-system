@@ -49,7 +49,8 @@ export default function TicketDetailModal({
     setTimelineSortOrder('asc');
     setInternalNotesList(ticket?.internalNotes || []);
 
-    const ticketId = ticket?.id || ticket?.ticket_ID;
+    // Use the numeric database ID; ticket.id is the display number (e.g. INC-OPS-202611-00042).
+    const ticketId = ticket?.ticket_ID || ticket?.id;
     if (ticketId) {
       getInternalNotes(ticketId)
         .then((notes) => {
@@ -191,7 +192,8 @@ export default function TicketDetailModal({
     setErrorMessage('');
     setSuccessMessage('');
 
-    const ticketId = ticket?.id || ticket?.ticket_ID;
+    // Use the numeric database ID; ticket.id is the display number (e.g. INC-OPS-202611-00042).
+    const ticketId = ticket?.ticket_ID || ticket?.id;
     try {
       const res = await addInternalNote(ticketId, trimmed);
       const newNote = res?.note || {
@@ -582,7 +584,7 @@ export default function TicketDetailModal({
                 {isInternal && (ticket.id || ticket.ticket_ID) && (
                   <div className="pt-2">
                     <InternalTicketMessageThread
-                      ticketId={ticket.id || ticket.ticket_ID}
+                      ticketId={ticket.ticket_ID || ticket.id}
                       ticket={ticket}
                       isClosed={ticket.status === 'Closed' || Number(ticket.ticket_status_ID) === 4}
                     />

@@ -274,17 +274,11 @@ class TicketDashboardService
             $slaBreachedCount = DB::table('tickets as t')
                 ->join('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
                 ->whereNotIn('ts.status_name', ['Closed', 'Resolved', 'Discarded', 'Cancelled'])
-                ->where(function ($q) {
-                    $q->where('t.sla_status', 'Breached')
-                      ->orWhere(function ($sq) {
-                          $sq->whereNotNull('t.resolution_due_at')
-                             ->where('t.resolution_due_at', '<', now());
-                      })
-                      ->orWhere(function ($sq) {
-                          $sq->whereNull('t.resolution_due_at')
-                             ->where('t.created_at', '<=', now()->subHours(48));
-                      });
-                })
+                // Spec 0037 (AC-13): the shared SLA rule, so this matches the CS queue cards.
+                ->whereRaw(...(function () {
+                    [$sql, $bindings] = $this->slaService->slaStatusKeySql('t', 'ts');
+                    return ["{$sql} = ?", array_merge($bindings, ['breached'])];
+                })())
                 ->count();
             $sum['sla_breached'] = $slaBreachedCount;
             $sum['breached'] = $slaBreachedCount;
@@ -319,6 +313,10 @@ class TicketDashboardService
                     't.priority_ID',
                     't.resolution_due_at',
                     't.sla_status',
+                    't.sla_rule_id',
+                    't.sla_ID',
+                    't.branch_sla_policy_id',
+                    't.branch_priority_override_id',
                     't.resolved_at',
                     't.closed_at',
                     'm.machine_name',
@@ -406,6 +404,12 @@ class TicketDashboardService
                     't.first_response_at',
                     't.resolution_sla_status',
                     't.response_sla_status',
+                    // Spec 0037 (AC-12, AC-13): the SLA rule reads the source columns and stored status.
+                    't.sla_status',
+                    't.sla_rule_id',
+                    't.sla_ID',
+                    't.branch_sla_policy_id',
+                    't.branch_priority_override_id',
                     'pc.category_name',
                     'ts.status_name',
                     'tp.priority_name',
@@ -433,18 +437,39 @@ class TicketDashboardService
                 $query->where('t.is_internal', false);
             }
 
-            // TS023: Search and combinable filters
+            // Spec 0037 (AC-14, AC-16): the CS queue tabs. No scope keeps the old
+            // behaviour (every ticket), which CS History, the manager pages, and
+            // Messaging rely on.
+            $scope = $filters['scope'] ?? null;
+            if ($scope === 'incoming') {
+                $this->applyIncomingScope($query);
+            } elseif ($scope === 'assigned') {
+                $this->applyAssignedScope($query);
+            }
+
+            // Tab counts cover the whole scope, before any filter, as the tabs always have.
+            $tabCounts = $scope ? $this->csTabCounts(clone $query, $scope) : null;
+
+            // TS023: Search and combinable filters. Every word must match some field.
             if (!empty($filters['search'])) {
-                $term = '%' . trim($filters['search']) . '%';
-                $query->where(function ($q) use ($term) {
-                    $q->where('t.ticket_number', 'LIKE', $term)
-                      ->orWhere('t.ticket_ID', 'LIKE', $term)
-                      ->orWhere('t.title', 'LIKE', $term)
-                      ->orWhere('t.description', 'LIKE', $term)
-                      ->orWhere('c.client_name', 'LIKE', $term)
-                      ->orWhere('m.machine_name', 'LIKE', $term)
-                      ->orWhere('m.serial_number', 'LIKE', $term);
-                });
+                $tokens = preg_split('/[\s,]+/', trim((string) $filters['search']), -1, PREG_SPLIT_NO_EMPTY);
+                foreach ($tokens as $token) {
+                    $term = '%' . $token . '%';
+                    $query->where(function ($q) use ($term) {
+                        $q->where('t.ticket_number', 'LIKE', $term)
+                          ->orWhere('t.ticket_ID', 'LIKE', $term)
+                          ->orWhere('t.title', 'LIKE', $term)
+                          ->orWhere('t.description', 'LIKE', $term)
+                          ->orWhere('c.client_name', 'LIKE', $term)
+                          ->orWhereRaw("TRIM(CONCAT(COALESCE(req.first_name, ''), ' ', COALESCE(req.last_name, ''))) LIKE ?", [$term])
+                          ->orWhere('m.machine_name', 'LIKE', $term)
+                          ->orWhere('m.serial_number', 'LIKE', $term)
+                          ->orWhere('pc.category_name', 'LIKE', $term)
+                          ->orWhere('ts.status_name', 'LIKE', $term)
+                          ->orWhere('tp.priority_name', 'LIKE', $term)
+                          ->orWhere('e.department', 'LIKE', $term);
+                    });
+                }
             }
 
             if (!empty($filters['status'])) {
@@ -459,8 +484,23 @@ class TicketDashboardService
                 $query->where('e.department', trim($filters['department']));
             }
 
+            if (!empty($filters['category'])) {
+                $query->where('pc.category_name', trim($filters['category']));
+            }
+
             if (!empty($filters['customer_id'])) {
                 $query->where('t.created_by', (int) $filters['customer_id']);
+            } elseif (!empty($filters['customer_name'])) {
+                // Exact name, as shown in the queue: the client, or the requester of an internal ticket.
+                $name = trim($filters['customer_name']);
+                $query->where(function ($q) use ($name) {
+                    $q->where(function ($ext) use ($name) {
+                        $ext->where('t.is_internal', false)->where('c.client_name', $name);
+                    })->orWhere(function ($int) use ($name) {
+                        $int->where('t.is_internal', true)
+                            ->whereRaw("TRIM(CONCAT(COALESCE(req.first_name, ''), ' ', COALESCE(req.last_name, ''))) = ?", [$name]);
+                    });
+                });
             } elseif (!empty($filters['customer'])) {
                 $query->where('c.client_name', 'LIKE', '%' . trim($filters['customer']) . '%');
             }
@@ -469,112 +509,73 @@ class TicketDashboardService
                 $query->where('t.machine_ID', (int) $filters['machine_id']);
             } elseif (!empty($filters['machine'])) {
                 $query->where(function ($q) use ($filters) {
-                    $mVal = '%' . trim($filters['machine']) . '%';
+                    $raw = trim($filters['machine']);
+                    $mVal = '%' . $raw . '%';
                     $q->where('m.machine_name', 'LIKE', $mVal)
-                      ->orWhere('m.serial_number', 'LIKE', $mVal);
+                      ->orWhere('m.serial_number', 'LIKE', $mVal)
+                      // Dropdown labels read "Name - Serial".
+                      ->orWhereRaw("CONCAT(COALESCE(m.machine_name, ''), ' - ', COALESCE(m.serial_number, '')) = ?", [$raw]);
                 });
             }
 
-            // Calculate SLA summary counts across this filtered scope before SLA filter
-            $summaryScope = (clone $query)->select(
-                't.ticket_ID',
-                't.ticket_status_ID',
-                'ts.status_name',
-                't.resolution_due_at',
-                't.resolved_at',
-                't.closed_at',
-                't.created_at',
-                't.sla_status'
-            )->get();
+            if (!empty($filters['assignment'])) {
+                $this->applyAssignmentFilter($query, (string) $filters['assignment']);
+            }
+
+            if ($scope && !empty($filters['tab'])) {
+                $this->applyCsTab($query, $scope, (string) $filters['tab']);
+            }
+
+            // Spec 0037 (AC-13): one SLA rule. The same CASE expression drives the summary
+            // counts, the sla_status filter, and (through computeTicketSlaMetrics) the row badges.
+            [$slaKeySql, $slaKeyBindings] = $this->slaService->slaStatusKeySql('t', 'ts');
+
+            // Summary counts over the filtered scope, before the SLA filter and pagination.
+            $summaryRows = DB::query()
+                ->fromSub((clone $query)->select('t.ticket_ID')->selectRaw("{$slaKeySql} as sla_key", $slaKeyBindings), 'scoped')
+                ->select('sla_key', DB::raw('COUNT(*) as aggregate'))
+                ->groupBy('sla_key')
+                ->pluck('aggregate', 'sla_key');
 
             $slaSummary = [
-                'total' => $summaryScope->count(),
+                'total' => (int) $summaryRows->sum(),
                 'breached' => 0,
                 'at_risk' => 0,
                 'on_track' => 0,
                 'paused' => 0,
                 'compliant' => 0,
+                'no_sla' => 0,
+                'unavailable' => 0,
             ];
-
-            foreach ($summaryScope as $st) {
-                $m = $this->slaService->computeTicketSlaMetrics($st);
-                $stKey = strtolower(str_replace(' ', '_', $m['status']));
-                if (isset($slaSummary[$stKey])) {
-                    $slaSummary[$stKey]++;
+            foreach ($summaryRows as $key => $count) {
+                if (array_key_exists($key, $slaSummary)) {
+                    $slaSummary[$key] = (int) $count;
                 }
             }
 
-            // Filter by SLA status if requested
-            if (!empty($filters['sla_status'])) {
-                $slaFilterVal = strtolower(trim($filters['sla_status']));
-                if (!in_array($slaFilterVal, ['all', 'all sla', 'all sla statuses'])) {
-                    if ($slaFilterVal === 'breached') {
-                        $query->where(function ($q) {
-                            $q->where(function ($sq) {
-                                $sq->whereNotNull('t.resolution_due_at')
-                                   ->where('t.resolution_due_at', '<', now());
-                            })->orWhere(function ($sq) {
-                                $sq->whereNull('t.resolution_due_at')
-                                   ->where('t.created_at', '<=', now()->subHours(48));
-                            });
-                        })->whereNotIn('ts.status_name', ['Closed', 'Resolved', 'On Hold']);
-                    } elseif ($slaFilterVal === 'at_risk' || $slaFilterVal === 'at risk') {
-                        $query->whereNotIn('ts.status_name', ['Closed', 'Resolved', 'On Hold'])
-                            ->where(function ($q) {
-                                $q->where(function ($sq) {
-                                    $sq->whereNotNull('t.resolution_due_at')
-                                       ->where('t.resolution_due_at', '>=', now())
-                                       ->where('t.resolution_due_at', '<=', now()->addHours(4));
-                                })->orWhere(function ($sq) {
-                                    $sq->whereNull('t.resolution_due_at')
-                                       ->where('t.created_at', '<=', now()->subHours(24))
-                                       ->where('t.created_at', '>', now()->subHours(48));
-                                });
-                            });
-                    } elseif ($slaFilterVal === 'paused') {
-                        $query->where(function ($q) {
-                            $q->where('ts.status_name', 'On Hold')
-                               ->orWhere('t.ticket_status_ID', 11);
-                        });
-                    } elseif ($slaFilterVal === 'on_track' || $slaFilterVal === 'on track') {
-                        $query->whereNotIn('ts.status_name', ['Closed', 'Resolved', 'On Hold'])
-                            ->where(function ($q) {
-                                $q->where(function ($sq) {
-                                    $sq->whereNotNull('t.resolution_due_at')
-                                       ->where('t.resolution_due_at', '>', now()->addHours(4));
-                                })->orWhere(function ($sq) {
-                                    $sq->whereNull('t.resolution_due_at')
-                                       ->where('t.created_at', '>', now()->subHours(24));
-                                });
-                            });
-                    } elseif ($slaFilterVal === 'compliant') {
-                        $query->whereIn('ts.status_name', ['Closed', 'Resolved'])
-                            ->where(function ($q) {
-                                $q->whereNull('t.resolution_due_at')
-                                   ->orWhereRaw('COALESCE(t.resolved_at, t.closed_at, NOW()) <= t.resolution_due_at');
-                            });
-                    } elseif ($slaFilterVal === 'no_sla' || $slaFilterVal === 'no_sla_configured') {
-                        $query->where(function ($q) {
-                            $q->where('t.sla_status', 'No SLA Configured')
-                              ->orWhere(function ($sq) {
-                                  $sq->whereNull('t.resolution_due_at')
-                                     ->whereNull('t.sla_rule_id')
-                                     ->whereNull('t.sla_ID')
-                                     ->whereNull('t.branch_sla_policy_id');
-                              });
-                        });
-                    }
-                }
+            // Filter by SLA status if requested (same rule, in SQL, so it covers every page).
+            $slaFilterKey = SLAService::normalizeSlaFilterKey($filters['sla_status'] ?? null);
+            if ($slaFilterKey !== null && $slaFilterKey !== 'invalid') {
+                $query->whereRaw("{$slaKeySql} = ?", array_merge($slaKeyBindings, [$slaFilterKey]));
             }
 
             // Sorting
             $sortBy = $filters['sort_by'] ?? null;
             $sortDir = strtolower($filters['sort_dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
 
-            if ($sortBy === 'sla_due_date' || $sortBy === 'resolution_due_at' || $sortBy === 'due_date') {
-                $query->orderBy(DB::raw('COALESCE(t.resolution_due_at, DATE_ADD(t.created_at, INTERVAL 48 HOUR))'), $sortDir);
+            if ($sortBy === 'sla_urgent') {
+                // Breached first, then At Risk, then everything else; soonest due date first within each.
+                $query->orderByRaw("FIELD({$slaKeySql}, 'at_risk', 'breached') DESC", $slaKeyBindings)
+                    ->orderByRaw('t.resolution_due_at IS NULL')
+                    ->orderBy('t.resolution_due_at', 'asc');
+            } elseif ($sortBy === 'sla_due_date' || $sortBy === 'resolution_due_at' || $sortBy === 'due_date') {
+                // Tickets with no due date sort last (spec 0037: no guessed 48 hour deadline).
+                $query->orderByRaw('t.resolution_due_at IS NULL')->orderBy('t.resolution_due_at', $sortDir);
             } elseif ($sortBy === 'sla_status') {
-                $query->orderByRaw("CASE WHEN ts.status_name = 'On Hold' THEN 4 WHEN COALESCE(t.resolution_due_at, DATE_ADD(t.created_at, INTERVAL 48 HOUR)) < NOW() THEN 1 WHEN COALESCE(t.resolution_due_at, DATE_ADD(t.created_at, INTERVAL 48 HOUR)) <= DATE_ADD(NOW(), INTERVAL 4 HOUR) THEN 2 ELSE 3 END " . ($sortDir === 'asc' ? 'ASC' : 'DESC'));
+                $query->orderByRaw(
+                    "FIELD({$slaKeySql}, 'breached', 'at_risk', 'on_track', 'paused', 'compliant', 'no_sla', 'unavailable') " . ($sortDir === 'asc' ? 'ASC' : 'DESC'),
+                    $slaKeyBindings
+                );
             } else {
                 $query->orderByDesc(DB::raw('COALESCE(t.updated_at, t.created_at)'));
             }
@@ -706,7 +707,16 @@ class TicketDashboardService
                     'per_page' => $paginated->perPage(),
                     'current_page' => $paginated->currentPage(),
                     'last_page' => $paginated->lastPage(),
-                ]
+                ],
+                // Spec 0037 (AC-14) response fields. The keys above stay for existing callers.
+                'data' => $incomingTickets,
+                'total' => $paginated->total(),
+                'page' => $paginated->currentPage(),
+                'per_page' => $paginated->perPage(),
+                'last_page' => $paginated->lastPage(),
+                'slaSummary' => $slaSummary,
+                'scope' => $scope,
+                'tab_counts' => $tabCounts,
             ];
         };
 
@@ -718,6 +728,118 @@ class TicketDashboardService
         return $hasFilters
             ? $fetchQuery()
             : Cache::remember($cacheKey, 60, $fetchQuery);
+    }
+
+    /** A pending reassignment request exists for the ticket. */
+    private function pendingReassignSql(): string
+    {
+        return "EXISTS (SELECT 1 FROM reassignment_requests rr WHERE rr.ticket_id = t.ticket_ID AND rr.status = 'pending')";
+    }
+
+    private function hasAssignmentSql(): string
+    {
+        return 'EXISTS (SELECT 1 FROM ticket_assignments ta WHERE ta.ticket_ID = t.ticket_ID)';
+    }
+
+    private function acceptedAssignmentSql(): string
+    {
+        return "EXISTS (SELECT 1 FROM ticket_assignments ta WHERE ta.ticket_ID = t.ticket_ID AND ta.assignment_status = 'accepted')";
+    }
+
+    /** Assigned to someone who has not accepted yet, or explicitly Pending Assignment. */
+    private function pendingAssignmentSql(): string
+    {
+        return "(ts.status_name = 'Pending Assignment' OR ({$this->hasAssignmentSql()} AND NOT {$this->acceptedAssignmentSql()}))";
+    }
+
+    /**
+     * Spec 0037: the Incoming tab's membership, formerly computed in CSIncoming.jsx.
+     * Excludes tickets with a pending reassignment, accepted tickets unless Reopened,
+     * and Pending Evaluation tickets unless Reopened.
+     */
+    public function applyIncomingScope($query): void
+    {
+        $query->whereRaw("NOT {$this->pendingReassignSql()}")
+            ->whereRaw("NOT ({$this->acceptedAssignmentSql()} AND ts.status_name NOT IN ('Reopened', 'Reopen'))")
+            ->where('ts.status_name', '!=', 'Pending Evaluation');
+    }
+
+    /**
+     * Spec 0037: the Assigned tab's membership, formerly computed in CSAssigned.jsx.
+     */
+    public function applyAssignedScope($query): void
+    {
+        $query->where(function ($q) {
+            $q->whereRaw($this->pendingReassignSql())
+              ->orWhereIn('ts.status_name', ['Pending Assignment', 'In Progress', 'Pending Evaluation', 'Resolved', 'Pending', 'Closed', 'On Hold'])
+              ->orWhereRaw($this->hasAssignmentSql());
+        });
+    }
+
+    /** The assignment status dropdown on the Incoming tab. */
+    private function applyAssignmentFilter($query, string $assignment): void
+    {
+        match (strtolower(str_replace([' ', '-'], '_', trim($assignment)))) {
+            'pending_assignment' => $query->whereRaw($this->pendingAssignmentSql()),
+            'pending_reassign' => $query->whereRaw($this->pendingReassignSql()),
+            'pending_evaluation' => $query->where('ts.status_name', 'Pending Evaluation'),
+            default => null,
+        };
+    }
+
+    /** Sub tabs of each scope. */
+    private function applyCsTab($query, string $scope, string $tab): void
+    {
+        if ($scope === 'incoming') {
+            match ($tab) {
+                'open' => $query->whereRaw("NOT {$this->pendingAssignmentSql()}"),
+                'pending_assignment' => $query->whereRaw($this->pendingAssignmentSql()),
+                default => null,
+            };
+            return;
+        }
+
+        match ($tab) {
+            'in_progress' => $query->where('ts.status_name', 'In Progress'),
+            'pending_evaluation' => $query->where('ts.status_name', 'Pending Evaluation'),
+            'on_hold' => $query->where('ts.status_name', 'On Hold'),
+            'reassigned' => $query->whereRaw($this->pendingReassignSql()),
+            'resolved_closed' => $query->whereIn('ts.status_name', ['Resolved', 'Closed']),
+            default => null,
+        };
+    }
+
+    /** Tab badge counts over the whole scope. */
+    private function csTabCounts($scopeQuery, string $scope): array
+    {
+        $count = fn (string $sql) => "SUM(CASE WHEN {$sql} THEN 1 ELSE 0 END)";
+        $base = $scopeQuery->select([]);
+
+        if ($scope === 'incoming') {
+            $row = $base->selectRaw('COUNT(*) as all_count')
+                ->selectRaw($count($this->pendingAssignmentSql()) . ' as pending_count')
+                ->first();
+            $all = (int) ($row->all_count ?? 0);
+            $pending = (int) ($row->pending_count ?? 0);
+            return ['all' => $all, 'pending' => $pending, 'open' => $all - $pending];
+        }
+
+        $row = $base->selectRaw('COUNT(*) as all_count')
+            ->selectRaw($count("ts.status_name = 'In Progress'") . ' as in_progress')
+            ->selectRaw($count("ts.status_name = 'Pending Evaluation'") . ' as pending_eval')
+            ->selectRaw($count($this->pendingReassignSql()) . ' as reassigned')
+            ->selectRaw($count("ts.status_name = 'On Hold'") . ' as on_hold')
+            ->selectRaw($count("ts.status_name IN ('Resolved', 'Closed')") . ' as resolved_closed')
+            ->first();
+
+        return [
+            'all' => (int) ($row->all_count ?? 0),
+            'inProgress' => (int) ($row->in_progress ?? 0),
+            'pendingEval' => (int) ($row->pending_eval ?? 0),
+            'reassigned' => (int) ($row->reassigned ?? 0),
+            'onHold' => (int) ($row->on_hold ?? 0),
+            'resolvedClosed' => (int) ($row->resolved_closed ?? 0),
+        ];
     }
 
     /**
@@ -744,10 +866,32 @@ class TicketDashboardService
                 'label' => "{$m->machine_name} - {$m->serial_number}",
             ]);
 
+        // Spec 0037: the CS queue pages its rows on the server, so dropdown choices
+        // come from here rather than from whichever tickets are on screen.
+        $categories = DB::table('tickets as t')
+            ->join('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
+            ->distinct()
+            ->orderBy('pc.category_name')
+            ->pluck('pc.category_name')
+            ->filter()
+            ->values();
+
+        $customers = DB::table('tickets as t')
+            ->leftJoin('clients as c', 'c.id', '=', 't.created_by')
+            ->leftJoin('employees as req', 'req.emp_id', '=', 't.requested_by')
+            ->selectRaw("DISTINCT CASE WHEN t.is_internal = 1 THEN TRIM(CONCAT(COALESCE(req.first_name, ''), ' ', COALESCE(req.last_name, ''))) ELSE c.client_name END as name")
+            ->pluck('name')
+            ->filter(fn ($n) => is_string($n) && trim($n) !== '')
+            ->unique()
+            ->sort()
+            ->values();
+
         return [
             'departments' => $departments,
             'statuses' => $statuses,
             'machines' => $machines,
+            'categories' => $categories,
+            'customers' => $customers,
         ];
     }
 

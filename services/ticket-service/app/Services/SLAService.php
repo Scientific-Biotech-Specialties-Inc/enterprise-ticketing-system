@@ -26,6 +26,33 @@ class SLAService
         $this->slaRepository = $slaRepository;
     }
 
+    /** The four columns that record where a ticket's SLA came from (spec 0037). */
+    public const SLA_SOURCE_COLUMNS = ['branch_sla_policy_id', 'branch_priority_override_id', 'sla_rule_id', 'sla_ID'];
+
+    /**
+     * Source column values for a resolveSlaPolicy() result: the resolved source is set
+     * and the other three are null, so at most one is ever non null (spec 0037, AC-8, AC-9).
+     */
+    public function slaSourceColumns(array $resolved): array
+    {
+        $columns = [];
+        foreach (self::SLA_SOURCE_COLUMNS as $column) {
+            $columns[$column] = $resolved[$column] ?? null;
+        }
+        return $columns;
+    }
+
+    /** True when resolveSlaPolicy() found no SLA source at all. */
+    public function hasNoSlaSource(array $resolved): bool
+    {
+        foreach (self::SLA_SOURCE_COLUMNS as $column) {
+            if (!empty($resolved[$column])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /**
      * Shared helper to determine the department ID for SLA rule lookup.
      * Mirrors creation logic:
@@ -43,6 +70,15 @@ class SLAService
         }
 
         if (empty($ticket->is_internal)) {
+            // Customer tickets are created against the department sent by the client
+            // (e.g. Service = 1), which is not stored on the ticket. Reuse the department
+            // of the SLA rule assigned at creation so recalculation stays consistent.
+            if (!empty($ticket->sla_rule_id)) {
+                $ruleDeptId = DB::table('sla_rules')->where('id', $ticket->sla_rule_id)->value('department_id');
+                if (!empty($ruleDeptId)) {
+                    return (int) $ruleDeptId;
+                }
+            }
             return 2;
         }
 
@@ -181,8 +217,48 @@ class SLAService
     }
 
     /**
-     * Calculate future due date considering working business hours (Monday-Friday 8AM-5PM).
-     * If business hours enforcement is disabled, falls back to a 24/7 calendar.
+     * Recalculate SLA deadlines for every open ticket using the current SLA rules
+     * and business hours. Used after a superadmin changes business hours or limits,
+     * since those changes otherwise only affect deadlines calculated afterwards.
+     *
+     * @return array{recalculated:int, failed:int}
+     */
+    public function recalculateOpenTickets(): array
+    {
+        $ids = DB::table('tickets as t')
+            ->leftJoin('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
+            ->where(function ($q) {
+                $q->whereNull('ts.status_name')
+                  ->orWhereNotIn(DB::raw('LOWER(ts.status_name)'), ['closed', 'resolved', 'discarded', 'cancelled']);
+            })
+            ->pluck('t.ticket_ID');
+
+        $recalculated = 0;
+        $failed = 0;
+        foreach ($ids as $id) {
+            try {
+                $this->recalculateForReclassification((int) $id);
+                $recalculated++;
+            } catch (\Throwable $e) {
+                $failed++;
+                \Illuminate\Support\Facades\Log::warning("SLA bulk recalculation failed for ticket {$id}: " . $e->getMessage());
+            }
+        }
+
+        return ['recalculated' => $recalculated, 'failed' => $failed];
+    }
+
+    /**
+     * Calculate a future due date that only counts configured working hours.
+     *
+     * Working hours come from the superadmin "business_hours" configuration
+     * (timezone, start/end time, working days). Counting happens in that local
+     * timezone so "08:00 to 17:00" means the business's own clock, and the result
+     * is returned in the original timezone. When business hours are disabled
+     * the limit is counted around the clock (24/7).
+     *
+     * @param array $config Optional override (same shape as getBusinessHoursConfig()).
+     *                      The legacy key 'businessHoursEnabled' is still honoured.
      */
     public function addBusinessHours(Carbon $start, int $minutes, array $config = []): Carbon
     {
@@ -190,63 +266,93 @@ class SLAService
             return $start->copy();
         }
 
-        $windowConfig = !empty($config) ? $config : TicketConfigurationService::getWindowConfig();
-        $enabled = (bool) ($windowConfig['businessHoursEnabled'] ?? true);
+        $hours = $this->normalizeBusinessHours(!empty($config) ? $config : TicketConfigurationService::getBusinessHoursConfig());
 
-        if (!$enabled) {
+        if (!$hours['enabled']) {
             return $start->copy()->addMinutes($minutes);
         }
 
-        $current = $start->copy();
+        $originalTimezone = $start->getTimezone();
+        $current = $this->advanceToNextBusinessWindow($start->copy()->setTimezone($hours['timezone']), $hours);
         $remainingMinutes = $minutes;
 
-        // Ensure current time is moved forward to start of business hours if outside
-        $current = $this->advanceToNextBusinessWindow($current);
-
         while ($remainingMinutes > 0) {
-            $endOfDay = $current->copy()->setTime(17, 0, 0);
-            $availableToday = $current->diffInMinutes($endOfDay, false);
+            $endOfDay = $current->copy()->setTime($hours['endHour'], $hours['endMinute'], 0);
+            $availableToday = intdiv(max(0, $endOfDay->getTimestamp() - $current->getTimestamp()), 60);
 
             if ($remainingMinutes <= $availableToday) {
-                return $current->addMinutes($remainingMinutes);
+                return $current->addMinutes($remainingMinutes)->setTimezone($originalTimezone);
             }
 
             $remainingMinutes -= $availableToday;
-            // Move to 08:00 of next day, then advance if weekend
-            $current = $current->addDay()->setTime(8, 0, 0);
-            $current = $this->advanceToNextBusinessWindow($current);
+            $current = $this->advanceToNextBusinessWindow(
+                $current->addDay()->setTime($hours['startHour'], $hours['startMinute'], 0),
+                $hours
+            );
+        }
+
+        return $current->setTimezone($originalTimezone);
+    }
+
+    /**
+     * Advance a timestamp (already in the business timezone) to the next working moment.
+     */
+    protected function advanceToNextBusinessWindow(Carbon $time, ?array $hours = null): Carbon
+    {
+        $hours = $hours ?? $this->normalizeBusinessHours(TicketConfigurationService::getBusinessHoursConfig());
+        $current = $time->copy();
+
+        // Bounded loop: skipping at most two weeks guarantees termination.
+        for ($i = 0; $i < 15; $i++) {
+            $startOfDay = $current->copy()->setTime($hours['startHour'], $hours['startMinute'], 0);
+            $endOfDay = $current->copy()->setTime($hours['endHour'], $hours['endMinute'], 0);
+
+            if (!in_array($current->dayOfWeekIso, $hours['workingDays'], true) || $current->gte($endOfDay)) {
+                $current = $current->addDay()->setTime($hours['startHour'], $hours['startMinute'], 0);
+                continue;
+            }
+
+            return $current->lt($startOfDay) ? $startOfDay : $current;
         }
 
         return $current;
     }
 
     /**
-     * Advance a timestamp to the next available working business window.
+     * Normalise a business hours config into parsed hour/minute parts.
      */
-    protected function advanceToNextBusinessWindow(Carbon $time): Carbon
+    protected function normalizeBusinessHours(array $config): array
     {
-        $current = $time->copy();
+        $defaults = TicketConfigurationService::DEFAULT_BUSINESS_HOURS;
+        $enabled = array_key_exists('enabled', $config)
+            ? (bool) $config['enabled']
+            : (bool) ($config['businessHoursEnabled'] ?? $defaults['enabled']);
 
-        while (true) {
-            // Saturday or Sunday
-            if ($current->isWeekend()) {
-                $current = $current->next(Carbon::MONDAY)->setTime(8, 0, 0);
-                continue;
-            }
-
-            // Before 08:00
-            if ($current->hour < 8) {
-                return $current->setTime(8, 0, 0);
-            }
-
-            // At or after 17:00
-            if ($current->hour >= 17) {
-                $current = $current->addDay()->setTime(8, 0, 0);
-                continue;
-            }
-
-            return $current;
+        $timezone = (string) ($config['timezone'] ?? $defaults['timezone']);
+        if (!in_array($timezone, \DateTimeZone::listIdentifiers(), true)) {
+            $timezone = 'UTC';
         }
+
+        [$startHour, $startMinute] = array_map('intval', explode(':', (string) ($config['startTime'] ?? $defaults['startTime'])) + [0, 0]);
+        [$endHour, $endMinute] = array_map('intval', explode(':', (string) ($config['endTime'] ?? $defaults['endTime'])) + [0, 0]);
+        if ($endHour * 60 + $endMinute <= $startHour * 60 + $startMinute) {
+            [$startHour, $startMinute, $endHour, $endMinute] = [8, 0, 17, 0];
+        }
+
+        $days = array_values(array_filter(
+            array_map('intval', (array) ($config['workingDays'] ?? $defaults['workingDays'])),
+            fn ($d) => $d >= 1 && $d <= 7
+        ));
+
+        return [
+            'enabled' => $enabled,
+            'timezone' => $timezone,
+            'startHour' => $startHour,
+            'startMinute' => $startMinute,
+            'endHour' => $endHour,
+            'endMinute' => $endMinute,
+            'workingDays' => $days ?: [1, 2, 3, 4, 5],
+        ];
     }
 
     /**
@@ -265,19 +371,17 @@ class SLAService
 
         $resolved = $this->resolveSlaPolicy($departmentId, $categoryId, $priority, $branchId, $defaultSlaPolicy);
 
-        $responseDueAt = $this->addBusinessHours($createdAtObj, (int) $resolved['response_time_limit']);
-        $resolutionDueAt = $this->addBusinessHours($createdAtObj, (int) $resolved['resolution_time_limit']);
+        // Spec 0037 (AC-8): due dates only exist when an SLA source resolved. With no
+        // source, the ticket is honestly "No SLA Configured" rather than given made up dates.
+        $noSource = $this->hasNoSlaSource($resolved);
+        $responseDueAt = $noSource ? null : $this->addBusinessHours($createdAtObj, (int) $resolved['response_time_limit']);
+        $resolutionDueAt = $noSource ? null : $this->addBusinessHours($createdAtObj, (int) $resolved['resolution_time_limit']);
 
-        $slaStatus = 'On Track';
-        if (empty($resolved['sla_rule_id']) && empty($resolved['sla_ID']) && empty($resolved['branch_sla_policy_id']) && empty($resolved['branch_priority_override_id'])) {
-            $slaStatus = 'No SLA Configured';
-        }
+        $slaStatus = $noSource ? 'No SLA Configured' : 'On Track';
 
         $update = [
             'branch_id' => $branchId,
-            'branch_priority_override_id' => $resolved['branch_priority_override_id'],
-            'sla_rule_id' => $resolved['sla_rule_id'],
-            'sla_ID' => $resolved['sla_ID'],
+        ] + $this->slaSourceColumns($resolved) + [
             'sla_started_at' => $createdAtObj,
             'sla_paused_at' => null,
             'sla_paused_total_seconds' => 0,
@@ -294,8 +398,8 @@ class SLAService
             'sla_ID' => $resolved['sla_ID'],
             'branch_sla_policy_id' => $resolved['branch_sla_policy_id'],
             'branch_priority_override_id' => $resolved['branch_priority_override_id'],
-            'response_due_at' => $responseDueAt->toDateTimeString(),
-            'resolution_due_at' => $resolutionDueAt->toDateTimeString(),
+            'response_due_at' => $responseDueAt?->toDateTimeString(),
+            'resolution_due_at' => $resolutionDueAt?->toDateTimeString(),
             'response_time_limit' => $resolved['response_time_limit'],
             'resolution_time_limit' => $resolved['resolution_time_limit'],
             'is_fallback' => $resolved['is_fallback'],
@@ -427,7 +531,7 @@ class SLAService
 
             $now = now();
             $slaStatus = 'On Track';
-            if (empty($resolvedPolicy['sla_rule_id']) && empty($resolvedPolicy['sla_ID']) && empty($resolvedPolicy['branch_sla_policy_id']) && empty($resolvedPolicy['branch_priority_override_id'])) {
+            if ($this->hasNoSlaSource($resolvedPolicy)) {
                 $slaStatus = 'No SLA Configured';
             } elseif ($now->gt($newResolutionDueAt)) {
                 $slaStatus = 'Breached';
@@ -435,13 +539,16 @@ class SLAService
                 $slaStatus = 'At Risk';
             }
 
+            // A ticket on hold keeps its clock paused; resume() extends the deadline later.
+            if (!empty($ticket->sla_paused_at)) {
+                $slaStatus = 'Paused';
+            }
+
             $update = [
                 'problem_category_ID' => $categoryId,
                 'priority_ID' => $priorityId,
                 'branch_id' => $branch,
-                'branch_priority_override_id' => $resolvedPolicy['branch_priority_override_id'] ?? null,
-                'sla_rule_id' => $resolvedPolicy['sla_rule_id'] ?? null,
-                'sla_ID' => $resolvedPolicy['sla_ID'] ?? null,
+            ] + $this->slaSourceColumns($resolvedPolicy) + [
                 'resolution_due_at' => $newResolutionDueAt,
                 'sla_status' => $slaStatus,
                 'updated_at' => now(),
@@ -460,6 +567,14 @@ class SLAService
                 $update['resolution_sla_status'] = $now->gt($newResolutionDueAt) ? 'BREACHED' : 'PENDING';
             }
 
+            // Spec 0037: no SLA source means no due dates (No SLA Configured, never a guessed deadline).
+            if ($this->hasNoSlaSource($resolvedPolicy)) {
+                $update['resolution_due_at'] = null;
+                $update['response_due_at'] = null;
+                $update['resolution_sla_status'] = null;
+                $newResponseDueAt = null;
+            }
+
             DB::table('tickets')->where('ticket_ID', $ticketId)->update($update);
 
             return [
@@ -467,7 +582,7 @@ class SLAService
                 'old_response_due_at' => $oldResponseDueAt,
                 'new_response_due_at' => is_string($newResponseDueAt) ? $newResponseDueAt : ($newResponseDueAt ? $newResponseDueAt->toDateTimeString() : null),
                 'old_resolution_due_at' => $oldResolutionDueAt,
-                'new_resolution_due_at' => $newResolutionDueAt->toDateTimeString(),
+                'new_resolution_due_at' => $update['resolution_due_at'] ? $newResolutionDueAt->toDateTimeString() : null,
                 'resolved_policy' => $resolvedPolicy,
                 'sla_status' => $slaStatus,
             ];
@@ -506,17 +621,19 @@ class SLAService
                 'sla_paused_at' => null,
                 'sla_paused_total_seconds' => 0,
                 'resolution_due_at' => $newResolutionDueAt,
-                'sla_rule_id' => $resolvedPolicy['sla_rule_id'] ?? null,
-                'sla_ID' => $resolvedPolicy['sla_ID'] ?? null,
-                'branch_priority_override_id' => $resolvedPolicy['branch_priority_override_id'] ?? null,
                 'updated_at' => $now,
-            ];
+            ] + $this->slaSourceColumns($resolvedPolicy);
+
+            if ($this->hasNoSlaSource($resolvedPolicy)) {
+                $update['resolution_due_at'] = null;
+                $newResolutionDueAt = null;
+            }
 
             DB::table('tickets')->where('ticket_ID', $ticketId)->update($update);
 
             return [
                 'ticket_ID' => $ticketId,
-                'resolution_due_at' => $newResolutionDueAt->toDateTimeString(),
+                'resolution_due_at' => $newResolutionDueAt?->toDateTimeString(),
                 'resolution_sla_status' => 'PENDING',
                 'resolved_policy' => $resolvedPolicy,
             ];
@@ -655,156 +772,145 @@ class SLAService
         ];
     }
 
+    /** Minutes before resolution_due_at when an open ticket counts as At Risk (AC-13 step 6). */
+    public const AT_RISK_MINUTES = 240;
+
     /**
      * Compute comprehensive SLA metrics (status, due date, minutes remaining) for ticket monitoring.
      * Consistently used by CS queue and ticket detail view.
+     *
+     * Spec 0037 (AC-13) precedence, shared with slaStatusKeySql() so row badges, summary
+     * cards, and SQL filters always agree:
+     *   1. sla_status 'SLA Unavailable' stays Unavailable
+     *   2. No SLA Configured: no source column and no resolution_due_at
+     *   3. Paused: the ticket is On Hold
+     *   4. Closed or Resolved: Breached if resolved after resolution_due_at, else Compliant
+     *   5. Breached: now is past resolution_due_at
+     *   6. At Risk: within 4 hours of resolution_due_at
+     *   7. On Track
+     * Tickets with no due date never get a guessed (24 or 48 hour) status.
      */
     public function computeTicketSlaMetrics($ticket): array
     {
+        $result = fn (string $status, $dueAt = null, $remaining = null, array $flags = []) => array_merge([
+            'status' => $status,
+            'due_at' => $dueAt ? $dueAt->toIso8601String() : null,
+            'time_remaining_minutes' => $remaining,
+            'is_breached' => false,
+            'is_at_risk' => false,
+            'is_paused' => false,
+        ], $flags);
+
         if (!$ticket) {
-            return [
-                'status' => 'On Track',
-                'due_at' => null,
-                'time_remaining_minutes' => null,
-                'is_breached' => false,
-                'is_at_risk' => false,
-                'is_paused' => false,
-            ];
+            return $result('On Track');
         }
 
         $now = now();
         $statusName = strtolower(trim((string) ($ticket->status_name ?? $ticket->status ?? '')));
-        $isClosedOrResolved = in_array($statusName, ['closed', 'resolved']);
-        $isOnHold = in_array($statusName, ['on hold', 'on-hold', 'paused']) || ((int) ($ticket->ticket_status_ID ?? 0) === 11);
+        $isClosedOrResolved = in_array($statusName, ['closed', 'resolved'], true);
+        $isOnHold = in_array($statusName, ['on hold', 'on-hold', 'paused'], true) || ((int) ($ticket->ticket_status_ID ?? 0) === 11);
 
         $resDueAtRaw = $ticket->resolution_due_at ?? null;
         $resDueAt = $resDueAtRaw ? Carbon::parse($resDueAtRaw) : null;
-        $resolvedAtRaw = $ticket->resolved_at ?? $ticket->closed_at ?? null;
+        $resolvedAtRaw = ($ticket->resolved_at ?? null) ?: ($ticket->closed_at ?? null);
         $resolvedAt = $resolvedAtRaw ? Carbon::parse($resolvedAtRaw) : null;
-        $createdAtRaw = $ticket->created_at ?? null;
-        $createdAt = $createdAtRaw ? Carbon::parse($createdAtRaw) : null;
 
-        // Check for explicitly unconfigured SLA
-        if (
-            (isset($ticket->sla_status) && $ticket->sla_status === 'No SLA Configured') ||
-            (empty($resDueAt) && empty($ticket->sla_rule_id) && empty($ticket->sla_ID) && empty($ticket->branch_sla_policy_id) && empty($ticket->branch_priority_override_id))
-        ) {
-            return [
-                'status' => 'No SLA Configured',
-                'due_at' => null,
-                'time_remaining_minutes' => null,
-                'is_breached' => false,
-                'is_at_risk' => false,
-                'is_paused' => false,
-                'is_unavailable' => true,
-            ];
+        // 1. SLA assignment failed at creation; tickets:backfill-sla repairs it.
+        if (($ticket->sla_status ?? null) === 'SLA Unavailable') {
+            return $result('SLA Unavailable', null, null, ['is_unavailable' => true]);
         }
 
-        // 1. Paused / On Hold
+        // 2. No SLA source and no due date.
+        $hasSource = false;
+        foreach (self::SLA_SOURCE_COLUMNS as $column) {
+            if (!empty($ticket->{$column} ?? null)) {
+                $hasSource = true;
+                break;
+            }
+        }
+        if (!$hasSource && !$resDueAt) {
+            return $result('No SLA Configured', null, null, ['is_unavailable' => true]);
+        }
+
+        // 3. On Hold: the clock is paused.
         if ($isOnHold) {
-            return [
-                'status' => 'Paused',
-                'due_at' => $resDueAt ? $resDueAt->toIso8601String() : null,
-                'time_remaining_minutes' => $resDueAt ? max(0, $now->diffInMinutes($resDueAt, false)) : null,
-                'is_breached' => false,
-                'is_at_risk' => false,
-                'is_paused' => true,
-            ];
+            return $result('Paused', $resDueAt, $resDueAt ? max(0, $now->diffInMinutes($resDueAt, false)) : null, ['is_paused' => true]);
         }
 
-        // 2. Closed / Resolved
+        // 4. Closed or Resolved.
         if ($isClosedOrResolved) {
-            $isBreached = false;
-            if ($resDueAt) {
-                $evalTime = $resolvedAt ?: $now;
-                $isBreached = $evalTime->gt($resDueAt);
-            }
-            return [
-                'status' => $isBreached ? 'Breached' : 'Compliant',
-                'due_at' => $resDueAt ? $resDueAt->toIso8601String() : null,
-                'time_remaining_minutes' => 0,
-                'is_breached' => $isBreached,
-                'is_at_risk' => false,
-                'is_paused' => false,
-            ];
+            $isBreached = $resDueAt !== null && ($resolvedAt ?: $now)->gt($resDueAt);
+            return $result($isBreached ? 'Breached' : 'Compliant', $resDueAt, 0, ['is_breached' => $isBreached]);
         }
 
-        // 3. Active Ticket with resolution_due_at
-        if ($resDueAt) {
-            $minutesRemaining = $now->diffInMinutes($resDueAt, false);
-            if ($minutesRemaining < 0) {
-                return [
-                    'status' => 'Breached',
-                    'due_at' => $resDueAt->toIso8601String(),
-                    'time_remaining_minutes' => 0,
-                    'is_breached' => true,
-                    'is_at_risk' => false,
-                    'is_paused' => false,
-                ];
-            }
-
-            // At risk if <= 4 hours (240 mins) remaining or <= 25% of total time if createdAt is available
-            $isAtRisk = false;
-            if ($minutesRemaining <= 240) {
-                $isAtRisk = true;
-            } elseif ($createdAt) {
-                $totalMinutes = max(1, $createdAt->diffInMinutes($resDueAt, false));
-                if (($minutesRemaining / $totalMinutes) <= 0.25) {
-                    $isAtRisk = true;
-                }
-            }
-
-            return [
-                'status' => $isAtRisk ? 'At Risk' : 'On Track',
-                'due_at' => $resDueAt->toIso8601String(),
-                'time_remaining_minutes' => (int) $minutesRemaining,
-                'is_breached' => false,
-                'is_at_risk' => $isAtRisk,
-                'is_paused' => false,
-            ];
+        if (!$resDueAt) {
+            return $result('On Track');
         }
 
-        // 4. Active Ticket fallback without resolution_due_at: use age from createdAt
-        if ($createdAt) {
-            $hours = $now->diffInHours($createdAt);
-            if ($hours >= 48) {
-                return [
-                    'status' => 'Breached',
-                    'due_at' => $createdAt->copy()->addHours(48)->toIso8601String(),
-                    'time_remaining_minutes' => 0,
-                    'is_breached' => true,
-                    'is_at_risk' => false,
-                    'is_paused' => false,
-                ];
-            }
-            if ($hours >= 24) {
-                return [
-                    'status' => 'At Risk',
-                    'due_at' => $createdAt->copy()->addHours(48)->toIso8601String(),
-                    'time_remaining_minutes' => max(0, (48 - $hours) * 60),
-                    'is_breached' => false,
-                    'is_at_risk' => true,
-                    'is_paused' => false,
-                ];
-            }
-            return [
-                'status' => 'On Track',
-                'due_at' => $createdAt->copy()->addHours(48)->toIso8601String(),
-                'time_remaining_minutes' => max(0, (48 - $hours) * 60),
-                'is_breached' => false,
-                'is_at_risk' => false,
-                'is_paused' => false,
-            ];
+        // 5. Breached.
+        if ($now->gt($resDueAt)) {
+            return $result('Breached', $resDueAt, 0, ['is_breached' => true]);
         }
 
-        return [
-            'status' => 'On Track',
-            'due_at' => null,
-            'time_remaining_minutes' => null,
-            'is_breached' => false,
-            'is_at_risk' => false,
-            'is_paused' => false,
-        ];
+        // 6. At Risk.
+        $remaining = (int) $now->diffInMinutes($resDueAt, false);
+        if ($resDueAt->lte($now->copy()->addMinutes(self::AT_RISK_MINUTES))) {
+            return $result('At Risk', $resDueAt, $remaining, ['is_at_risk' => true]);
+        }
+
+        // 7. On Track.
+        return $result('On Track', $resDueAt, $remaining);
+    }
+
+    /**
+     * SQL form of computeTicketSlaMetrics() (spec 0037, AC-13, AC-14). Returns a CASE
+     * expression and its bindings that yield one key per ticket row:
+     * unavailable, no_sla, paused, compliant, breached, at_risk, on_track.
+     *
+     * @param string $t  tickets alias
+     * @param string $ts ticket_statuses alias (must be joined)
+     * @return array{0: string, 1: array}
+     */
+    public function slaStatusKeySql(string $t = 't', string $ts = 'ts', ?Carbon $now = null): array
+    {
+        $now = ($now ?? now())->copy();
+        $nowStr = $now->toDateTimeString();
+        $riskStr = $now->copy()->addMinutes(self::AT_RISK_MINUTES)->toDateTimeString();
+
+        $noSource = implode(' AND ', array_map(fn ($c) => "{$t}.{$c} IS NULL", self::SLA_SOURCE_COLUMNS));
+        $due = "{$t}.resolution_due_at";
+        $status = "LOWER(COALESCE({$ts}.status_name, ''))";
+
+        $sql = "(CASE"
+            . " WHEN {$t}.sla_status = 'SLA Unavailable' THEN 'unavailable'"
+            . " WHEN ({$noSource}) AND {$due} IS NULL THEN 'no_sla'"
+            . " WHEN {$status} IN ('on hold', 'on-hold', 'paused') OR {$t}.ticket_status_ID = 11 THEN 'paused'"
+            . " WHEN {$status} IN ('closed', 'resolved') THEN"
+            . "   (CASE WHEN {$due} IS NOT NULL AND COALESCE({$t}.resolved_at, {$t}.closed_at, ?) > {$due} THEN 'breached' ELSE 'compliant' END)"
+            . " WHEN {$due} IS NULL THEN 'on_track'"
+            . " WHEN {$due} < ? THEN 'breached'"
+            . " WHEN {$due} <= ? THEN 'at_risk'"
+            . " ELSE 'on_track' END)";
+
+        return [$sql, [$nowStr, $nowStr, $riskStr]];
+    }
+
+    /** Map a UI or API SLA filter value to a slaStatusKeySql() key, or null for "all". */
+    public static function normalizeSlaFilterKey(?string $value): ?string
+    {
+        $v = strtolower(trim((string) $value));
+        $v = str_replace([' ', '-'], '_', $v);
+        return match ($v) {
+            '', 'all', 'all_sla', 'all_sla_statuses' => null,
+            'breached' => 'breached',
+            'at_risk', 'atrisk' => 'at_risk',
+            'on_track', 'ontrack' => 'on_track',
+            'paused' => 'paused',
+            'compliant' => 'compliant',
+            'no_sla', 'no_sla_configured', 'nosla' => 'no_sla',
+            'unavailable', 'sla_unavailable' => 'unavailable',
+            default => 'invalid',
+        };
     }
 
     /**

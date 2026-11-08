@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Mockery;
+use Tests\Concerns\FakesAttachmentAccess;
 use Tests\TestCase;
 
 /**
@@ -16,9 +17,15 @@ use Tests\TestCase;
  */
 class UploadSizeLimitEnforcementTest extends TestCase
 {
+    use FakesAttachmentAccess;
+
     protected function setUp(): void
     {
         parent::setUp();
+        // Spec 0037: uploads need a verified caller identity.
+        $this->fakeAttachmentAccess();
+        $this->withToken($this->callerBearer);
+        Storage::fake('attachments');
         Storage::fake('local');
         Storage::fake('public');
         Cache::forget('ticket:config:file_limits');
@@ -60,7 +67,7 @@ class UploadSizeLimitEnforcementTest extends TestCase
 
         $response->assertStatus(422);
         $response->assertJsonPath('errors.attachments.0', "File 'big.pdf' exceeds the limit of 1 MB.");
-        $this->assertSame([], Storage::disk('public')->allFiles());
+        $this->assertSame([], Storage::disk('attachments')->allFiles());
         $this->assertSame([], Storage::disk('local')->allFiles());
     }
 
@@ -109,7 +116,7 @@ class UploadSizeLimitEnforcementTest extends TestCase
         $response = $this->postJson('/api/upload', ['attachments' => [$small, $big]]);
 
         $response->assertStatus(422);
-        $this->assertSame([], Storage::disk('public')->allFiles());
+        $this->assertSame([], Storage::disk('attachments')->allFiles());
     }
 
     public function test_default_15mb_limit_applies_when_configuration_service_is_unreachable(): void

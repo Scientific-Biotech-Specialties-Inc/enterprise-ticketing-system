@@ -222,7 +222,7 @@ class AiChatController extends Controller
             ->select(['id', 'user_id', 'title', 'status', 'messages', 'escalation_data', 'created_at', 'updated_at'])
             ->get()
             ->map(function ($c) {
-                $cleaned = preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $c->title ?? '');
+                $cleaned = preg_replace('/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $c->title ?? '');
                 $cleaned = trim($cleaned);
                 if (!empty($cleaned) && $cleaned !== $c->title) {
                     $c->title = ucfirst($cleaned);
@@ -408,7 +408,7 @@ class AiChatController extends Controller
                 }
 
                 // Strip question numbers like "1.", "1)", "1 -", "Q1:", "Machine:"
-                $trimmed = preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $trimmed);
+                $trimmed = preg_replace('/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $trimmed);
                 $trimmed = trim($trimmed);
 
                 if (!empty($trimmed) && mb_strlen($trimmed) >= 3) {

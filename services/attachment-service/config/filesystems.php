@@ -36,6 +36,17 @@ return [
             'throw' => false,
         ],
 
+        // Spec 0037: private store for every ticket attachment and proof. No url, so
+        // files are only ever streamed by AttachmentController after an access check.
+        'attachments' => [
+            'driver' => 'local',
+            'root' => storage_path('app/attachments'),
+            'visibility' => 'private',
+            'throw' => false,
+        ],
+
+        // Legacy location. Kept only for attachments:move-to-private and the phase 1
+        // read fallback; nothing writes here anymore and it is no longer symlinked.
         'public' => [
             'driver' => 'local',
             'root' => storage_path('app/public'),
@@ -69,8 +80,7 @@ return [
     |
     */
 
-    'links' => [
-        public_path('storage') => storage_path('app/public'),
-    ],
+    // Spec 0037: attachments are private, so storage:link must not expose them.
+    'links' => [],
 
 ];

@@ -239,6 +239,12 @@ class TicketStateMachine
 
     /**
      * Determine if a transition is permitted.
+     *
+     * The superadmin Transition Matrix (configuration "transitions") is the source of
+     * truth for every editable state. Only system rules that are not editable in the
+     * matrix are hardcoded here: Cancelled is terminal, On Hold resumes contextually,
+     * Reopened routes to CS automatically, and rejected proof returns to In Progress.
+     * Staying in the same state (e.g. reassigning an Assigned ticket) is not a transition.
      */
     public function canTransition(string $fromState, string $toState, array $context = []): bool
     {
@@ -246,7 +252,11 @@ class TicketStateMachine
             return false;
         }
 
-        // Contextual resume from On Hold/Pending
+        if ($fromState === $toState) {
+            return true;
+        }
+
+        // Contextual resume from On Hold/Pending (non-editable in the matrix)
         if ($fromState === self::STATE_ON_HOLD) {
             return in_array($toState, [
                 self::STATE_ASSIGNED,
@@ -261,64 +271,7 @@ class TicketStateMachine
             return true;
         }
 
-        // Direct CS assignment or technician investigation from Open is permitted
-        if ($fromState === self::STATE_OPEN && in_array($toState, [
-            self::STATE_ASSIGNED,
-            self::STATE_IN_PROGRESS_CS,
-            self::STATE_IN_PROGRESS_EMPLOYEE,
-        ], true)) {
-            return true;
-        }
-
-        // Allow CS technician updates and reassignment to Assigned from any active working state
-        if (in_array($fromState, [
-            self::STATE_OPEN,
-            self::STATE_ASSIGNED,
-            self::STATE_REASSIGNED,
-            self::STATE_IN_PROGRESS_EMPLOYEE,
-            self::STATE_IN_PROGRESS_CS,
-            self::STATE_ON_HOLD,
-        ], true) && $toState === self::STATE_ASSIGNED) {
-            return true;
-        }
-
-        // Allow holding an assigned ticket (Pending Assignment to On Hold)
-        if ($fromState === self::STATE_ASSIGNED && $toState === self::STATE_ON_HOLD) {
-            return true;
-        }
-
-        // Customer Service may resolve-and-close an in-progress ticket (incl. Pending Evaluation) in one step
-        if ($toState === self::STATE_CLOSED && in_array($fromState, [
-            self::STATE_IN_PROGRESS_CS,
-            self::STATE_IN_PROGRESS_EMPLOYEE,
-        ], true)) {
-            return true;
-        }
-
-        // Allow escalation to Escalated from any active working state
-        if ($toState === self::STATE_ESCALATED && in_array($fromState, [
-            self::STATE_OPEN,
-            self::STATE_ASSIGNED,
-            self::STATE_REASSIGNED,
-            self::STATE_IN_PROGRESS_CS,
-            self::STATE_IN_PROGRESS_EMPLOYEE,
-            self::STATE_ON_HOLD,
-        ], true)) {
-            return true;
-        }
-
-        // Escalated ticket may be assigned, delegated to working states, or resolved/closed
-        if ($fromState === self::STATE_ESCALATED && in_array($toState, [
-            self::STATE_ASSIGNED,
-            self::STATE_IN_PROGRESS_EMPLOYEE,
-            self::STATE_IN_PROGRESS_CS,
-            self::STATE_RESOLVED,
-            self::STATE_CLOSED,
-        ], true)) {
-            return true;
-        }
-
-        // Allow proof rejection returning to In Progress
+        // Rejected proof returns the ticket to In Progress
         if (!empty($context['proof_rejected']) && in_array($toState, [
             self::STATE_IN_PROGRESS_EMPLOYEE,
             self::STATE_IN_PROGRESS_CS,

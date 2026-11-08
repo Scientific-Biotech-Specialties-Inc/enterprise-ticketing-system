@@ -752,7 +752,7 @@ class RagService
         $lines = explode("\n", $query);
         $symptomText = '';
         foreach ($lines as $line) {
-            $trimmed = trim(preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item|serial)[:\-])\s*/i', '', $line));
+            $trimmed = trim(preg_replace('/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item|serial)[:\-])\s*/i', '', $line));
             if (mb_strlen($trimmed) > 20) {
                 $symptomText .= " " . $trimmed;
             }

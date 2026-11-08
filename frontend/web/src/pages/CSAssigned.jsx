@@ -1,11 +1,11 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Search, SlidersHorizontal, Loader2, Filter, RotateCcw, X, AlertTriangle, Clock, CheckCircle2, PauseCircle, HelpCircle, ArrowUpDown, Bell } from 'lucide-react';
 import Pagination from '@/components/Pagination';
 import { useAuth } from '@/context/AuthContext';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import {
-  getCSIncomingTickets,
+  getCSQueuePage,
   getAssignableEmployees,
   getDepartments,
   acceptTicket,
@@ -122,11 +122,45 @@ export default function CSAssigned() {
     departments: [],
     statuses: [],
     machines: [],
+    categories: [],
   });
   const [notificationBanner, setNotificationBanner] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
   const [typeFilter, setTypeFilter] = useState('all');
   const [assignedTab, setAssignedTab] = useState('all'); // 'all' | 'in_progress' | 'pending_evaluation' | 'on_hold' | 'reassigned' | 'resolved_closed'
+
+  // Spec 0037: the server applies the tab, filters, SLA filter, sort, and pagination,
+  // and counts the tab badges and SLA cards, so the cards match the rows on every page.
+  const ITEMS_PER_PAGE = 10;
+  const [page, setPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+  const [lastPage, setLastPage] = useState(1);
+  const [tabCounts, setTabCounts] = useState(null);
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const requestSeqRef = useRef(0);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const queueQuery = useMemo(() => ({
+    scope: 'assigned',
+    page,
+    limit: ITEMS_PER_PAGE,
+    tab: assignedTab,
+    search: debouncedSearch,
+    category: category !== 'All Categories' ? category : undefined,
+    machine: machineFilter !== 'All Machines' ? machineFilter : undefined,
+    department: departmentFilter !== 'All Departments' ? departmentFilter : undefined,
+    type: typeFilter,
+    sla: slaFilter !== 'All SLA Statuses' ? slaFilter : undefined,
+    sortBy: sortBy !== 'updated_at' ? sortBy : undefined,
+    sortDir: sortBy !== 'updated_at' ? sortDir : undefined,
+  }), [page, assignedTab, debouncedSearch, category, machineFilter, departmentFilter, typeFilter, slaFilter, sortBy, sortDir]);
+
+  const queueQueryRef = useRef(queueQuery);
+  queueQueryRef.current = queueQuery;
 
   // modal state: null | { mode: 'assign'|'summary', ticket }
   const [modal, setModal] = useState(null);
@@ -188,6 +222,7 @@ export default function CSAssigned() {
           departments: csOptsResult.value.departments || [],
           statuses: csOptsResult.value.statuses || [],
           machines: csOptsResult.value.machines || [],
+          categories: csOptsResult.value.categories || [],
         });
       }
     } catch (e) {
@@ -200,42 +235,31 @@ export default function CSAssigned() {
       setLoading(true);
     }
     setError('');
+    const seq = ++requestSeqRef.current;
     try {
-      const [incoming, assignees] = await Promise.all([
-        getCSIncomingTickets({ limit: 100, forceRefresh }),
+      const [queue, assignees] = await Promise.all([
+        getCSQueuePage(queueQueryRef.current),
         getAssignableEmployees({ forceRefresh }),
       ]);
 
-      // Assigned page: show tickets with assigned / in progress / evaluation / resolved / closed / reassigned / on hold
-      const assignedTickets = incoming.filter(t =>
-        t.reassignmentRequested === true ||
-        ['Pending Assignment', 'In Progress', 'Pending Evaluation', 'Resolved', 'Pending', 'Closed', 'On Hold'].includes(t.status) ||
-        (t.assigned && t.assigned.length > 0)
-      );
-      
-      setTickets(assignedTickets);
-
-      if (incoming.slaSummary) {
-        setSlaSummary(incoming.slaSummary);
-        const summary = { total: assignedTickets.length, breached: 0, at_risk: 0, on_track: 0, paused: 0, compliant: 0 };
-        assignedTickets.forEach((t) => {
-          const s = String(t.sla_status || t.slaStatus || '').toLowerCase().replace(/[\s_-]+/g, '');
-          const isBreached = s === 'breached' || s === 'violated' || Boolean(t.is_breached) || Boolean(t.sla_breached) || (t.resolution_due_at && new Date(t.resolution_due_at) < new Date());
-          if (['Resolved', 'Closed'].includes(t.status)) {
-            summary.compliant++;
-          } else if (isBreached) {
-            summary.breached++;
-          } else if (s === 'atrisk') {
-            summary.at_risk++;
-          } else if (s === 'paused' || t.status === 'On Hold') {
-            summary.paused++;
-          } else {
-            summary.on_track++;
-          }
-        });
-        setSlaSummary(summary);
+      // A newer request (for example the user changed a filter) owns the screen now.
+      if (seq !== requestSeqRef.current) {
+        return;
       }
-      
+
+      setTickets(queue.tickets);
+      setTotalCount(queue.total);
+      setLastPage(queue.lastPage);
+      setTabCounts(queue.tabCounts);
+      setSlaSummary({
+        total: queue.slaSummary?.total ?? queue.total,
+        breached: queue.slaSummary?.breached ?? 0,
+        at_risk: queue.slaSummary?.at_risk ?? 0,
+        on_track: queue.slaSummary?.on_track ?? 0,
+        paused: queue.slaSummary?.paused ?? 0,
+        compliant: queue.slaSummary?.compliant ?? 0,
+      });
+
       setEmployees(
         assignees.map((row) => ({
           id: Number(row.id ?? row.emp_id),
@@ -251,9 +275,11 @@ export default function CSAssigned() {
         }))
       );
     } catch {
-      setError('Unable to load assigned tickets from ticket-service.');
+      if (seq === requestSeqRef.current) {
+        setError('Unable to load assigned tickets from ticket-service.');
+      }
     } finally {
-      if (source !== 'websocket' && source !== 'poll') {
+      if (source !== 'websocket' && source !== 'poll' && seq === requestSeqRef.current) {
         setLoading(false);
       }
     }
@@ -266,8 +292,11 @@ export default function CSAssigned() {
       // ignore
     }
     loadStaticData();
+  }, [loadStaticData]);
+
+  useEffect(() => {
     loadLiveData({ forceRefresh: true });
-  }, [loadStaticData, loadLiveData]);
+  }, [queueQuery, loadLiveData]);
 
   useEffect(() => {
     const focusId = location.state?.focusTicketId;
@@ -276,6 +305,17 @@ export default function CSAssigned() {
       if (match) {
         handleRowAction(match);
         window.history.replaceState({}, document.title);
+      } else {
+        // The list is paged on the server, so the ticket may be on another page.
+        const numericId = Number(String(focusId).replace(/\D/g, ''));
+        window.history.replaceState({}, document.title);
+        if (numericId) {
+          getTicketDetails(numericId)
+            .then((details) => {
+              if (details) handleRowAction({ ...details, ticket_ID: details.ticket_ID ?? numericId });
+            })
+            .catch(() => {});
+        }
       }
     }
   }, [location.state, tickets]);
@@ -299,8 +339,8 @@ export default function CSAssigned() {
   });
 
   const categories = useMemo(
-    () => ['All Categories', ...Array.from(new Set(tickets.map((t) => t.category).filter(Boolean)))],
-    [tickets]
+    () => ['All Categories', ...Array.from(new Set([...(csFilterOptions.categories || []), ...tickets.map((t) => t.category).filter(Boolean)]))],
+    [tickets, csFilterOptions.categories]
   );
 
   const machines = useMemo(() => {
@@ -334,96 +374,26 @@ export default function CSAssigned() {
     sortDir !== 'desc'
   );
 
-  const counts = useMemo(() => {
-    let all = 0;
-    let inProgress = 0;
-    let pendingEval = 0;
-    let reassigned = 0;
-    let onHold = 0;
-    let resolvedClosed = 0;
+  const counts = {
+    all: tabCounts?.all ?? 0,
+    inProgress: tabCounts?.inProgress ?? 0,
+    pendingEval: tabCounts?.pendingEval ?? 0,
+    reassigned: tabCounts?.reassigned ?? 0,
+    onHold: tabCounts?.onHold ?? 0,
+    resolvedClosed: tabCounts?.resolvedClosed ?? 0,
+  };
 
-    tickets.forEach((t) => {
-      all++;
-      if (t.reassignmentRequested === true) reassigned++;
-      if (t.status === 'In Progress') inProgress++;
-      if (t.status === 'Pending Evaluation') pendingEval++;
-      if (t.status === 'On Hold') onHold++;
-      if (t.status === 'Resolved' || t.status === 'Closed') resolvedClosed++;
-    });
+  // Spec 0037 (AC-15): render the server's rows as they are. Tab, filters, SLA filter,
+  // and sort were all applied on the server.
+  const filtered = tickets;
 
-    return { all, inProgress, pendingEval, reassigned, onHold, resolvedClosed };
-  }, [tickets]);
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const list = tickets.filter((t) => {
-      if (category !== 'All Categories' && t.category !== category) return false;
-      if (machineFilter !== 'All Machines' && (t.equipment || t.machine_name || '') !== machineFilter) return false;
-      if (departmentFilter !== 'All Departments' && (t.department || '').trim().toLowerCase() !== departmentFilter.trim().toLowerCase()) return false;
-
-      if (slaFilter !== 'All SLA Statuses') {
-        const rawSla = String(t.sla_status || t.slaStatus || t.sla?.resolution?.status || '').toLowerCase().replace(/[\s_-]+/g, '');
-        const targetSla = slaFilter.toLowerCase().replace(/[\s_-]+/g, '');
-        if (targetSla === 'breached' && rawSla !== 'breached') return false;
-        if (targetSla === 'atrisk' && rawSla !== 'atrisk') return false;
-        if (targetSla === 'ontrack' && rawSla !== 'ontrack' && rawSla !== 'compliant') return false;
-        if (targetSla === 'paused' && rawSla !== 'paused') return false;
-        if (targetSla === 'noslaconfigured' && rawSla !== 'noslaconfigured' && rawSla !== 'nosla' && rawSla !== 'na' && rawSla !== '') return false;
-        if (targetSla === 'slaunavailable' && rawSla !== 'unavailable' && rawSla !== 'slaunavailable') return false;
-      }
-
-      if (typeFilter === 'internal') {
-        const isInternal = t.title?.startsWith('[Internal]') || t.is_internal || t.ticket_type === 'Internal' || t.type === 'Internal';
-        if (!isInternal) return false;
-      } else if (typeFilter === 'external') {
-        const isInternal = t.title?.startsWith('[Internal]') || t.is_internal || t.ticket_type === 'Internal' || t.type === 'Internal';
-        if (isInternal) return false;
-      }
-
-      // Tab filter
-      if (assignedTab === 'in_progress' && t.status !== 'In Progress') return false;
-      if (assignedTab === 'pending_evaluation' && t.status !== 'Pending Evaluation') return false;
-      if (assignedTab === 'on_hold' && t.status !== 'On Hold') return false;
-      if (assignedTab === 'reassigned' && !t.reassignmentRequested) return false;
-      if (assignedTab === 'resolved_closed' && t.status !== 'Resolved' && t.status !== 'Closed') return false;
-      
-      if (!q) return true;
-      const cleanQ = q.trim().toLowerCase();
-      const searchBlob = buildTicketSearchString(t);
-      if (searchBlob.includes(cleanQ)) return true;
-      const tokens = cleanQ.replace(/,/g, ' ').split(/\s+/).filter(Boolean);
-      return tokens.length > 0 && tokens.every((token) => searchBlob.includes(token));
-    });
-
-    return [...list].sort((a, b) => {
-      if (sortBy === 'sla_due_date') {
-        const dateA = new Date(a.due_at || a.resolution_due_at || a.sla?.resolution?.target || 0).getTime();
-        const dateB = new Date(b.due_at || b.resolution_due_at || b.sla?.resolution?.target || 0).getTime();
-        return sortDir === 'asc' ? dateA - dateB : dateB - dateA;
-      }
-      if (sortBy === 'sla_status') {
-        const sA = String(a.sla_status || a.slaStatus || a.sla?.resolution?.status || '');
-        const sB = String(b.sla_status || b.slaStatus || b.sla?.resolution?.status || '');
-        return sortDir === 'asc' ? sA.localeCompare(sB) : sB.localeCompare(sA);
-      }
-      const timeA = new Date(a.updated_at || a.last_update || a.lastUpdate || a.date || a.created_at || 0).getTime();
-      const timeB = new Date(b.updated_at || b.last_update || b.lastUpdate || b.date || b.created_at || 0).getTime();
-      return timeB - timeA;
-    });
-  }, [tickets, search, slaFilter, machineFilter, departmentFilter, category, typeFilter, assignedTab, sortBy, sortDir]);
-
-  const ITEMS_PER_PAGE = 10;
-  const [page, setPage] = useState(1);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE));
+  const totalPages = lastPage;
 
   useEffect(() => {
     if (page > totalPages) setPage(1);
-  }, [filtered.length, totalPages, page]);
+  }, [totalPages, page]);
 
-  const paginated = useMemo(() => {
-    const start = (page - 1) * ITEMS_PER_PAGE;
-    return filtered.slice(start, start + ITEMS_PER_PAGE);
-  }, [filtered, page]);
+  const paginated = filtered;
 
   const handleRowAction = (t) => {
     const isMock = !!t.isMock;
@@ -493,19 +463,8 @@ export default function CSAssigned() {
       setPage(1);
       setModal(null);
 
-      // Soft data refetch
-      try {
-        const incoming = await getCSIncomingTickets({ limit: 100, forceRefresh: true });
-        const assignedTickets = incoming.filter(t =>
-          t.reassignmentRequested === true ||
-          ['Pending Assignment', 'In Progress', 'Pending Evaluation', 'Resolved', 'Pending', 'Closed', 'On Hold'].includes(t.status) ||
-          (t.assigned && t.assigned.length > 0)
-        );
-        setTickets(assignedTickets);
-      } catch (e) {
-        const refreshed = { ...updated, status: 'Pending Assignment', reassignmentRequested: false };
-        setTickets((prev) => prev.map((t) => ((t.ticket_ID === updated.ticket_ID || t.id === updated.id) ? refreshed : t)));
-      }
+      // Reconcile with the server (the tab and page change above also trigger a reload).
+      loadLiveData({ forceRefresh: true, source: 'poll' });
       return true;
     } catch (err) {
       setError('Failed to assign ticket. Please try again.');
@@ -1014,10 +973,10 @@ export default function CSAssigned() {
           <div className="px-4 py-3 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="text-xs text-muted-foreground">
               Showing {(page - 1) * ITEMS_PER_PAGE + 1} -{' '}
-              {Math.min(page * ITEMS_PER_PAGE, filtered.length)} of {filtered.length} tickets
+              {Math.min(page * ITEMS_PER_PAGE, totalCount)} of {totalCount} tickets
             </div>
             <Pagination
-              totalItems={filtered.length}
+              totalItems={totalCount}
               itemsPerPage={ITEMS_PER_PAGE}
               currentPage={page}
               onPageChange={(p) => setPage(p)}
@@ -1050,17 +1009,7 @@ export default function CSAssigned() {
             // If the status is 'On Hold', resumed, or classification updated,
             // the dedicated endpoint (POST /hold, POST /resume, or PATCH /classification) was already executed directly in TicketSummary.
             if (updatedFields.status === 'On Hold' || updatedFields.hold_reason !== undefined || updatedFields.category || updatedFields.priority) {
-              try {
-                const incoming = await getCSIncomingTickets({ limit: 100, forceRefresh: true });
-                const assignedTickets = incoming.filter(t =>
-                  t.reassignmentRequested === true ||
-                  ['Pending Assignment', 'In Progress', 'Pending Evaluation', 'Resolved', 'Pending', 'Closed', 'On Hold'].includes(t.status) ||
-                  (t.assigned && t.assigned.length > 0)
-                );
-                setTickets(assignedTickets);
-              } catch (e) {
-                // Keep local state
-              }
+              loadLiveData({ forceRefresh: true, source: 'poll' });
               return;
             }
 
@@ -1104,18 +1053,8 @@ export default function CSAssigned() {
               console.error('Failed to update ticket status on backend:', err);
             }
 
-            // Soft reload the list to reflect updates immediately
-            try {
-              const incoming = await getCSIncomingTickets({ limit: 100, forceRefresh: true });
-              const assignedTickets = incoming.filter(t =>
-                t.reassignmentRequested === true ||
-                ['Pending Assignment', 'In Progress', 'Pending Evaluation', 'Resolved', 'Pending', 'Closed', 'On Hold'].includes(t.status) ||
-                (t.assigned && t.assigned.length > 0)
-              );
-              setTickets(assignedTickets);
-            } catch (e) {
-              setTickets(prev => prev.map(t => (t.id === (updatedFields.id || modal.ticket.id)) ? { ...t, ...updatedFields } : t));
-            }
+            // Reload the current page so tabs, counts, and SLA cards reflect the update.
+            loadLiveData({ forceRefresh: true, source: 'poll' });
           }}
         />
       )}

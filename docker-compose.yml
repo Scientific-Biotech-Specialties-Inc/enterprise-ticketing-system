@@ -236,6 +236,9 @@ services:
       REVERB_APP_SECRET: local
       REVERB_HOST: reverb
       REVERB_PORT: 6001
+      # artisan serve is single threaded by default. File views now wait on an access check
+      # here, so a slow dashboard request must not block it (same as analytics-service).
+      PHP_CLI_SERVER_WORKERS: 4
     command: >
       sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d variables_order=EGPCS -d upload_max_filesize=20M -d post_max_size=25M artisan serve --no-reload --host=0.0.0.0 --port=8000"
     depends_on:
@@ -315,8 +318,10 @@ services:
       REVERB_APP_SECRET: local
       REVERB_HOST: reverb
       REVERB_PORT: 6001
+      # Shared service to service token (same value as ticket-service).
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
     command: >
-      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && rm -f bootstrap/cache/*.php && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d upload_max_filesize=20M -d post_max_size=25M artisan serve --host=0.0.0.0 --port=8000"
+      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && rm -f bootstrap/cache/*.php && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d variables_order=EGPCS -d upload_max_filesize=20M -d post_max_size=25M artisan serve --no-reload --host=0.0.0.0 --port=8000"
     depends_on:
       db:
         condition: service_healthy
@@ -331,6 +336,9 @@ services:
     container_name: notification-service
     volumes:
       - ./services/notification-service:/var/www
+      # Keep vendor/ off the Windows bind mount (as every other service does). Without it,
+      # each request read hundreds of library files over the host share: 15 to 28 seconds per request.
+      - notification-service-vendor:/var/www/vendor
     ports:
       - "8003:8000"
     environment:
@@ -340,6 +348,9 @@ services:
       DB_DATABASE: ${MYSQL_DATABASE}
       DB_USERNAME: root
       DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    # The image ships vendor/ without dev packages, but the bind mounted bootstrap cache expects them,
+    # so install them once into the volume. opcache for the CLI server keeps compiled files between requests.
+    command: sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ ! -d vendor/nunomaduro/collision ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$$' .env; then php artisan key:generate --force; fi && echo opcache.enable_cli=1 > /usr/local/etc/php/conf.d/zz-opcache-cli.ini && php artisan serve --host=0.0.0.0 --port=8000"
     depends_on:
       db:
         condition: service_healthy
@@ -454,7 +465,7 @@ services:
       - default
       - shared-capstone-network
     command: >
-      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=8000"
+      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ -f uploads.ini ]; then cp uploads.ini /usr/local/etc/php/conf.d/uploads.ini; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=8000"
     depends_on:
       db:
         condition: service_healthy
@@ -504,8 +515,11 @@ services:
       REVERB_PORT: 6001
       CLAMAV_HOST: clamav
       CLAMAV_PORT: 3310
+      # Spec 0037: file access is checked against ticket-service's internal endpoint.
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      TICKET_SERVICE_URL: http://ticket-service:8000
     command: >
-      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ -f uploads.ini ]; then cp uploads.ini /usr/local/etc/php/conf.d/uploads.ini; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && php artisan storage:link --force && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d upload_max_filesize=50M -d post_max_size=50M artisan serve --host=0.0.0.0 --port=8000"
+      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ -f uploads.ini ]; then cp uploads.ini /usr/local/etc/php/conf.d/uploads.ini; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d variables_order=EGPCS -d upload_max_filesize=50M -d post_max_size=50M artisan serve --no-reload --host=0.0.0.0 --port=8000"
     depends_on:
       db:
         condition: service_healthy
@@ -594,8 +608,10 @@ services:
       REVERB_APP_SECRET: messaging-local-secret
       REVERB_HOST: messaging-reverb
       REVERB_PORT: 6002
+      # Shared service to service token (same value as ticket-service).
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
     command: >
-      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php artisan serve --host=0.0.0.0 --port=8000"
+      sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ -f uploads.ini ]; then cp uploads.ini /usr/local/etc/php/conf.d/uploads.ini; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d variables_order=EGPCS artisan serve --no-reload --host=0.0.0.0 --port=8000"
     depends_on:
       mongodb:
         condition: service_healthy
@@ -673,6 +689,7 @@ volumes:
   ai-service-vendor:
   configuration-service-vendor:
   analytics-service-vendor:
+  notification-service-vendor:
 
 networks:
   default:

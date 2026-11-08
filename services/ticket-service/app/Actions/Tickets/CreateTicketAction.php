@@ -39,7 +39,7 @@ class CreateTicketAction
 
         $clientId = (int) $user->id;
         $rawTitle = strip_tags($validated['title'] ?? '');
-        $cleanedTitle = preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $rawTitle);
+        $cleanedTitle = preg_replace('/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $rawTitle);
         $finalTitle = !empty(trim($cleanedTitle)) ? trim($cleanedTitle) : $rawTitle;
 
         $externalTypeId = DB::table('ticket_types')->where('type_name', 'External')->value('ticket_type_ID') ?? 2;
@@ -116,7 +116,13 @@ class CreateTicketAction
                     $validated['branch_id'] ?? null
                 );
             } catch (\Throwable $e) {
-                Log::warning('CreateTicketAction: Failed to assign SLA: ' . $e->getMessage());
+                // Spec 0037 (AC-10): the ticket is still created; flag it so tickets:backfill-sla repairs it.
+                Log::error('CreateTicketAction: SLA assignment failed', ['ticket_ID' => $ticketId, 'error' => $e->getMessage()]);
+                try {
+                    DB::table('tickets')->where('ticket_ID', $ticketId)->update(['sla_status' => 'SLA Unavailable']);
+                } catch (\Throwable $inner) {
+                    Log::error('CreateTicketAction: could not flag SLA Unavailable', ['ticket_ID' => $ticketId, 'error' => $inner->getMessage()]);
+                }
             }
 
             // Create initial audit log

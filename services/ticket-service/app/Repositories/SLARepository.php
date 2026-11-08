@@ -102,6 +102,8 @@ class SLARepository implements SLARepositoryInterface
                 ->where('department_id', $departmentId)
                 ->where('category_id', $categoryId)
                 ->whereRaw('LOWER(priority) = ?', [$priorityLower])
+                ->orderByDesc('updated_at')
+                ->orderByDesc('id')
                 ->first();
 
             if ($rule) {
@@ -114,6 +116,8 @@ class SLARepository implements SLARepositoryInterface
             ->where('department_id', $departmentId)
             ->whereNull('category_id')
             ->whereRaw('LOWER(priority) = ?', [$priorityLower])
+            ->orderByDesc('updated_at')
+            ->orderByDesc('id')
             ->first();
 
         if ($rule) {
@@ -124,6 +128,8 @@ class SLARepository implements SLARepositoryInterface
         $rule = DB::table('sla_rules')
             ->where('department_id', $departmentId)
             ->whereRaw('LOWER(priority) = ?', [$priorityLower])
+            ->orderByDesc('updated_at')
+            ->orderByDesc('id')
             ->first();
 
         if ($rule) {
@@ -133,6 +139,8 @@ class SLARepository implements SLARepositoryInterface
         // 4. Global priority fallback (any department matching priority)
         return DB::table('sla_rules')
             ->whereRaw('LOWER(priority) = ?', [$priorityLower])
+            ->orderByDesc('updated_at')
+            ->orderByDesc('id')
             ->first();
     }
 }

@@ -464,6 +464,10 @@ class EmployeeAssignmentService
             Log::error("Failed to send internal assignment message in assignTicket: " . $e->getMessage());
         }
 
+        if (array_key_exists('priority_ID', $validated) && $validated['priority_ID'] !== null && (int) $validated['priority_ID'] !== (int) ($ticket->priority_ID ?? 0)) {
+            $this->requestSlaRecalculation($ticketId);
+        }
+
         $updatedTicket = DB::table('tickets')->where('ticket_ID', $ticketId)->first();
         $this->cacheService->clearTicketCaches();
 
@@ -772,6 +776,10 @@ class EmployeeAssignmentService
             'previous_employee_ids' => $removedEmpIds,
         ]);
 
+        if (collect($changes)->contains(fn ($c) => $c['field'] === 'priority_ID')) {
+            $this->requestSlaRecalculation($ticketId);
+        }
+
         $this->cacheService->clearTicketCaches();
 
         $ticketRef = 'TKT-' . str_pad((string) $ticketId, 4, '0', STR_PAD_LEFT);
@@ -904,7 +912,16 @@ class EmployeeAssignmentService
         // Internal tickets store a placeholder in created_by, so there is no customer to notify.
         $notifyCustomer = !(bool) $ticket->is_internal;
 
-        $transactionResult = DB::transaction(function () use ($ticketId, $ticket, $empId, $newStatusName, $remarksText, $internalNoteText, $isProof, $assignment, $attachmentIds, &$attachmentNames, $notifyCustomer) {
+        // Validate the status change before any side effects: replacing proofs and binding
+        // attachments call attachment-service, which a database rollback cannot undo.
+        if ($newStatusName) {
+            $transitionError = $this->validateEmployeeStatusChange($ticket, $newStatusName);
+            if ($transitionError !== null) {
+                return $transitionError;
+            }
+        }
+
+        DB::transaction(function () use ($ticketId, $ticket, $empId, $newStatusName, $remarksText, $internalNoteText, $isProof, $assignment, $attachmentIds, &$attachmentNames, $notifyCustomer) {
             if ($isProof) {
                 try {
                     $resp = Http::get("http://attachment-service:8000/api/attachments?assignment_id={$assignment->assignment_ID}");
@@ -945,33 +962,8 @@ class EmployeeAssignmentService
                     ->whereRaw('LOWER(status_name) = ?', [strtolower($newStatusName)])
                     ->value('ticket_status_ID');
 
+                // The transition was validated against the Transition Matrix before this transaction.
                 if ($statusId && $statusId != $ticket->ticket_status_ID) {
-                    $targetState = match(strtolower(trim($newStatusName))) {
-                        'resolved' => TicketStateMachine::STATE_RESOLVED,
-                        'closed' => TicketStateMachine::STATE_CLOSED,
-                        'on hold', 'hold', 'pending' => TicketStateMachine::STATE_ON_HOLD,
-                        'in progress', 'pending evaluation' => TicketStateMachine::STATE_IN_PROGRESS_EMPLOYEE,
-                        default => null
-                    };
-
-                    $currentState = $this->stateMachine->resolveState($ticket);
-                    if ($targetState && $currentState !== $targetState) {
-                        try {
-                            $this->stateMachine->validateTransition($ticket, $currentState, $targetState);
-                        } catch (\App\Exceptions\InvalidTicketTransitionException $e) {
-                            return [
-                                'status' => 422,
-                                'data' => [
-                                    'message' => $e->getMessage(),
-                                    'code' => 'INVALID_TICKET_TRANSITION',
-                                    'from_status' => $e->fromStatus,
-                                    'to_status' => $e->toStatus,
-                                    'allowed_statuses' => $e->allowedStatuses,
-                                ]
-                            ];
-                        }
-                    }
-
                     $statusChanged = true;
                     $updateFields = [
                         'updated_at' => now(),
@@ -1202,11 +1194,6 @@ class EmployeeAssignmentService
             }
         });
 
-        // The closure returns an error payload when the state machine rejects the transition.
-        if (is_array($transactionResult) && isset($transactionResult['status'])) {
-            return $transactionResult;
-        }
-
         $this->notificationService->broadcastTicketChange('updated', $ticketId);
         $this->cacheService->clearTicketCaches();
 
@@ -1214,9 +1201,78 @@ class EmployeeAssignmentService
     }
 
     /**
+     * Check an employee-requested status change against the superadmin Transition Matrix.
+     *
+     * Submitting proof (Pending Evaluation) is the employee's request to resolve the ticket, so it
+     * is checked as a move to Resolved. Otherwise a blocked "-> Resolved" transition would let the
+     * employee submit proof and only fail later, when Customer Service approves it.
+     *
+     * Returns a 422 response payload when the transition is not allowed, or null when it is.
+     */
+    private function validateEmployeeStatusChange(object $ticket, string $newStatusName): ?array
+    {
+        $statusId = DB::table('ticket_statuses')
+            ->whereRaw('LOWER(status_name) = ?', [strtolower($newStatusName)])
+            ->value('ticket_status_ID');
+
+        if (!$statusId || $statusId == $ticket->ticket_status_ID) {
+            return null;
+        }
+
+        $targetState = match (strtolower(trim($newStatusName))) {
+            'resolved', 'pending evaluation' => TicketStateMachine::STATE_RESOLVED,
+            'closed' => TicketStateMachine::STATE_CLOSED,
+            'on hold', 'hold', 'pending' => TicketStateMachine::STATE_ON_HOLD,
+            'in progress' => TicketStateMachine::STATE_IN_PROGRESS_EMPLOYEE,
+            default => null,
+        };
+
+        $currentState = $this->stateMachine->resolveState($ticket);
+        if ($targetState === null || $currentState === $targetState) {
+            return null;
+        }
+
+        try {
+            $this->stateMachine->validateTransition($ticket, $currentState, $targetState);
+        } catch (\App\Exceptions\InvalidTicketTransitionException $e) {
+            return [
+                'status' => 422,
+                'data' => [
+                    'message' => $e->getMessage(),
+                    'code' => 'INVALID_TICKET_TRANSITION',
+                    'from_status' => $e->fromStatus,
+                    'to_status' => $e->toStatus,
+                    'allowed_statuses' => $e->allowedStatuses,
+                ],
+            ];
+        }
+
+        return null;
+    }
+
+    /**
      * Send a customer email once the response has been returned, so a slow mail
      * provider can never hold the request (and its database transaction) open.
      */
+    /**
+     * Ask ticket-service (owner of SLA rules) to recalculate SLA deadlines after a
+     * priority change made here. Failures are logged and never block assignment.
+     */
+    private function requestSlaRecalculation(int $ticketId): void
+    {
+        try {
+            $ticketServiceUrl = rtrim((string) env('TICKET_SERVICE_URL', 'http://ticket-service:8000'), '/');
+            $response = Http::timeout(5)
+                ->withHeaders(['X-Internal-Token' => (string) env('INTERNAL_TOKEN', '')])
+                ->post("{$ticketServiceUrl}/api/internal/tickets/{$ticketId}/sla/recalculate");
+            if (!$response->successful()) {
+                Log::warning("SLA recalculation request failed for ticket {$ticketId}: HTTP " . $response->status());
+            }
+        } catch (\Throwable $e) {
+            Log::warning("SLA recalculation request failed for ticket {$ticketId}: " . $e->getMessage());
+        }
+    }
+
     private function sendCustomerEmailAfterResponse(
         bool $enabled,
         int $customerId,

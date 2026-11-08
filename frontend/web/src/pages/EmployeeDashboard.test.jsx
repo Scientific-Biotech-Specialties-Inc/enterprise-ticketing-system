@@ -251,6 +251,22 @@ describe('EmployeeDashboard dual panel workspace (AC-13, AC-14, AC-15, AC-20)', 
       consoleSpy.mockRestore();
     });
 
+    // Regression: display numbers like INC-OPS-202611-00042 contain more digits than the
+    // database ID; stripping non digits produced 20261100042 and the accept call returned 404.
+    it('accepts using the database ticket_ID when the display number has extra digits', async () => {
+      ticketService.getEmployeeAssignedTickets.mockResolvedValue([
+        { ...mockAssignedTickets[1], id: 'INC-OPS-202611-00042', ticket_ID: 42, title: 'Infusion Pump Alarm' },
+      ]);
+      ticketService.acceptTicket.mockResolvedValue({});
+      await openTicket('Infusion Pump Alarm');
+
+      fireEvent.click(await screen.findByRole('button', { name: /^accept$/i }));
+
+      await waitFor(() => {
+        expect(ticketService.acceptTicket).toHaveBeenCalledWith({ ticketId: 42 });
+      });
+    });
+
     it('does not offer Accept for an already accepted ticket', async () => {
       await openTicket('X-Ray Sensor Calibration');
 

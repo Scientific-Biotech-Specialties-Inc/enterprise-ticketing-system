@@ -278,7 +278,7 @@ class GeminiService
             $parsed = json_decode($jsonStr, true);
             if (json_last_error() === JSON_ERROR_NONE && !empty($parsed)) {
                 $rawTitle = $parsed['ticket_title'] ?? '';
-                $cleanTitle = preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $rawTitle);
+                $cleanTitle = preg_replace('/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $rawTitle);
                 $cleanTitle = trim($cleanTitle);
                 $ticketData = [
                     'title' => !empty($cleanTitle) ? ucfirst($cleanTitle) : $this->deriveTitleFromMessages($messages),
@@ -330,7 +330,7 @@ class GeminiService
             }
         }
 
-        $cleanedMsg = preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $lastUserMsg);
+        $cleanedMsg = preg_replace('/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $lastUserMsg);
         $title = !empty($cleanedMsg) ? ucfirst(mb_substr(trim($cleanedMsg), 0, 60)) : 'Technical Support Request';
 
         $replyText = "Our automated AI support assistant is temporarily unavailable. " .
@@ -383,7 +383,7 @@ class GeminiService
                 }
 
                 // Strip question numbers like "1.", "1)", "1 -", "Q1:", "Machine:"
-                $content = preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $content);
+                $content = preg_replace('/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $content);
                 $content = trim($content);
 
                 if (!empty($content) && mb_strlen($content) >= 3) {

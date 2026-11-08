@@ -16,7 +16,9 @@ class ProofOfCompletion extends Model
         'file_path',
         'file_type',
         'file_size',
-        'uploaded_at'
+        'uploaded_at',
+        'uploaded_by_id',
+        'uploaded_by_type'
     ];
 
     protected $casts = [
