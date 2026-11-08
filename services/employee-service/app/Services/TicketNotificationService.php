@@ -131,12 +131,28 @@ class TicketNotificationService
      */
     public function notifyCS(string $title, string $message, ?int $ticketId = null, ?array $data = null, ?int $excludeUserId = null, ?string $alertKey = null): void
     {
-        $csUsers = DB::table('employees')->where('role', 'customer service')->pluck('emp_id');
+        $csUsers = DB::table('employees')
+            ->where(function ($q) {
+                $q->whereRaw('LOWER(role) IN (?, ?, ?, ?, ?, ?)', [
+                    'customer service',
+                    'cs',
+                    'customer support',
+                    'head of cs',
+                    'head of customer service',
+                    'cs_manager'
+                ])
+                ->orWhereRaw('LOWER(department) IN (?, ?)', [
+                    'customer service',
+                    'customer support'
+                ]);
+            })
+            ->pluck('emp_id');
+
         foreach ($csUsers as $csEmpId) {
             if ($excludeUserId !== null && (int) $csEmpId === $excludeUserId) {
                 continue;
             }
-            $this->notifyRecipient((int)$csEmpId, 'employee', $title, $message, $ticketId, $data, $alertKey);
+            $this->notifyRecipient((int)$csEmpId, 'employee', $title, $message, $ticketId, $data, $alertKey ?? 'reassignment');
         }
     }
 

@@ -113,10 +113,10 @@ const MOCK_DOCUMENTS = [
     fileType: 'DOCX',
     uploadedBy: 'Admin',
     uploadDate: '2026-06-13',
-    size: '876 KB',
+    size: '0.9 MB',
     status: 'Draft',
     publishState: 'Draft',
-    processingStatus: 'Processing',
+    processingStatus: 'Ready for AI Search',
     tags: ['faq'],
     description: 'Frequently asked questions compilation.',
     history: [
@@ -811,6 +811,10 @@ function ReplaceConfirmModal({ isOpen, doc, onClose, onReplaceComplete, onProces
     if (onReplaceComplete) {
       onReplaceComplete(doc.id, replacedArticle || selectedFile);
     }
+
+    setTimeout(() => {
+      handleForceClose();
+    }, 1200);
   };
 
   const newFileSizeMb = selectedFile ? (selectedFile.size / (1024 * 1024)).toFixed(1) : 0;
@@ -1831,7 +1835,7 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
                       )}
                       <p className="text-sm font-semibold text-gray-700">{selectedFile.name}</p>
                       <p className="text-xs text-gray-400">
-                        {(selectedFile.size / 1024).toFixed(1)} KB {isBulkMode ? '· Spreadsheet Ready for Parsing' : ''}
+                        {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB {isBulkMode ? '· Spreadsheet Ready for Parsing' : ''}
                       </p>
                       <button
                         type="button"
@@ -2346,34 +2350,6 @@ function DocumentDetailModal({ isOpen, doc, onClose, onPublish, onArchivePrompt,
           {doc.tags && (
             <div><p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Tags</p><div className="flex flex-wrap gap-1.5">{doc.tags.map(t => <span key={t} className="px-2 py-0.5 bg-[#252578]/5 text-[#252578] text-xs rounded-full font-medium">{t}</span>)}</div></div>
           )}
-          <div className="border-t border-gray-100 pt-4">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">AI Processing Status</p>
-              {(doc.publishState || doc.status) === 'Draft' && (
-                <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full">
-                  Publish State: Draft (Excluded from AI Chatbot)
-                </span>
-              )}
-              {(doc.publishState || doc.status) === 'Archived' && (
-                <span className="text-[10px] font-semibold text-gray-600 bg-gray-100 border border-gray-200 px-2.5 py-0.5 rounded-full">
-                  Publish State: Archived (Excluded from AI Chatbot)
-                </span>
-              )}
-              {(doc.publishState || doc.status) === 'Published' && (
-                <span className="text-[10px] font-semibold text-green-700 bg-green-50 border border-green-200 px-2.5 py-0.5 rounded-full">
-                  Publish State: Published (Active in AI Chatbot)
-                </span>
-              )}
-            </div>
-            <div className="space-y-2">
-              {AI_PROCESSING_STEPS.map((step, i) => (
-                <div key={i} className={`flex items-center gap-2.5 text-sm ${step.done ? 'text-gray-700' : 'text-gray-300'}`}>
-                  {step.done ? <CheckCircle size={16} className="text-green-500" /> : <div className="w-4 h-4 rounded-full border-2 border-gray-300" />}
-                  {step.label}
-                </div>
-              ))}
-            </div>
-          </div>
 
           {/* TS078 / TS080: Version & Change History (Audit Trail) */}
           <div className="border-t border-gray-100 pt-4">
@@ -3230,6 +3206,7 @@ function AIKnowledgeBase() {
     }
 
     fetchDocuments();
+    setShowReplaceModal(false);
   };
 
   // Dynamic processing status updater while replacement is mid-pipeline:
@@ -3340,12 +3317,11 @@ function AIKnowledgeBase() {
         }
       />
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-        <StatCard icon={FileText} label="Total Documents" value={summary.total} bgClass="bg-purple-100 text-purple-700" sub={`${summary.published} published · ${summary.draft} draft`} />
-        <StatCard icon={CheckCircle} label="Published" value={summary.published} bgClass="bg-green-100 text-green-700" />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard icon={FileText} label="Total Documents" value={summary.total} bgClass="bg-purple-100 text-purple-700" sub={`${summary.draft} draft · ${summary.published} published`} />
         <StatCard icon={FileText} label="Drafts" value={summary.draft} bgClass="bg-amber-100 text-amber-700" />
+        <StatCard icon={CheckCircle} label="Published" value={summary.published} bgClass="bg-green-100 text-green-700" />
         <StatCard icon={Archive} label="Archived" value={summary.archived} bgClass="bg-gray-100 text-gray-700" />
-        <StatCard icon={Loader} label="Processing" value={summary.processing} bgClass="bg-blue-100 text-blue-700" />
       </div>
 
       {publishBlockedMsg && (
@@ -3449,7 +3425,6 @@ function AIKnowledgeBase() {
                   {activeTab === 'draft' ? (
                     <>
                       <option value="Draft">Draft</option>
-                      <option value="Processing">Processing</option>
                       <option value="Archived">Archived</option>
                     </>
                   ) : (
@@ -3554,22 +3529,6 @@ function AIKnowledgeBase() {
                               <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${publishStateColors[doc.publishState || 'Draft']}`}>
                                 {PublishIcon && <PublishIcon size={10} />}
                                 {doc.publishState || 'Draft'}
-                              </span>
-                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                                isMidProcess
-                                  ? 'bg-blue-50 text-blue-700 border-blue-200'
-                                  : doc.processingStatus === 'Failed'
-                                    ? 'bg-red-50 text-red-700 border-red-200'
-                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                              }`}>
-                                {isMidProcess ? (
-                                  <Loader size={10} className="animate-spin" />
-                                ) : doc.processingStatus === 'Failed' ? (
-                                  <AlertTriangle size={10} />
-                                ) : (
-                                  <CheckCircle size={10} />
-                                )}
-                                {doc.processingStatus || 'Ready for AI Search'}
                               </span>
                             </div>
                           </td>

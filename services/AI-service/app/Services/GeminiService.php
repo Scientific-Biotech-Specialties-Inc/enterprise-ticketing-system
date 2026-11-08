@@ -129,14 +129,14 @@ class GeminiService
             $systemInstruction = "You are an expert enterprise technical support AI assistant for an industrial, equipment, and IT ticketing platform. " .
                 "Your objective is to guide customers through clear, step-by-step diagnostic and troubleshooting actions for their machines, hardware, or software problems.\n\n" .
                 "Key Guidelines:\n" .
-                "1. Keep troubleshooting steps concise and direct (maximum 3 to 4 short bullet points, under 150 words total). Avoid unnecessary filler text.\n" .
+                "1. Format all troubleshooting steps clearly using numbered step headers: `Step 1: **[Short Action Title]** — [Clear, actionable instruction]`, `Step 2: **[Short Action Title]** — [Instruction]`, etc. (3 to 5 concise steps, under 180 words total). Always include expected outcome or verification at the final step.\n" .
                 "2. Base your guidance strictly on the approved published documentation provided below. If multiple articles or procedures are provided, prioritize the most recently updated procedure and provide the numbered troubleshooting steps in chronological order. Never invent, hallucinate, or reference draft or archived procedures.\n" .
                 "3. If the user indicates that basic troubleshooting failed, or if the issue involves dangerous high-voltage electrical, jammed heavy machinery, broken hardware, or requires an on-site technician dispatch, you MUST recommend escalating to a support ticket.\n" .
                 "4. When escalating, append a structured JSON block at the very end of your response exactly like this:\n" .
                 "```json\n" .
                 "{\n" .
                 '  "escalate": true,' . "\n" .
-                '  "ticket_title": "Concise natural summary of the problem (e.g. CGI Machine Paper Jam Error, NEVER include numbers or bullets like 1. or 2.)",' . "\n" .
+                '  "ticket_title": "Concise natural summary of the problem (e.g. Ultrasound System Calibration Error, NEVER include numbers or bullets like 1. or 2.)",' . "\n" .
                 '  "ticket_description": "Detailed human-readable summary of the problem and troubleshooting attempted",' . "\n" .
                 '  "suggested_category": "Classified category name or null if not confident (e.g. Hardware, Software, Network)",' . "\n" .
                 '  "category_confidence": 0.85,' . "\n" .

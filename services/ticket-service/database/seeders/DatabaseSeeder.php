@@ -14,6 +14,7 @@ class DatabaseSeeder extends Seeder
         $this->call([
             TicketReferenceSeeder::class,
             WorkLogSeeder::class,
+            FullPlatformMockDataSeeder::class,
         ]);
     }
 }

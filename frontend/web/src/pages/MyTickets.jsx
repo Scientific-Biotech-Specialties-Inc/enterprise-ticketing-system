@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { MoreVertical, Filter, RotateCcw, Trash2, Edit3, FileText, X, Plus, Search, Calendar, User, Tag, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { MoreVertical, Filter, RotateCcw, Trash2, Edit3, FileText, X, Plus, Search, Calendar, User, Tag, AlertCircle, CheckCircle2, MessageCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { PageHeader } from '@/components/ui/page-header';
@@ -99,7 +99,9 @@ export default function MyTickets({ mode = 'all' }) {
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPos, setMenuPos] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
-  const [activeTab, setActiveTab] = useState(location.state?.tab === 'drafts' ? 'drafts' : 'tickets'); // 'tickets' | 'drafts'
+  const [activeTab, setActiveTab] = useState(
+    location.state?.tab === 'drafts' || searchParams.get('tab') === 'drafts' ? 'drafts' : 'tickets'
+  ); // 'tickets' | 'drafts'
   const [feedbackVersion, setFeedbackVersion] = useState(0);
   const [drafts, setDrafts] = useState([]);
   const [loadingDrafts, setLoadingDrafts] = useState(false);
@@ -119,11 +121,27 @@ export default function MyTickets({ mode = 'all' }) {
     date: '',
   });
 
-  useEffect(() => {
-    if (location.state?.tab) {
-      setActiveTab(location.state.tab);
+  const loadDrafts = useCallback(async () => {
+    setLoadingDrafts(true);
+    try {
+      const list = await getTicketDrafts({ client_id: customerId });
+      setDrafts(list || []);
+    } catch (err) {
+      console.warn('Failed to load ticket drafts:', err);
+    } finally {
+      setLoadingDrafts(false);
     }
-  }, [location.state?.tab]);
+  }, [customerId]);
+
+  useEffect(() => {
+    const targetTab = location.state?.tab || searchParams.get('tab');
+    if (targetTab) {
+      setActiveTab(targetTab);
+      if (targetTab === 'drafts') {
+        loadDrafts();
+      }
+    }
+  }, [location.state?.tab, location.state?.draftSavedAt, searchParams, loadDrafts]);
 
   // Auto-open ticket modal when navigating with ticketId (e.g. from email links or alerts)
   useEffect(() => {
@@ -158,18 +176,6 @@ export default function MyTickets({ mode = 'all' }) {
 
     return () => { isMounted = false; };
   }, [urlTicketId]);
-
-  const loadDrafts = useCallback(async () => {
-    setLoadingDrafts(true);
-    try {
-      const list = await getTicketDrafts({ client_id: customerId });
-      setDrafts(list || []);
-    } catch (err) {
-      console.warn('Failed to load ticket drafts:', err);
-    } finally {
-      setLoadingDrafts(false);
-    }
-  }, [customerId]);
 
   const loadFilterOptions = useCallback(async () => {
     try {
@@ -599,6 +605,7 @@ export default function MyTickets({ mode = 'all' }) {
         ...t,
         ...localDetails,
         ...fullTicket,
+        openDirectChat: Boolean(t?.openDirectChat),
         status: fullTicket.status || t.status || localDetails.status,
         description: fullTicket.description || localDetails.description || t.description || '',
         last_updated: fullTicket.updated_at || fullTicket.last_updated || localDetails.last_updated || t.last_updated,
@@ -1012,7 +1019,10 @@ export default function MyTickets({ mode = 'all' }) {
         <div className="flex border-b border-gray-200 gap-2">
           <button
             type="button"
-            onClick={() => setActiveTab('tickets')}
+            onClick={() => {
+              setActiveTab('tickets');
+              setSearchParams({});
+            }}
             className={`pb-3 px-4 text-sm font-bold transition-all border-b-2 -mb-px flex items-center gap-2 cursor-pointer ${
               activeTab === 'tickets'
                 ? 'border-brand-primary text-brand-primary'
@@ -1028,7 +1038,11 @@ export default function MyTickets({ mode = 'all' }) {
           </button>
           <button
             type="button"
-            onClick={() => { setActiveTab('drafts'); loadDrafts(); }}
+            onClick={() => {
+              setActiveTab('drafts');
+              setSearchParams({ tab: 'drafts' });
+              loadDrafts();
+            }}
             className={`pb-3 px-4 text-sm font-bold transition-all border-b-2 -mb-px flex items-center gap-2 cursor-pointer ${
               activeTab === 'drafts'
                 ? 'border-brand-primary text-brand-primary'
@@ -1375,10 +1389,26 @@ export default function MyTickets({ mode = 'all' }) {
                           )}
                         </div>
                       </TableCell>
-                      <TableCell className="text-muted-slate max-w-[150px] truncate" title={assignedEmpDisplay}>
-                        <div className="flex items-center gap-1.5 text-xs">
-                          <User size={13} className="text-muted-slate shrink-0" />
-                          <span className="truncate">{assignedEmpDisplay}</span>
+                      <TableCell className="text-muted-slate max-w-[200px]" title={assignedEmpDisplay}>
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <User size={13} className="text-muted-slate shrink-0" />
+                            <span className="truncate">{assignedEmpDisplay}</span>
+                          </div>
+                          {assignedEmpDisplay !== 'Unassigned' && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleViewTicket({ ...ticket, openDirectChat: true });
+                              }}
+                              className="inline-flex items-center gap-1 rounded-lg bg-[#252578]/10 hover:bg-[#252578] text-[#252578] hover:text-white px-2 py-0.5 text-[11px] font-semibold transition-all shrink-0 cursor-pointer"
+                              title={`Open message with ${assignedEmpDisplay}`}
+                            >
+                              <MessageCircle size={12} />
+                              <span>Message</span>
+                            </button>
+                          )}
                         </div>
                       </TableCell>
                       <TableCell className="text-muted-slate text-xs whitespace-nowrap">
@@ -1557,6 +1587,11 @@ export default function MyTickets({ mode = 'all' }) {
         onClose={() => setIsModalOpen(false)}
         onSubmit={handleCreateTicket}
         openTicketsCount={customerOpenCount}
+        onDraftSaved={() => {
+          setActiveTab('drafts');
+          setSearchParams({ tab: 'drafts' });
+          loadDrafts();
+        }}
       />
       <CustomerTicketDetailModal
         ticket={selectedTicket}

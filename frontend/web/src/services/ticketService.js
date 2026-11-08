@@ -15,14 +15,20 @@ const ticketClient = axios.create({
 });
 
 const getStoredClientId = () => {
-  try {
-    const raw = sessionStorage.getItem('user') || localStorage.getItem('user');
-    if (!raw) return null;
-    const u = JSON.parse(raw);
-    return u?.client_ID || u?.client_id || u?.id || null;
-  } catch {
-    return null;
+  for (const key of ['user', 'auth_user']) {
+    for (const store of [sessionStorage, localStorage]) {
+      try {
+        const raw = store.getItem(key);
+        if (!raw) continue;
+        const u = JSON.parse(raw);
+        const cid = u?.client_ID || u?.client_id || u?.id || u?.emp_id;
+        if (cid) return cid;
+      } catch {
+        // ignore
+      }
+    }
   }
+  return null;
 };
 
 ticketClient.interceptors.request.use((config) => {
@@ -917,6 +923,9 @@ export const createTicket = async (payload) => {
       description: response.data.ticket?.description,
       date_created: response.data.ticket?.created_at,
       last_updated: response.data.ticket?.updated_at,
+      attachments: (response.data?.attachments && response.data.attachments.length > 0)
+        ? response.data.attachments
+        : (processedPayload.attachments || []),
     });
   }
   return response.data;

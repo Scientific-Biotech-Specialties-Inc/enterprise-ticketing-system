@@ -63,6 +63,9 @@ export default function InternalTicketMessageThread({
   ticket = null,
   isClosed = false,
   className = '',
+  title = null,
+  subtitle = null,
+  isCustomerThread = false,
 }) {
   const { user } = useAuth();
   const [messages, setMessages] = useState([]);
@@ -253,18 +256,22 @@ export default function InternalTicketMessageThread({
           </div>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="text-sm font-bold text-foreground">Internal Ticket Discussion</h3>
+              <h3 className="text-sm font-bold text-foreground">
+                {title || (isCustomerThread ? 'Direct Message Conversation' : 'Internal Ticket Discussion')}
+              </h3>
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#252578] text-white">
                 <Users className="w-3 h-3" />
-                Team Thread
+                {isCustomerThread ? 'Assigned Specialist & CS' : 'Team Thread'}
               </span>
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-800">
-                <ShieldCheck className="w-3 h-3" />
-                Excluded from AI
-              </span>
+              {!isCustomerThread && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-800">
+                  <ShieldCheck className="w-3 h-3" />
+                  Excluded from AI
+                </span>
+              )}
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Direct collaboration between Requestor, Assigned Employee, and Support staff.
+              {subtitle || 'Direct collaboration between Requestor, Assigned Employee, and Support staff.'}
             </p>
           </div>
         </div>
@@ -389,6 +396,42 @@ export default function InternalTicketMessageThread({
                               <div className="min-w-0 flex-1">
                                 <span className="font-medium truncate line-through block">{attName}</span>
                                 <span className="text-[10px] uppercase font-bold text-red-700">Blocked by Antivirus</span>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        const isImageAtt =
+                          /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(attName || '') ||
+                          /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(attUrl || '') ||
+                          String(att.mime_type || att.file_type || '').toLowerCase().startsWith('image/');
+
+                        if (isImageAtt && attUrl) {
+                          return (
+                            <div key={attIdx} className="space-y-1.5">
+                              <div className="overflow-hidden rounded-xl border border-white/20 bg-black/5 max-w-[280px] sm:max-w-[340px]">
+                                <img
+                                  src={attUrl}
+                                  alt={attName}
+                                  loading="lazy"
+                                  className="w-full max-h-[240px] object-contain bg-white/95 rounded-t-xl block"
+                                />
+                                <div
+                                  className={`flex items-center justify-between gap-2 px-2.5 py-1.5 text-[11px] ${
+                                    isMine ? 'bg-white/10 text-white' : 'bg-background text-foreground border-t border-border'
+                                  }`}
+                                >
+                                  <span className="truncate font-medium">{attName}</span>
+                                  <a
+                                    href={attUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="shrink-0 opacity-80 hover:opacity-100"
+                                    title={`Download ${attName}`}
+                                  >
+                                    <Download className="w-3.5 h-3.5" />
+                                  </a>
+                                </div>
                               </div>
                             </div>
                           );

@@ -361,17 +361,9 @@ export default function TicketCreation() {
     const descTrim = (formData.description || '').trim();
 
     if (titleTrim && descTrim && formData.problem_category_ID) {
-      if (needsProperCasing(titleTrim)) {
-        const proper = formatProperTitleCase(titleTrim);
-        setTitleCasingData({
-          original: titleTrim,
-          formatted: proper,
-        });
-        setShowTitleCasingModal(true);
-        return;
-      }
-
-      await submitTicketWithTitle(titleTrim);
+      const finalTitle = needsProperCasing(titleTrim) ? formatProperTitleCase(titleTrim) : titleTrim;
+      setFormData((prev) => ({ ...prev, title: finalTitle }));
+      await submitTicketWithTitle(finalTitle);
     }
   };
 
@@ -439,7 +431,8 @@ export default function TicketCreation() {
         setExistingDraftAttachments(res.draft.attachments);
         setFiles([]);
       }
-      setDraftMessage('Draft saved successfully with attachments. You can safely leave and resume editing anytime from My Drafts.');
+      setDraftMessage('Draft saved successfully! Redirecting to My Drafts...');
+      navigate('/my-tickets?tab=drafts', { state: { tab: 'drafts', draftSavedAt: Date.now() } });
     } catch (err) {
       setError(err?.response?.data?.message || 'Failed to save draft. Please try again.');
     } finally {
@@ -640,31 +633,9 @@ export default function TicketCreation() {
       return;
     }
 
-    if (needsProperCasing(titleTrim)) {
-      const proper = formatProperTitleCase(titleTrim);
-      setTitleCasingData({
-        original: titleTrim,
-        formatted: proper,
-      });
-      setShowTitleCasingModal(true);
-      return;
-    }
-
-    await submitTicketWithTitle(titleTrim);
-  };
-
-  const handleConfirmTitleCasing = async () => {
-    if (!titleCasingData) return;
-    const limitConfig = getMaxOpenTicketsLimit();
-    if (!limitConfig.isUnlimited && customerOpenCount >= limitConfig.limit) {
-      setShowTitleCasingModal(false);
-      setError(`You've reached the maximum number of open tickets (${limitConfig.limit}). Resolve or close an existing ticket before submitting another.`);
-      return;
-    }
-    const formatted = titleCasingData.formatted;
-    setFormData((prev) => ({ ...prev, title: formatted }));
-    setShowTitleCasingModal(false);
-    await submitTicketWithTitle(formatted);
+    const finalTitle = needsProperCasing(titleTrim) ? formatProperTitleCase(titleTrim) : titleTrim;
+    setFormData((prev) => ({ ...prev, title: finalTitle }));
+    await submitTicketWithTitle(finalTitle);
   };
 
   const submitTicketWithTitle = async (finalTitle) => {
@@ -1130,14 +1101,6 @@ export default function TicketCreation() {
         onSelectDepartment={(dept) => setSelectedDepartment(dept)}
         onConfirm={handleConfirmAIDepartment}
         onCancel={() => setShowAIDepartmentModal(false)}
-      />
-
-      <TitleCasingModal
-        isOpen={showTitleCasingModal}
-        originalTitle={titleCasingData?.original}
-        formattedTitle={titleCasingData?.formatted}
-        onConfirm={handleConfirmTitleCasing}
-        onCancel={() => setShowTitleCasingModal(false)}
       />
 
       <NotificationModal
