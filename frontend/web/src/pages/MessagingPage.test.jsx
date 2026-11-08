@@ -114,7 +114,14 @@ describe('MessagingPage Component Tests (Acceptance Criteria)', () => {
       sender_type: 'customer',
       sender_role: 'Customer',
       message: 'Hello, our printer is not responding.',
-      attachments: [],
+      attachments: [
+        {
+          name: 'diagnostics.pdf',
+          file_size: 102400,
+          url: '/storage/ticket-attachments/diagnostics.pdf',
+          scan_status: 'clean',
+        },
+      ],
       created_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
     },
     {
@@ -126,14 +133,7 @@ describe('MessagingPage Component Tests (Acceptance Criteria)', () => {
       sender_type: 'cs',
       sender_role: 'Customer Support',
       message: 'Looking into this now. Please see the attached diagnostics.',
-      attachments: [
-        {
-          name: 'diagnostics.pdf',
-          file_size: 102400,
-          url: '/storage/ticket-attachments/diagnostics.pdf',
-          scan_status: 'clean',
-        },
-      ],
+      attachments: [],
       created_at: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
     },
     {
@@ -258,10 +258,27 @@ describe('MessagingPage Component Tests (Acceptance Criteria)', () => {
 
     const downloadLink = screen.getByTitle(/Download diagnostics\.pdf/i);
     expect(downloadLink).toBeInTheDocument();
-    expect(downloadLink).toHaveAttribute(
-      'href',
-      '/storage/ticket-attachments/diagnostics.pdf'
-    );
+    // Spec 0037 (AC-7): files are private, so the link never points at a bare /storage/ URL;
+    // clicking it runs the authenticated download instead.
+    expect(downloadLink.getAttribute('href')).not.toContain('/storage/');
+  });
+
+  it('covers spec 0037 AC-17: own message that carries a file shows no Edit option, but Delete stays', async () => {
+    render(<MessagingPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Here is an attachment still undergoing scan.')).toBeInTheDocument();
+    });
+
+    // msg-3 is the signed in user's own recent message, and it carries a file.
+    const optionButtons = screen.getAllByTitle('Options');
+    expect(optionButtons.length).toBeGreaterThanOrEqual(3);
+    fireEvent.click(optionButtons[2]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Delete for you/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: /Edit/i })).not.toBeInTheDocument();
   });
 
   it('covers AC-6: displays sender name and role badge clearly and consistently on all messages', async () => {

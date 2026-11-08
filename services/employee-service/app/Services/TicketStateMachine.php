@@ -43,11 +43,11 @@ class TicketStateMachine
 
     public const DEFAULT_TRANSITIONS = [
         'Open' => [
-            'allowed' => ['In Progress (CS-owned)', 'Assigned', 'Cancelled'],
+            'allowed' => ['In Progress (CS-owned)', 'Assigned', 'In Progress (Employee-owned)', 'Closed', 'Cancelled'],
             'type' => 'editable',
         ],
         'In Progress (CS-owned)' => [
-            'allowed' => ['On Hold/Pending', 'Assigned', 'Resolved'],
+            'allowed' => ['On Hold/Pending', 'Assigned', 'Resolved', 'Closed'],
             'type' => 'editable',
         ],
         'Assigned' => [
@@ -59,7 +59,7 @@ class TicketStateMachine
             'type' => 'editable',
         ],
         'In Progress (Employee-owned)' => [
-            'allowed' => ['On Hold/Pending', 'Reassigned', 'Resolved', 'Assigned'],
+            'allowed' => ['On Hold/Pending', 'Reassigned', 'Resolved', 'Assigned', 'Closed'],
             'type' => 'editable',
         ],
         'Resolved' => [
@@ -165,17 +165,11 @@ class TicketStateMachine
             });
             if (isset($rules[$currentState]['allowed'])) {
                 $allowed = (array) $rules[$currentState]['allowed'];
-                if ($currentState === self::STATE_OPEN && !in_array(self::STATE_ASSIGNED, $allowed, true)) {
-                    $allowed[] = self::STATE_ASSIGNED;
-                }
                 return $allowed;
             }
         } catch (\Throwable $e) {}
 
         $allowed = self::DEFAULT_TRANSITIONS[$currentState]['allowed'] ?? [];
-        if ($currentState === self::STATE_OPEN && !in_array(self::STATE_ASSIGNED, $allowed, true)) {
-            $allowed[] = self::STATE_ASSIGNED;
-        }
         return $allowed;
     }
 
@@ -197,23 +191,12 @@ class TicketStateMachine
             return true;
         }
 
-        // Direct CS assignment from Open to Assigned is always permitted for incoming triage
-        if ($fromState === self::STATE_OPEN && $toState === self::STATE_ASSIGNED) {
+        // Staying in the same state (e.g. reassigning an Assigned ticket) is not a transition.
+        if ($fromState === $toState) {
             return true;
         }
 
-        // Allow CS technician updates and reassignment to Assigned from any active working state
-        if (in_array($fromState, [
-            self::STATE_OPEN,
-            self::STATE_ASSIGNED,
-            self::STATE_REASSIGNED,
-            self::STATE_IN_PROGRESS_EMPLOYEE,
-            self::STATE_IN_PROGRESS_CS,
-            self::STATE_ON_HOLD,
-        ], true) && $toState === self::STATE_ASSIGNED) {
-            return true;
-        }
-
+        // Every other editable transition is governed by the superadmin Transition Matrix.
         $allowed = $this->getAllowedTransitions($fromState);
         return in_array($toState, $allowed, true);
     }

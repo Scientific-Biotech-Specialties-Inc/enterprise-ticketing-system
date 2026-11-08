@@ -61,6 +61,8 @@ vi.mock('@/services/ticketService', () => ({
   getTicketDefaultsConfig: vi.fn(() => Promise.resolve({})),
   getBranchPriorities: vi.fn(() => Promise.resolve([])),
   getBranchCategoriesAndSla: vi.fn(() => Promise.resolve([])),
+  saveDepartmentSLARules: vi.fn(() => Promise.resolve({})),
+  recalculateOpenTicketSlas: vi.fn(() => Promise.resolve({ message: 'Recalculated SLA deadlines for 3 open ticket(s).', recalculated: 3 })),
 }));
 
 // Mock configurationService
@@ -78,6 +80,8 @@ vi.mock('@/services/configurationService', () => ({
   getWindowConfiguration: vi.fn(() => Promise.resolve({})),
   getNotificationRouting: vi.fn(() => Promise.resolve({})),
   getTransitionRulesConfig: vi.fn(() => Promise.resolve({})),
+  getBusinessHoursConfig: vi.fn(() => Promise.resolve({ enabled: true, timezone: 'Asia/Manila', startTime: '08:00', endTime: '17:00', workingDays: [1, 2, 3, 4, 5] })),
+  updateBusinessHoursConfig: vi.fn((p) => Promise.resolve(p)),
   getFileLimitsConfig: vi.fn(() => Promise.resolve({})),
 }));
 
@@ -187,5 +191,92 @@ describe('SuperAdminTicketConfig Messaging Subtabs & Internal Configuration Test
     await waitFor(() => {
       expect(configurationService.resetMessagingConfiguration).toHaveBeenCalled();
     });
+  });
+});
+
+describe('SuperAdminTicketConfig - SLA business hours', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const router = await import('react-router-dom');
+    router.useParams.mockReturnValue({ subtab: 'sla' });
+    router.useLocation.mockReturnValue({ pathname: '/ticketing/superadmin/config/sla' });
+    ticketService.getDepartments.mockResolvedValue({ departments: [{ id: 1, name: 'Service' }] });
+    ticketService.getSuperAdminConfig.mockResolvedValue({
+      equipment: [],
+      ticket_categories: [],
+      priorities: [{ id: 1, name: 'Low' }, { id: 2, name: 'Medium' }, { id: 3, name: 'High' }],
+    });
+    ticketService.getSLARules.mockResolvedValue({ sla_rules: [] });
+    configurationService.getMessagingConfiguration.mockResolvedValue({});
+    configurationService.updateMessagingConfiguration?.mockResolvedValue?.({});
+    configurationService.resetMessagingConfiguration?.mockResolvedValue?.({});
+  });
+
+  it('lists only the database priorities and no hardcoded Critical', async () => {
+    render(<SuperAdminTicketConfig />);
+    expect(await screen.findByText('Business Hours')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('High:')).toBeInTheDocument());
+    expect(screen.queryByText('Critical:')).not.toBeInTheDocument();
+  });
+
+  it('confirms before saving business hours, then saves them', async () => {
+    render(<SuperAdminTicketConfig />);
+    const start = await screen.findByLabelText('Start Time');
+    fireEvent.change(start, { target: { value: '09:00' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save Business Hours/i }));
+
+    expect(await screen.findByText('Update Business Hours?')).toBeInTheDocument();
+    const confirmButtons = screen.getAllByRole('button', { name: /Save Business Hours/i });
+    fireEvent.click(confirmButtons[confirmButtons.length - 1]);
+
+    await waitFor(() => expect(configurationService.updateBusinessHoursConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ startTime: '09:00', timezone: 'Asia/Manila', workingDays: [1, 2, 3, 4, 5] })
+    ));
+    // Saving business hours also moves existing open tickets onto the new hours.
+    await waitFor(() => expect(ticketService.recalculateOpenTicketSlas).toHaveBeenCalledTimes(1));
+  });
+
+  it('warns when business hours use a timezone other than the local one and offers a fix', async () => {
+    configurationService.getBusinessHoursConfig.mockResolvedValueOnce({ enabled: true, timezone: 'Pacific/Kiritimati', startTime: '09:00', endTime: '17:00', workingDays: [1, 2, 3, 4, 5] });
+    const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    render(<SuperAdminTicketConfig />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/not your local time/);
+    fireEvent.click(screen.getByRole('button', { name: `Use ${localTz}` }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(screen.getByLabelText('Timezone')).toHaveValue(localTz);
+  });
+
+  it('recalculates open ticket deadlines after confirmation', async () => {
+    render(<SuperAdminTicketConfig />);
+    fireEvent.click(await screen.findByRole('button', { name: /Recalculate Open Tickets/i }));
+    expect(await screen.findByText('Recalculate Open Ticket Deadlines?')).toBeInTheDocument();
+    expect(ticketService.recalculateOpenTicketSlas).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Recalculate' }));
+    await waitFor(() => expect(ticketService.recalculateOpenTicketSlas).toHaveBeenCalledTimes(1));
+  });
+
+  it('warns that SLA limits count only during working hours before saving department rules', async () => {
+    render(<SuperAdminTicketConfig />);
+    fireEvent.click(await screen.findByText('Service'));
+
+    for (const name of ['High', 'Medium', 'Low']) {
+      fireEvent.change(await screen.findByLabelText(`${name} response limit`), { target: { value: '30' } });
+      fireEvent.change(screen.getByLabelText(`${name} resolution limit`), { target: { value: '4' } });
+      fireEvent.change(screen.getByLabelText(`${name} resolution limit unit`), { target: { value: 'hours' } });
+    }
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Save SLA Rules for Service/i })[0]);
+
+    expect(await screen.findByText('Save SLA Rules?')).toBeInTheDocument();
+    expect(screen.getByText(/only count during working hours: 08:00 to 17:00 \(Asia\/Manila\)/)).toBeInTheDocument();
+    expect(ticketService.saveDepartmentSLARules).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save SLA Rules' }));
+    await waitFor(() => expect(ticketService.saveDepartmentSLARules).toHaveBeenCalledWith(1, expect.arrayContaining([
+      { priority: 'High', response_time_limit: 30, resolution_time_limit: 240 },
+    ])));
   });
 });

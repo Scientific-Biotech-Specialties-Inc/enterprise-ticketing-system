@@ -22,7 +22,8 @@ const isHttps = window.location.protocol === 'https:'
 
 const echo = new Echo({
   broadcaster: 'pusher',
-  client: PusherClient,
+  // Pass the constructor via `Pusher`; `client` expects a ready Pusher instance.
+  Pusher: PusherClient,
   key: appKey,
   wsHost,
   wsPort,

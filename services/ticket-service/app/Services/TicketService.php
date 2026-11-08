@@ -252,7 +252,7 @@ class TicketService
 
         $clientId = (int) $user->id;
         $rawTitle = trim(strip_tags((string) $validated['title']));
-        $cleanedTitle = preg_replace('/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $rawTitle);
+        $cleanedTitle = preg_replace('/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $rawTitle);
         $finalTitle = !empty(trim($cleanedTitle)) ? trim($cleanedTitle) : $rawTitle;
 
         $externalTypeId = DB::table('ticket_types')->where('type_name', 'External')->value('ticket_type_ID') ?? 2;
@@ -329,8 +329,14 @@ class TicketService
                 $defaults['slaPolicy'] ?? 'dynamic',
                 $validated['branch_id'] ?? null
             );
-        } catch (\Exception $e) {
-            Log::warning("Failed to assign SLA in store: " . $e->getMessage());
+        } catch (\Throwable $e) {
+            // Spec 0037 (AC-10): the ticket is still created; flag it so tickets:backfill-sla repairs it.
+            Log::error('TicketService::store: SLA assignment failed', ['ticket_ID' => $ticketId, 'error' => $e->getMessage()]);
+            try {
+                DB::table('tickets')->where('ticket_ID', $ticketId)->update(['sla_status' => 'SLA Unavailable']);
+            } catch (\Throwable $inner) {
+                Log::error('TicketService::store: could not flag SLA Unavailable', ['ticket_ID' => $ticketId, 'error' => $inner->getMessage()]);
+            }
         }
 
         $attachmentIds = $validated['attachments'] ?? [];
@@ -531,8 +537,14 @@ class TicketService
                 $defaults['slaPolicy'] ?? 'dynamic',
                 $validated['branch_id'] ?? null
             );
-        } catch (\Exception $e) {
-            Log::warning("Failed to assign SLA in storeInternalTicket: " . $e->getMessage());
+        } catch (\Throwable $e) {
+            // Spec 0037 (AC-10): the ticket is still created; flag it so tickets:backfill-sla repairs it.
+            Log::error('TicketService::storeInternalTicket: SLA assignment failed', ['ticket_ID' => $ticketId, 'error' => $e->getMessage()]);
+            try {
+                DB::table('tickets')->where('ticket_ID', $ticketId)->update(['sla_status' => 'SLA Unavailable']);
+            } catch (\Throwable $inner) {
+                Log::error('TicketService::storeInternalTicket: could not flag SLA Unavailable', ['ticket_ID' => $ticketId, 'error' => $inner->getMessage()]);
+            }
         }
 
         DB::table('ticket_audit_logs')->insert([

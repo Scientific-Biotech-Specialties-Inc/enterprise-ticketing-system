@@ -999,7 +999,7 @@ export default function MyTickets({ mode = 'all' }) {
         actions={
           !isHistory && (
             <Button
-              onClick={() => navigate('/ai-support')}
+              onClick={() => navigate('/ai-support', { state: { startNewChat: true } })}
               icon={<Plus className="h-4 w-4" />}
             >
               Create Ticket

@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { formatDisplayDate } from '@/utils/dateUtils';
 import FilePreviewModal from '@/components/FilePreviewModal';
+import AuthenticatedImage from '@/components/AuthenticatedImage';
 import ReassignmentDisapprovalBanner from '@/components/employee/ReassignmentDisapprovalBanner';
 import { getTicketDetails } from '@/services/ticketService';
 import { getWindowConfiguration, getCachedWindowConfiguration } from '@/services/configurationService';
@@ -113,25 +114,6 @@ export default function EmployeeHistoryDetail() {
       isMounted = false;
     };
   }, [numericId]);
-
-  const getAbsoluteUrl = (rawUrl) => {
-    if (!rawUrl) return '';
-    if (rawUrl.startsWith('blob:') || rawUrl.startsWith('data:')) return rawUrl;
-
-    let cleaned = String(rawUrl).trim().replace(/^https?:\/\/[^\/]+/, '');
-    if (cleaned.includes('/api/ticketing/attachment/storage/')) {
-      return cleaned;
-    }
-    if (cleaned.includes('/storage/')) {
-      cleaned = cleaned.substring(cleaned.indexOf('/storage/') + '/storage/'.length);
-    } else if (cleaned.startsWith('storage/')) {
-      cleaned = cleaned.substring('storage/'.length);
-    } else if (cleaned.startsWith('/')) {
-      cleaned = cleaned.substring(1);
-    }
-    cleaned = cleaned.replace(/^\/+/, '');
-    return `/api/ticketing/attachment/storage/${cleaned}`;
-  };
 
   const remarksList = useMemo(() => {
     if (!ticket) return [];
@@ -581,7 +563,6 @@ export default function EmployeeHistoryDetail() {
             {ticket.attachments.map((file, idx) => {
               const fileName = typeof file === 'string' ? file.split('/').pop() : (file.name || file.file_name || `File-${idx + 1}`);
               const fileUrl = typeof file === 'string' ? file : (file.url || file.file_path || file.path || '');
-              const absUrl = getAbsoluteUrl(fileUrl);
               const isQuarantined = Boolean(
                 typeof file === 'object' && (file?.is_quarantined || file?.quarantined || file?.status === 'quarantined' || file?.virus_detected)
               );
@@ -613,14 +594,10 @@ export default function EmployeeHistoryDetail() {
                   className="border border-border rounded-lg overflow-hidden shadow-xs cursor-pointer hover:border-accent transition-colors"
                 >
                   {isImage(fileName) ? (
-                    <img
-                      src={absUrl}
+                    <AuthenticatedImage
+                      src={fileUrl}
                       alt={fileName}
                       className="w-full h-36 object-cover"
-                      onError={(e) => {
-                        e.target.style.display = 'none';
-                        if (e.target.nextSibling) e.target.nextSibling.style.display = 'flex';
-                      }}
                     />
                   ) : null}
                   <div className={`flex items-center gap-3 p-4 bg-muted/40 h-36 ${isImage(fileName) ? 'hidden' : 'flex'}`}>
@@ -655,7 +632,6 @@ export default function EmployeeHistoryDetail() {
             {(ticket.proofFiles || ticket.proofAttachments).map((file, idx) => {
               const fileName = typeof file === 'string' ? file.split('/').pop() : (file.name || file.file_name || `Proof-${idx + 1}`);
               const fileUrl = typeof file === 'string' ? file : (file.url || file.file_path || file.path || '');
-              const absUrl = getAbsoluteUrl(fileUrl);
               const isQuarantined = Boolean(
                 typeof file === 'object' && (file?.is_quarantined || file?.quarantined || file?.status === 'quarantined' || file?.virus_detected)
               );
@@ -687,14 +663,10 @@ export default function EmployeeHistoryDetail() {
                   className="border border-emerald-500/30 rounded-lg overflow-hidden shadow-xs cursor-pointer hover:border-emerald-600 transition-colors"
                 >
                   {isImage(fileName) ? (
-                    <img
-                      src={absUrl}
+                    <AuthenticatedImage
+                      src={fileUrl}
                       alt={fileName}
                       className="w-full h-36 object-cover"
-                      onError={(e) => {
-                        e.target.style.display = 'none';
-                        if (e.target.nextSibling) e.target.nextSibling.style.display = 'flex';
-                      }}
                     />
                   ) : null}
                   <div className={`flex items-center gap-3 p-4 bg-emerald-50/40 dark:bg-emerald-950/20 h-36 ${isImage(fileName) ? 'hidden' : 'flex'}`}>

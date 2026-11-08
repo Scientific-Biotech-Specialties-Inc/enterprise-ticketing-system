@@ -97,7 +97,30 @@ class TicketDashboardController extends Controller
             'sla_status' => $request->query('sla_status') ?? $request->query('sla'),
             'sort_by' => $request->query('sort_by'),
             'sort_dir' => $request->query('sort_dir', 'desc'),
+            // Spec 0037: server side CS queue tabs and filters. No scope means every ticket.
+            'scope' => $request->query('scope'),
+            'tab' => $request->query('tab'),
+            'category' => $request->query('category'),
+            'customer_name' => $request->query('customer_name'),
+            'assignment' => $request->query('assignment'),
         ];
+
+        if ($filters['scope'] !== null && $filters['scope'] !== '' && !in_array($filters['scope'], ['incoming', 'assigned'], true)) {
+            return response()->json([
+                'message' => 'The scope must be incoming or assigned.',
+                'errors' => ['scope' => ['The scope must be incoming or assigned.']],
+            ], 422);
+        }
+        if ($filters['scope'] === '') {
+            $filters['scope'] = null;
+        }
+
+        if (\App\Services\SLAService::normalizeSlaFilterKey($filters['sla_status']) === 'invalid') {
+            return response()->json([
+                'message' => 'Unknown SLA status filter.',
+                'errors' => ['sla_status' => ['Use breached, at_risk, on_track, paused, compliant, no_sla, or unavailable.']],
+            ], 422);
+        }
 
         $forceRefresh = filter_var($request->query('forceRefresh', $request->query('force_refresh', false)), FILTER_VALIDATE_BOOLEAN);
 

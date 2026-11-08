@@ -605,6 +605,27 @@ export async function resetLogLevel() {
 }
 
 // ---------------------------------------------------------------------------
+// SLA Business Hours (working hours used to count SLA limits)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch SLA business hours: { enabled, timezone, startTime, endTime, workingDays }.
+ * workingDays uses ISO numbering (1 = Monday ... 7 = Sunday).
+ */
+export async function getBusinessHoursConfig() {
+  const response = await configClient.get('/ticket-configurations/business_hours');
+  return response.data?.value || response.data;
+}
+
+/**
+ * Save SLA business hours.
+ */
+export async function updateBusinessHoursConfig(payload) {
+  const response = await configClient.put('/ticket-configurations/business_hours', payload);
+  return response.data?.value || response.data;
+}
+
+// ---------------------------------------------------------------------------
 // Ticket State Machine: Transition Rules
 // ---------------------------------------------------------------------------
 

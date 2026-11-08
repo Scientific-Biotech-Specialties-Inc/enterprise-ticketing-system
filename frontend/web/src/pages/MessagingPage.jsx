@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { downloadAttachment } from '@/utils/attachmentFiles';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { MessageCircle, Send, Users, User, AlertCircle, MoreVertical, Edit2, Trash2, Archive, RotateCcw, X, Info, History, Sparkles, Bot, Clock, Paperclip, FileText, Download, ShieldAlert, Loader2 } from 'lucide-react';
@@ -1276,7 +1277,7 @@ export default function MessagingPage() {
                                         const isQuarantined = att.scan_status === 'quarantined' || Boolean(att.threat_alert);
                                         const isScanning = att.scan_status === 'pending' || Boolean(att.isScanning);
                                         const formattedSize = att.file_size ? `${(att.file_size / 1024).toFixed(0)} KB` : '';
-                                        const fileUrl = att.url || (att.file_path ? `/storage/${att.file_path}` : null);
+                                        const fileUrl = att.url || att.file_path || null;
 
                                         if (isQuarantined) {
                                           return (
@@ -1324,9 +1325,12 @@ export default function MessagingPage() {
                                         return (
                                           <a
                                             key={attIdx}
-                                            href={fileUrl || '#'}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
+                                            href="#"
+                                            role="button"
+                                            onClick={(e) => {
+                                              e.preventDefault();
+                                              if (fileUrl) downloadAttachment(fileUrl, att.name).catch(() => window.alert('This file could not be downloaded. You may not have access to it.'));
+                                            }}
                                             className={`flex items-center gap-2 p-2 rounded-lg transition-colors group/att ${
                                               isMine
                                                 ? 'bg-white/10 hover:bg-white/20 text-white'
@@ -1381,7 +1385,8 @@ export default function MessagingPage() {
                                 </button>
                                 {activeMenuMsgId === msgId && (
                                   <div className={`absolute bottom-6 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-10 w-32 text-left text-xs ${isMine ? 'right-0' : 'left-0'}`}>
-                                    {isAuthor && isWithinEditWindow(msg) && (
+                                    {/* Spec 0037 (AC-17): a message that carries files stays exactly as sent. */}
+                                    {isAuthor && isWithinEditWindow(msg) && !(msg.attachments?.length > 0) && (
                                       <button
                                         onClick={() => handleStartEdit(msg)}
                                         className="w-full px-3 py-1.5 hover:bg-gray-50 flex items-center gap-1.5 text-gray-700 cursor-pointer font-medium whitespace-nowrap"

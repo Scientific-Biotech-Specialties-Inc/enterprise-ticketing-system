@@ -43,6 +43,12 @@ Route::match(['get', 'post'], '/tickets/check-sla-alerts', function (\App\Servic
     ]);
 });
 
+// ─── Internal Service to Service Endpoints (X-Internal-Token) ────────────────
+Route::post('/internal/tickets/{ticketId}/sla/recalculate', [\App\Http\Controllers\InternalSlaController::class, 'recalculate']);
+// Spec 0037: attachment-service asks whether the forwarded caller may open a ticket's files.
+Route::middleware(['internal.token', 'auth.subsystem'])
+    ->get('/internal/attachment-access', [\App\Http\Controllers\InternalAttachmentAccessController::class, 'check']);
+
 Route::middleware('auth.subsystem')->group(function () {
     // ─── Customer Ticket Drafts (spec 0034: verified customer token only) ────
     Route::post('/tickets/draft', [TicketDraftController::class, 'saveDraft']);
@@ -264,6 +270,7 @@ Route::middleware('auth.subsystem')->group(function () {
     Route::get('/superadmin/sla-rules', [SLARuleController::class, 'index']);
     Route::post('/superadmin/sla-rules', [SLARuleController::class, 'store']);
     Route::post('/superadmin/sla-rules/department/{departmentId}', [SLARuleController::class, 'saveDepartmentRules']);
+    Route::post('/superadmin/sla/recalculate-open-tickets', [SLARuleController::class, 'recalculateOpenTickets']);
     Route::get('/superadmin/sla-rules/{id}', [SLARuleController::class, 'show']);
     Route::put('/superadmin/sla-rules/{id}', [SLARuleController::class, 'update']);
     Route::delete('/superadmin/sla-rules/{id}', [SLARuleController::class, 'destroy']);

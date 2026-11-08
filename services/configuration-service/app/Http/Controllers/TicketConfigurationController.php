@@ -38,41 +38,32 @@ class TicketConfigurationController extends Controller
             'isUnlimited' => true,
             'limit' => 5,
         ],
+        // Keys must match the backend TicketStateMachine states (ticket-service / employee-service).
         'transitions' => [
             'Open' => [
-                'allowed' => ['In Progress (CS-owned)', 'Assigned', 'Cancelled'],
+                'allowed' => ['In Progress (CS-owned)', 'Assigned', 'In Progress (Employee-owned)', 'Closed', 'Cancelled', 'Escalated'],
                 'type' => 'editable',
                 'description' => 'Initial ticket state upon customer or internal creation.',
             ],
             'In Progress (CS-owned)' => [
-                'allowed' => ['On Hold/Pending', 'Assigned', 'Resolved'],
+                'allowed' => ['On Hold/Pending', 'Assigned', 'Resolved', 'Closed', 'Escalated'],
                 'type' => 'editable',
                 'description' => 'Ticket being triaged or actively handled directly by Customer Service.',
             ],
             'Assigned' => [
-                'allowed' => ['Reassigned', 'Pending Reassignment', 'In Progress (Employee-owned)'],
+                'allowed' => ['Reassigned', 'In Progress (Employee-owned)', 'On Hold/Pending', 'Escalated'],
                 'type' => 'editable',
                 'description' => 'Ticket dispatched to an engineer/technician and awaiting their acceptance.',
             ],
             'Reassigned' => [
-                'allowed' => ['In Progress (Employee-owned)', 'Assigned'],
+                'allowed' => ['In Progress (Employee-owned)', 'Assigned', 'On Hold/Pending', 'Escalated'],
                 'type' => 'editable',
                 'description' => 'Ticket reassignment requested or approved for re-dispatch.',
             ],
-            'Pending Reassignment' => [
-                'allowed' => ['Assigned', 'In Progress (Employee-owned)'],
-                'type' => 'editable',
-                'description' => 'Ticket reassignment requested awaiting CS review. Returns to Assigned or In Progress if rejected/failed.',
-            ],
             'In Progress (Employee-owned)' => [
-                'allowed' => ['On Hold/Pending', 'Reassigned', 'Pending Reassignment', 'Pending Evaluation', 'Resolved'],
+                'allowed' => ['On Hold/Pending', 'Reassigned', 'Resolved', 'Assigned', 'Closed', 'Escalated'],
                 'type' => 'editable',
                 'description' => 'Service engineer has accepted the assignment and is actively working on the machine.',
-            ],
-            'Pending Evaluation' => [
-                'allowed' => ['Resolved', 'In Progress (Employee-owned)'],
-                'type' => 'editable',
-                'description' => 'Work completed and proof submitted, awaiting CS or customer evaluation.',
             ],
             'Resolved' => [
                 'allowed' => ['Closed', 'In Progress (Employee-owned)'],
@@ -84,6 +75,11 @@ class TicketConfigurationController extends Controller
                 'type' => 'editable',
                 'caption' => 'Reopening is permitted only within the configured reopen window (e.g. 48h after resolution).',
                 'description' => 'Final confirmed state. Can transition to Reopened within the allowed reopen window.',
+            ],
+            'Escalated' => [
+                'allowed' => ['Assigned', 'In Progress (Employee-owned)', 'In Progress (CS-owned)', 'Resolved', 'Closed'],
+                'type' => 'editable',
+                'description' => 'Ticket escalated to supervisory or department leadership.',
             ],
             'Reopened' => [
                 'allowed' => ['In Progress (CS-owned)'],
@@ -103,6 +99,15 @@ class TicketConfigurationController extends Controller
                 'caption' => 'Terminal status: No further transitions permitted from Cancelled.',
                 'description' => 'Ticket discarded or cancelled before assignment.',
             ],
+        ],
+        // Working hours used when counting SLA response/resolution limits.
+        // workingDays uses ISO-8601 numbering: 1 = Monday ... 7 = Sunday.
+        'business_hours' => [
+            'enabled' => true,
+            'timezone' => 'UTC',
+            'startTime' => '08:00',
+            'endTime' => '17:00',
+            'workingDays' => [1, 2, 3, 4, 5],
         ],
         'windows' => [
             'reopenEnabled' => true,
@@ -335,15 +340,49 @@ class TicketConfigurationController extends Controller
         try {
             Cache::forget("ticket:config:{$key}");
             Cache::forget("ticket_configuration:{$key}");
-            $cursor = 0;
-            do {
-                [$cursor, $keys] = Redis::scan($cursor, ['match' => "*{$key}*", 'count' => 100]);
-                if (!empty($keys)) {
-                    Redis::del($keys);
-                }
-            } while ($cursor != 0);
         } catch (\Throwable $e) {
             Log::warning("Redis cache clearing failed for {$key}: " . $e->getMessage());
+        }
+
+        $this->forgetSharedCacheEntries(["ticket:config:{$key}", "ticket_configuration:{$key}"]);
+    }
+
+    /**
+     * Delete every service's cached copy of the given cache keys.
+     *
+     * ticket-service and employee-service cache configuration in the same Redis cache database,
+     * each under its own prefix (e.g. "laravel_database_laravel_cache_:ticket:config:transitions").
+     * Cache::forget() only reaches this service's own copy, so the cache connection is SCANned for
+     * keys ending in "_cache_{key}" or "_cache_:{key}" and those are deleted. Matching the exact key suffix leaves
+     * related keys alone (e.g. ticket-service's "ticket:config:limits:last-known-good" fallback).
+     */
+    protected function forgetSharedCacheEntries(array $cacheKeys): void
+    {
+        try {
+            $client = Redis::connection('cache')->client();
+            // phpredis returns full keys from SCAN but prefixes keys passed to DEL, so the
+            // connection prefix is disabled while deleting other services' keys.
+            $originalPrefix = $client->getOption(\Redis::OPT_PREFIX);
+            $client->setOption(\Redis::OPT_PREFIX, '');
+
+            try {
+                foreach ($cacheKeys as $cacheKey) {
+                    // Cache prefixes end in "_cache_" or "_cache_:" depending on the service.
+                    foreach (['*_cache_' . $cacheKey, '*_cache_:' . $cacheKey] as $pattern) {
+                        $iterator = null;
+                        do {
+                            $keys = $client->scan($iterator, $pattern, 100);
+                            if (!empty($keys)) {
+                                $client->del($keys);
+                            }
+                        } while ($iterator > 0);
+                    }
+                }
+            } finally {
+                $client->setOption(\Redis::OPT_PREFIX, $originalPrefix ?: '');
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Shared configuration cache clearing failed: ' . $e->getMessage());
         }
     }
 
@@ -352,19 +391,7 @@ class TicketConfigurationController extends Controller
      */
     protected function clearWindowCache(): void
     {
-        try {
-            Cache::forget('ticket:config:windows');
-            Cache::forget('ticket_configuration:windows');
-            $cursor = 0;
-            do {
-                [$cursor, $keys] = Redis::scan($cursor, ['match' => '*ticket*windows*', 'count' => 100]);
-                if (!empty($keys)) {
-                    Redis::del($keys);
-                }
-            } while ($cursor != 0);
-        } catch (\Throwable $e) {
-            Log::warning('Redis cache clearing failed: ' . $e->getMessage());
-        }
+        $this->clearConfigCache('windows');
     }
 
     /**
@@ -372,19 +399,7 @@ class TicketConfigurationController extends Controller
      */
     protected function clearRoutingCache(): void
     {
-        try {
-            Cache::forget('ticket:config:routing');
-            Cache::forget('ticket_configuration:routing');
-            $cursor = 0;
-            do {
-                [$cursor, $keys] = Redis::scan($cursor, ['match' => '*ticket*routing*', 'count' => 100]);
-                if (!empty($keys)) {
-                    Redis::del($keys);
-                }
-            } while ($cursor != 0);
-        } catch (\Throwable $e) {
-            Log::warning('Redis cache clearing for routing failed: ' . $e->getMessage());
-        }
+        $this->clearConfigCache('routing');
     }
 
     /**
@@ -953,6 +968,43 @@ class TicketConfigurationController extends Controller
                     'value' => $record->value,
                 ]);
 
+            case 'business_hours':
+                $validator = Validator::make($payload, [
+                    'enabled' => 'required|boolean',
+                    'timezone' => ['required', 'string', \Illuminate\Validation\Rule::in(\DateTimeZone::listIdentifiers())],
+                    'startTime' => ['required', 'string', 'regex:/^([01]\d|2[0-3]):[0-5]\d$/'],
+                    'endTime' => ['required', 'string', 'regex:/^([01]\d|2[0-3]):[0-5]\d$/'],
+                    'workingDays' => 'required|array|min:1',
+                    'workingDays.*' => 'integer|between:1,7',
+                ], [
+                    'timezone.in' => 'Please choose a valid timezone.',
+                    'startTime.regex' => 'Start time must use the HH:MM format.',
+                    'endTime.regex' => 'End time must use the HH:MM format.',
+                    'workingDays.min' => 'Select at least one working day.',
+                ]);
+                $validator->after(function ($v) use ($payload) {
+                    if (($payload['startTime'] ?? '') >= ($payload['endTime'] ?? '')) {
+                        $v->errors()->add('endTime', 'End time must be later than start time.');
+                    }
+                });
+                if ($validator->fails()) {
+                    return response()->json([
+                        'message' => 'Validation Error: Invalid business hours configuration.',
+                        'errors' => $validator->errors(),
+                    ], 422);
+                }
+                $validated = $validator->validated();
+                $days = array_values(array_unique(array_map('intval', $validated['workingDays'])));
+                sort($days);
+                $value = [
+                    'enabled' => (bool) $validated['enabled'],
+                    'timezone' => $validated['timezone'],
+                    'startTime' => $validated['startTime'],
+                    'endTime' => $validated['endTime'],
+                    'workingDays' => $days,
+                ];
+                break;
+
             case 'transitions':
                 $request->validate([
                     'transitions' => 'sometimes|array',
@@ -1237,6 +1289,29 @@ class TicketConfigurationController extends Controller
 
         if ($normalizedKey === 'limits') {
             $this->clearConfigCache('limits');
+        } elseif ($normalizedKey === 'transitions') {
+            // ticket-service and employee-service cache the matrix; clear it so edits apply immediately.
+            $this->clearConfigCache('transitions');
+            $this->logAudit(
+                $request,
+                'config_update',
+                'Ticket Configuration',
+                'Transition Matrix',
+                'Updated the ticket status transition matrix. New rules apply to the next status change.'
+            );
+        } elseif ($normalizedKey === 'business_hours') {
+            $this->clearConfigCache('business_hours');
+            $dayNames = [1 => 'Mon', 2 => 'Tue', 3 => 'Wed', 4 => 'Thu', 5 => 'Fri', 6 => 'Sat', 7 => 'Sun'];
+            $daysText = implode(', ', array_map(fn ($d) => $dayNames[$d] ?? $d, $value['workingDays']));
+            $this->logAudit(
+                $request,
+                'config_update',
+                'SLA Configuration',
+                'Business Hours',
+                $value['enabled']
+                    ? "SLA business hours set to {$value['startTime']} to {$value['endTime']} ({$value['timezone']}) on {$daysText}. Applies to SLA deadlines calculated from now on."
+                    : 'SLA business hours disabled: SLA limits now count around the clock. Applies to SLA deadlines calculated from now on.'
+            );
         } elseif ($normalizedKey === 'number_format') {
             $this->clearConfigCache('number_format');
             $this->logAudit(
@@ -1311,6 +1386,10 @@ class TicketConfigurationController extends Controller
         $before = TicketConfiguration::getByKey($normalizedKey, $this->defaults[$normalizedKey]);
         $defaultValue = $this->defaults[$normalizedKey];
         $record = TicketConfiguration::setByKey($normalizedKey, $defaultValue);
+
+        if (in_array($normalizedKey, ['transitions', 'business_hours'], true)) {
+            $this->clearConfigCache($normalizedKey);
+        }
 
         if ($normalizedKey === 'windows') {
             $this->clearWindowCache();

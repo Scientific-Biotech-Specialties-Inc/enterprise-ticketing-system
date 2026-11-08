@@ -27,6 +27,7 @@ import {
   resetTicketDefaultsConfig,
   getSLARules,
   saveDepartmentSLARules,
+  recalculateOpenTicketSlas,
   getDepartments,
   getWorkflowStatuses,
   createWorkflowStatus,
@@ -90,6 +91,8 @@ import {
   getTransitionRulesConfig,
   updateTransitionRulesConfig,
   resetTransitionRulesConfig,
+  getBusinessHoursConfig,
+  updateBusinessHoursConfig,
   getFileLimitsConfig,
   updateFileLimitsConfig,
   resetFileLimitsConfig,
@@ -473,6 +476,39 @@ export const DEFAULT_WORKFLOW_TRANSITION_RULES = {
   },
 };
 
+// The transition matrix edits the ticket state machine that the backend actually
+// enforces (employee-service / ticket-service TicketStateMachine). These names are
+// the keys the backend reads from the "transitions" configuration, so they must not
+// be replaced by the display names from "Statuses & Sequence".
+export const STATE_MACHINE_TRANSITION_STATES = [
+  { id: 'sm-open', name: 'Open', order: 1, bgColor: '#DBEAFE', textColor: '#1D4ED8', isSystem: true, description: 'Initial ticket state upon customer or internal creation.' },
+  { id: 'sm-in-progress-cs', name: 'In Progress (CS-owned)', order: 2, bgColor: '#FEE2E2', textColor: '#B91C1C', isSystem: true, description: 'Ticket being triaged or actively handled directly by Customer Service.' },
+  { id: 'sm-assigned', name: 'Assigned', order: 3, bgColor: '#FFEDD5', textColor: '#C2410C', isSystem: true, description: 'Ticket dispatched to an engineer or technician and awaiting their acceptance.' },
+  { id: 'sm-reassigned', name: 'Reassigned', order: 4, bgColor: '#FEF9C3', textColor: '#A16207', isSystem: true, description: 'Ticket reassignment requested or approved for re-dispatch.' },
+  { id: 'sm-in-progress-employee', name: 'In Progress (Employee-owned)', order: 5, bgColor: '#FEE2E2', textColor: '#B91C1C', isSystem: true, description: 'Service engineer has accepted the assignment and is actively working on it.' },
+  { id: 'sm-on-hold', name: 'On Hold/Pending', order: 6, bgColor: '#F3E8FF', textColor: '#7E22CE', isSystem: true, description: 'Ticket paused awaiting parts, customer feedback, or an external dependency.' },
+  { id: 'sm-resolved', name: 'Resolved', order: 7, bgColor: '#DCFCE7', textColor: '#15803D', isSystem: true, description: 'Work is marked complete with proof of completion pending evaluation.' },
+  { id: 'sm-closed', name: 'Closed', order: 8, bgColor: '#F3F4F6', textColor: '#4B5563', isSystem: true, description: 'Final confirmed state. Can transition to Reopened within the reopen window.' },
+  { id: 'sm-escalated', name: 'Escalated', order: 9, bgColor: '#FCE7F3', textColor: '#BE185D', isSystem: true, description: 'Ticket escalated to supervisory or department leadership.' },
+  { id: 'sm-reopened', name: 'Reopened', order: 10, bgColor: '#CCFBF1', textColor: '#0F766E', isSystem: true, description: 'Ticket reopened by the customer within the window; routes automatically to CS.' },
+  { id: 'sm-cancelled', name: 'Cancelled', order: 11, bgColor: '#F3F4F6', textColor: '#4B5563', isSystem: true, description: 'Ticket discarded or cancelled before assignment.' },
+];
+
+// Mirrors TicketStateMachine::DEFAULT_TRANSITIONS on the backend.
+export const DEFAULT_STATE_MACHINE_TRANSITION_RULES = {
+  'Open': { allowed: ['In Progress (CS-owned)', 'Assigned', 'In Progress (Employee-owned)', 'Closed', 'Cancelled', 'Escalated'], type: 'editable', description: STATE_MACHINE_TRANSITION_STATES[0].description },
+  'In Progress (CS-owned)': { allowed: ['On Hold/Pending', 'Assigned', 'Resolved', 'Closed', 'Escalated'], type: 'editable', description: STATE_MACHINE_TRANSITION_STATES[1].description },
+  'Assigned': { allowed: ['Reassigned', 'In Progress (Employee-owned)', 'On Hold/Pending', 'Escalated'], type: 'editable', description: STATE_MACHINE_TRANSITION_STATES[2].description },
+  'Reassigned': { allowed: ['In Progress (Employee-owned)', 'Assigned', 'On Hold/Pending', 'Escalated'], type: 'editable', description: STATE_MACHINE_TRANSITION_STATES[3].description },
+  'In Progress (Employee-owned)': { allowed: ['On Hold/Pending', 'Reassigned', 'Resolved', 'Assigned', 'Closed', 'Escalated'], type: 'editable', description: STATE_MACHINE_TRANSITION_STATES[4].description },
+  'On Hold/Pending': { allowed: [], type: 'contextual', caption: 'Contextual transition: resumes back to whichever In Progress state it came from. This is non-editable.', description: STATE_MACHINE_TRANSITION_STATES[5].description },
+  'Resolved': { allowed: ['Closed', 'In Progress (Employee-owned)'], type: 'editable', description: STATE_MACHINE_TRANSITION_STATES[6].description },
+  'Closed': { allowed: ['Reopened'], type: 'editable', caption: 'Reopening is permitted only within the configured reopen window.', description: STATE_MACHINE_TRANSITION_STATES[7].description },
+  'Escalated': { allowed: ['Assigned', 'In Progress (Employee-owned)', 'In Progress (CS-owned)', 'Resolved', 'Closed'], type: 'editable', description: 'Ticket escalated to supervisory or department leadership.' },
+  'Reopened': { allowed: ['In Progress (CS-owned)'], type: 'fixed', caption: 'Automatic transition: Reopened tickets route to Customer Service. This is non-editable.', description: STATE_MACHINE_TRANSITION_STATES[9].description },
+  'Cancelled': { allowed: [], type: 'terminal', caption: 'Terminal status: no further transitions permitted from Cancelled.', description: STATE_MACHINE_TRANSITION_STATES[10].description },
+};
+
 export const TS093_STATUSES = [
   'New',
   'Assigned',
@@ -644,12 +680,164 @@ const priorityColorOptions = [
   { value: 'bg-gray-100 text-gray-700', label: 'Gray' },
 ];
 
-const priorityList = [
-  { name: 'Critical', badgeClass: 'bg-red-100 text-red-700 border-red-200', defaultResp: 15, defaultRes: 240 },
-  { name: 'High', badgeClass: 'bg-orange-100 text-orange-700 border-orange-200', defaultResp: 30, defaultRes: 480 },
-  { name: 'Medium', badgeClass: 'bg-yellow-100 text-yellow-700 border-yellow-200', defaultResp: 120, defaultRes: 1440 },
-  { name: 'Low', badgeClass: 'bg-green-100 text-green-700 border-green-200', defaultResp: 240, defaultRes: 4320 },
+// Display hints for well known priority names. The priority list itself always
+// comes from the database (ticket_priorities); unknown names fall back to gray.
+const PRIORITY_STYLE_HINTS = {
+  critical: { badgeClass: 'bg-red-100 text-red-700 border-red-200', defaultResp: 15, defaultRes: 240 },
+  high: { badgeClass: 'bg-orange-100 text-orange-700 border-orange-200', defaultResp: 30, defaultRes: 480 },
+  medium: { badgeClass: 'bg-yellow-100 text-yellow-700 border-yellow-200', defaultResp: 120, defaultRes: 1440 },
+  low: { badgeClass: 'bg-green-100 text-green-700 border-green-200', defaultResp: 240, defaultRes: 4320 },
+};
+const FALLBACK_PRIORITY_STYLE = { badgeClass: 'bg-gray-100 text-gray-700 border-gray-200', defaultResp: 60, defaultRes: 1440 };
+
+const buildSlaPriorityList = (priorities = []) => (
+  [...priorities]
+    .filter((p) => p && p.name)
+    // Higher priority_ID = more urgent in ticket_priorities, so list most urgent first.
+    .sort((a, b) => Number(b.id) - Number(a.id))
+    .map((p) => ({ name: p.name, ...(PRIORITY_STYLE_HINTS[String(p.name).toLowerCase()] || FALLBACK_PRIORITY_STYLE) }))
+);
+
+const DURATION_UNITS = [
+  { value: 'mins', label: 'Minutes', factor: 1 },
+  { value: 'hours', label: 'Hours', factor: 60 },
+  { value: 'days', label: 'Days', factor: 1440 },
 ];
+
+// ISO weekday numbering (1 = Monday ... 7 = Sunday), matching the backend.
+const BUSINESS_WEEKDAYS = [
+  { value: 1, label: 'Mon' },
+  { value: 2, label: 'Tue' },
+  { value: 3, label: 'Wed' },
+  { value: 4, label: 'Thu' },
+  { value: 5, label: 'Fri' },
+  { value: 6, label: 'Sat' },
+  { value: 7, label: 'Sun' },
+];
+
+const DEFAULT_BUSINESS_HOURS = { enabled: true, timezone: 'UTC', startTime: '08:00', endTime: '17:00', workingDays: [1, 2, 3, 4, 5] };
+
+const getBrowserTimezone = () => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+};
+
+const getTimezoneOptions = () => {
+  try {
+    if (typeof Intl.supportedValuesOf === 'function') {
+      const list = Intl.supportedValuesOf('timeZone');
+      return list.includes('UTC') ? list : ['UTC', ...list];
+    }
+  } catch {
+    // fall through
+  }
+  return ['UTC', getBrowserTimezone()].filter((v, i, a) => a.indexOf(v) === i);
+};
+
+// Convert an "HH:MM" wall time in one timezone to "HH:MM" in another (for today's date).
+const formatTimeInZone = (hhmm, fromZone, toZone) => {
+  try {
+    const [h, m] = String(hhmm).split(':').map(Number);
+    const now = new Date();
+    // Offset of fromZone at this moment, in minutes.
+    const zoned = (zone) => {
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+        .formatToParts(now).reduce((acc, p) => ({ ...acc, [p.type]: p.value }), {});
+      return Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour % 24, +parts.minute);
+    };
+    const fromOffset = (zoned(fromZone) - now.getTime()) / 60000;
+    const utcMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, m) - fromOffset * 60000;
+    return new Intl.DateTimeFormat('en-US', { timeZone: toZone, hour: 'numeric', minute: '2-digit' }).format(new Date(utcMs));
+  } catch {
+    return hhmm;
+  }
+};
+
+const describeBusinessHours = (bh) => {
+  if (!bh?.enabled) return 'around the clock (24/7)';
+  const days = BUSINESS_WEEKDAYS.filter((d) => (bh.workingDays || []).includes(d.value)).map((d) => d.label).join(', ');
+  return `${bh.startTime} to ${bh.endTime} (${bh.timezone}) on ${days || 'no days'}`;
+};
+
+const pickDurationUnit = (minutes) => {
+  const m = parseInt(minutes, 10);
+  if (!m || Number.isNaN(m)) return 'mins';
+  if (m % 1440 === 0) return 'days';
+  if (m % 60 === 0) return 'hours';
+  return 'mins';
+};
+
+const durationToMinutes = (text, unit) => {
+  if (text === '' || text === null || text === undefined) return '';
+  const num = parseFloat(text);
+  if (Number.isNaN(num)) return '';
+  const factor = DURATION_UNITS.find((u) => u.value === unit)?.factor || 1;
+  return String(Math.round(num * factor));
+};
+
+/**
+ * Number input with a minutes / hours / days picker. Always reports minutes
+ * (as a string) through onChange so the SLA payload stays in minutes.
+ */
+const DurationInput = ({ minutes, onChange, placeholderMinutes, ariaLabel }) => {
+  const [unit, setUnit] = useState(() => pickDurationUnit(minutes));
+  const [text, setText] = useState(() => {
+    if (minutes === '' || minutes === null || minutes === undefined) return '';
+    const factor = DURATION_UNITS.find((u) => u.value === pickDurationUnit(minutes)).factor;
+    return String(parseInt(minutes, 10) / factor);
+  });
+
+  // Re-sync when the value changes from outside (e.g. switching department).
+  useEffect(() => {
+    if (String(minutes ?? '') === durationToMinutes(text, unit)) return;
+    if (minutes === '' || minutes === null || minutes === undefined) {
+      setText('');
+      return;
+    }
+    const nextUnit = pickDurationUnit(minutes);
+    const factor = DURATION_UNITS.find((u) => u.value === nextUnit).factor;
+    setUnit(nextUnit);
+    setText(String(parseInt(minutes, 10) / factor));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [minutes]);
+
+  const placeholderUnitFactor = DURATION_UNITS.find((u) => u.value === unit).factor;
+  const placeholderValue = placeholderMinutes ? +(placeholderMinutes / placeholderUnitFactor).toFixed(2) : '';
+
+  return (
+    <div className="flex gap-2">
+      <input
+        type="number"
+        min="0"
+        step="any"
+        aria-label={ariaLabel}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          onChange(durationToMinutes(e.target.value, unit));
+        }}
+        placeholder={placeholderValue ? `e.g. ${placeholderValue}` : ''}
+        className="min-w-0 flex-1 rounded-xl border border-gray-200 bg-gray-50/50 px-3.5 py-2.5 text-sm font-medium outline-none focus:bg-white focus:ring-2 focus:ring-[#252578]"
+      />
+      <select
+        aria-label={ariaLabel ? `${ariaLabel} unit` : 'Unit'}
+        value={unit}
+        onChange={(e) => {
+          setUnit(e.target.value);
+          onChange(durationToMinutes(text, e.target.value));
+        }}
+        className="rounded-xl border border-gray-200 bg-white px-2 py-2.5 text-sm font-medium outline-none focus:ring-2 focus:ring-[#252578]"
+      >
+        {DURATION_UNITS.map((u) => (
+          <option key={u.value} value={u.value}>{u.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+};
 
 const defaultWorkflowStatuses = [
   { id: 1, name: 'New', description: 'Ticket has been submitted and is awaiting review', bgColor: '#DBEAFE', textColor: '#1D4ED8', order: 1, isSystem: true, requiresPreviousFulfilled: false, prerequisiteStatusId: null },
@@ -1022,6 +1210,40 @@ export default function SuperAdminTicketConfig() {
 
   const setNotifSubtab = handleSelectSubTab;
   const [items, setItems] = useState({ ticketCategories: [], equipment: [], priorities: [], slaRules: [], departments: [], slas: [] });
+  // SLA priorities always mirror the real ticket_priorities table.
+  const priorityList = useMemo(() => buildSlaPriorityList(items.priorities), [items.priorities]);
+
+  // SLA business hours (working hours in which SLA minutes are counted)
+  const browserTimezone = useMemo(() => getBrowserTimezone(), []);
+  const timezoneOptions = useMemo(() => getTimezoneOptions(), []);
+  const [businessHours, setBusinessHours] = useState(DEFAULT_BUSINESS_HOURS);
+  const [savedBusinessHours, setSavedBusinessHours] = useState(DEFAULT_BUSINESS_HOURS);
+  const [businessHoursLoading, setBusinessHoursLoading] = useState(true);
+  const [businessHoursSaving, setBusinessHoursSaving] = useState(false);
+  const [businessHoursError, setBusinessHoursError] = useState('');
+
+  useEffect(() => {
+    let isMounted = true;
+    Promise.resolve()
+      .then(() => getBusinessHoursConfig())
+      .then((cfg) => {
+        if (!isMounted || !cfg || typeof cfg !== 'object') return;
+        const next = {
+          enabled: Boolean(cfg.enabled ?? true),
+          timezone: cfg.timezone || 'UTC',
+          startTime: cfg.startTime || '08:00',
+          endTime: cfg.endTime || '17:00',
+          workingDays: Array.isArray(cfg.workingDays) ? cfg.workingDays.map(Number) : [1, 2, 3, 4, 5],
+        };
+        setBusinessHours(next);
+        setSavedBusinessHours(next);
+      })
+      .catch((err) => console.warn('Failed to load SLA business hours:', err))
+      .finally(() => { if (isMounted) setBusinessHoursLoading(false); });
+    return () => { isMounted = false; };
+  }, []);
+
+  const businessHoursDirty = JSON.stringify(businessHours) !== JSON.stringify(savedBusinessHours);
   const [loading, setLoading] = useState(true);
   const [savingSla, setSavingSla] = useState(false);
   const [search, setSearch] = useState('');
@@ -1060,51 +1282,48 @@ export default function SuperAdminTicketConfig() {
   const [editingWorkflow, setEditingWorkflow] = useState(null);
   const [editingEscalation, setEditingEscalation] = useState(null);
 
-  // Transition Rules state (connected to active workflow statuses)
+  // Transition Rules state: keyed by the backend ticket state machine states.
+  const transitionStatuses = STATE_MACHINE_TRANSITION_STATES;
   const [transitionRules, setTransitionRules] = useState(() => {
     try {
       const stored = localStorage.getItem('superadmin_ticket_transitions_config');
       if (stored) {
         const parsed = JSON.parse(stored);
-        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+        // Ignore stale caches keyed by workflow display names (e.g. "New").
+        if (parsed && typeof parsed === 'object' && parsed.Open) {
           return parsed;
         }
       }
     } catch {}
-    return DEFAULT_WORKFLOW_TRANSITION_RULES;
+    return DEFAULT_STATE_MACHINE_TRANSITION_RULES;
   });
-  const [selectedTransitionStatus, setSelectedTransitionStatus] = useState('New');
+  const [selectedTransitionStatus, setSelectedTransitionStatus] = useState('Open');
   const [savingTransitions, setSavingTransitions] = useState(false);
   const [hasTransitionChanges, setHasTransitionChanges] = useState(false);
   const transitionDraftDirtyRef = useRef(false);
 
   // Synchronize selected transition status when active workflow statuses change
   useEffect(() => {
-    if (activeWorkflowStatuses.length > 0) {
-      const names = activeWorkflowStatuses.map((s) => s.name);
+    if (transitionStatuses.length > 0) {
+      const names = transitionStatuses.map((s) => s.name);
       if (!selectedTransitionStatus || !names.includes(selectedTransitionStatus)) {
         setSelectedTransitionStatus(names[0]);
       }
     }
-  }, [activeWorkflowStatuses, selectedTransitionStatus]);
+  }, [transitionStatuses, selectedTransitionStatus]);
 
   // Ensure all active workflow statuses have rules and prune deleted targets
   useEffect(() => {
-    if (activeWorkflowStatuses.length === 0) return;
+    if (transitionStatuses.length === 0) return;
     setTransitionRules((prev) => {
-      const statusNames = activeWorkflowStatuses.map((s) => s.name);
+      const statusNames = transitionStatuses.map((s) => s.name);
       const hasAnyMatch = statusNames.some((name) => Boolean(prev && prev[name]));
-      let next = hasAnyMatch ? { ...(prev || {}) } : { ...DEFAULT_WORKFLOW_TRANSITION_RULES };
+      let next = hasAnyMatch ? { ...(prev || {}) } : { ...DEFAULT_STATE_MACHINE_TRANSITION_RULES };
       let changed = false;
 
-      activeWorkflowStatuses.forEach((st, idx) => {
+      transitionStatuses.forEach((st) => {
         if (!next[st.name]) {
-          const nextInSeq = activeWorkflowStatuses[idx + 1]?.name;
-          next[st.name] = {
-            allowed: nextInSeq ? [nextInSeq] : [],
-            type: 'editable',
-            description: st.description || `Transitions originating from ${st.name}.`,
-          };
+          next[st.name] = { ...DEFAULT_STATE_MACHINE_TRANSITION_RULES[st.name] };
           changed = true;
         } else {
           const currentAllowed = next[st.name].allowed || [];
@@ -1121,7 +1340,7 @@ export default function SuperAdminTicketConfig() {
 
       return changed ? next : prev;
     });
-  }, [activeWorkflowStatuses]);
+  }, [transitionStatuses]);
 
   // Fast independent fetch for transition rules
   useEffect(() => {
@@ -1133,13 +1352,16 @@ export default function SuperAdminTicketConfig() {
           if (Object.keys(val).length > 0) {
             if (!transitionDraftDirtyRef.current) {
               setTransitionRules((prev) => {
-                const statusNames = activeWorkflowStatuses.map((s) => s.name);
+                const statusNames = transitionStatuses.map((s) => s.name);
                 const hasMatch = statusNames.some((name) => Boolean(val[name]));
                 if (!hasMatch) {
-                  // Legacy rules returned from server (e.g. 'Open'), keep default workflow rules
-                  return prev && Object.keys(prev).length > 0 ? prev : DEFAULT_WORKFLOW_TRANSITION_RULES;
+                  // Server holds rules keyed by workflow display names, which the backend
+                  // state machine ignores. Fall back to the backend defaults.
+                  return prev && prev.Open ? prev : DEFAULT_STATE_MACHINE_TRANSITION_RULES;
                 }
-                return val;
+                const merged = { ...DEFAULT_STATE_MACHINE_TRANSITION_RULES };
+                statusNames.forEach((name) => { if (val[name]) merged[name] = val[name]; });
+                return merged;
               });
             }
             try {
@@ -1152,7 +1374,7 @@ export default function SuperAdminTicketConfig() {
     return () => {
       isMounted = false;
     };
-  }, [activeWorkflowStatuses]);
+  }, [transitionStatuses]);
 
   // File Upload & Security Limits state
   const [fileConfig, setFileConfig] = useState(TS098_DEFAULT_FILE_CONFIG);
@@ -1754,25 +1976,29 @@ export default function SuperAdminTicketConfig() {
 
     const deptRules = items.slaRules.filter((r) => String(r.department_id) === String(selectedDeptId));
 
-    const newForm = {
-      Critical: { response_time_limit: '15', resolution_time_limit: '240' },
-      High: { response_time_limit: '30', resolution_time_limit: '480' },
-      Medium: { response_time_limit: '120', resolution_time_limit: '1440' },
-      Low: { response_time_limit: '240', resolution_time_limit: '4320' },
-    };
-
-    deptRules.forEach((rule) => {
-      const pName = rule.priority;
-      if (newForm[pName]) {
-        newForm[pName] = {
-          response_time_limit: String(rule.response_time_limit || ''),
-          resolution_time_limit: String(rule.resolution_time_limit || ''),
-        };
-      }
+    // Start every DB priority empty so unsaved priorities read as "Not set" here too,
+    // instead of showing hardcoded defaults that look like saved values.
+    const newForm = {};
+    priorityList.forEach((p) => {
+      newForm[p.name] = { response_time_limit: '', resolution_time_limit: '' };
     });
 
+    deptRules
+      .filter((rule) => rule.category_id === null || rule.category_id === undefined)
+      // Oldest first so the most recently updated duplicate wins (matches backend lookup).
+      .sort((a, b) => String(a.updated_at || '').localeCompare(String(b.updated_at || '')) || Number(a.id) - Number(b.id))
+      .forEach((rule) => {
+        const match = priorityList.find((p) => p.name.toLowerCase() === String(rule.priority || '').toLowerCase());
+        if (match) {
+          newForm[match.name] = {
+            response_time_limit: String(rule.response_time_limit || ''),
+            resolution_time_limit: String(rule.resolution_time_limit || ''),
+          };
+        }
+      });
+
     setDepartmentSlaForm(newForm);
-  }, [selectedDeptId, items.slaRules]);
+  }, [selectedDeptId, items.slaRules, priorityList]);
 
   useRealtimeRefresh({
     refresh: loadConfig,
@@ -2138,17 +2364,99 @@ export default function SuperAdminTicketConfig() {
     }));
   };
 
-  const handleSaveDepartmentSla = async () => {
+  const handleSaveDepartmentSla = () => {
     if (!selectedDeptId) return;
 
     for (const p of priorityList) {
       const data = departmentSlaForm[p.name];
-      if (!data?.response_time_limit || !data?.resolution_time_limit || isNaN(data.response_time_limit) || isNaN(data.resolution_time_limit)) {
+      if (!(parseInt(data?.response_time_limit, 10) >= 1) || !(parseInt(data?.resolution_time_limit, 10) >= 1)) {
         showError('Validation Error', `Please fill out valid response and resolution time limits for ${p.name} priority.`);
         return;
       }
     }
 
+    const deptName = currentDeptObj?.name || 'this department';
+    showConfirm(
+      'Save SLA Rules?',
+      savedBusinessHours.enabled
+        ? `SLA limits for ${deptName} only count during working hours: ${describeBusinessHours(savedBusinessHours)}. Time outside working hours (nights, weekends, non working days) is not counted, so deadlines may land on the next working day. The new limits apply to tickets created or reclassified from now on.`
+        : `SLA limits for ${deptName} count around the clock (24/7), because business hours are turned off. The new limits apply to tickets created or reclassified from now on.`,
+      () => {
+        closeNotif();
+        persistDepartmentSla();
+      },
+      { confirmText: 'Save SLA Rules', cancelText: 'Cancel' }
+    );
+  };
+
+  const handleSaveBusinessHours = () => {
+    setBusinessHoursError('');
+    if (!businessHours.workingDays.length) {
+      setBusinessHoursError('Select at least one working day.');
+      return;
+    }
+    if (!businessHours.startTime || !businessHours.endTime || businessHours.startTime >= businessHours.endTime) {
+      setBusinessHoursError('End time must be later than start time.');
+      return;
+    }
+
+    showConfirm(
+      'Update Business Hours?',
+      businessHours.enabled
+        ? `SLA limits will only count during ${describeBusinessHours(businessHours)}. Deadlines of all open tickets will be recalculated with these hours, and new tickets will use them too.`
+        : 'SLA limits will count around the clock (24/7). Deadlines of all open tickets will be recalculated, and new tickets will use this too.',
+      async () => {
+        closeNotif();
+        setBusinessHoursSaving(true);
+        try {
+          const saved = await updateBusinessHoursConfig(businessHours);
+          const next = saved && typeof saved === 'object' && saved.timezone ? { ...businessHours, ...saved } : businessHours;
+          setBusinessHours(next);
+          setSavedBusinessHours(next);
+          // Existing open tickets must follow the new hours too, otherwise their
+          // deadlines stay on the old clock (e.g. 7:00 PM outside working hours).
+          let recalcText = '';
+          try {
+            const res = await recalculateOpenTicketSlas();
+            recalcText = ` ${res?.message || 'Open ticket deadlines were recalculated.'}`;
+          } catch (recalcErr) {
+            recalcText = ' Open ticket deadlines could not be recalculated; use "Recalculate Open Tickets" to retry.';
+          }
+          showSuccess('Business Hours Saved', `SLA limits now count ${describeBusinessHours(next)}.${recalcText}`);
+        } catch (err) {
+          const errors = err?.response?.data?.errors;
+          const firstError = errors ? Object.values(errors).flat()[0] : null;
+          setBusinessHoursError(firstError || err?.response?.data?.message || 'Failed to save business hours.');
+        } finally {
+          setBusinessHoursSaving(false);
+        }
+      },
+      { confirmText: 'Save Business Hours', cancelText: 'Cancel' }
+    );
+  };
+
+  const [recalculatingSlas, setRecalculatingSlas] = useState(false);
+  const handleRecalculateOpenTickets = () => {
+    showConfirm(
+      'Recalculate Open Ticket Deadlines?',
+      `Every open ticket gets new SLA deadlines from its current SLA rule, counted ${describeBusinessHours(savedBusinessHours)}. Use this after changing business hours or SLA limits so existing tickets match the new settings.`,
+      async () => {
+        closeNotif();
+        setRecalculatingSlas(true);
+        try {
+          const res = await recalculateOpenTicketSlas();
+          showSuccess('Deadlines Recalculated', res?.message || 'Open ticket SLA deadlines were recalculated.');
+        } catch (err) {
+          showError('Recalculation Failed', err?.response?.data?.message || 'Could not recalculate open ticket deadlines.');
+        } finally {
+          setRecalculatingSlas(false);
+        }
+      },
+      { confirmText: 'Recalculate', cancelText: 'Cancel' }
+    );
+  };
+
+  const persistDepartmentSla = async () => {
     setSavingSla(true);
     try {
       const rulesPayload = priorityList.map((p) => ({
@@ -2252,17 +2560,10 @@ export default function SuperAdminTicketConfig() {
       transitionDraftDirtyRef.current = false;
       const baseRules = (val && typeof val === 'object' && Object.keys(val).length > 0)
         ? val
-        : DEFAULT_WORKFLOW_TRANSITION_RULES;
-      const next = { ...baseRules };
-      activeWorkflowStatuses.forEach((st, idx) => {
-        if (!next[st.name]) {
-          const nextInSeq = activeWorkflowStatuses[idx + 1]?.name;
-          next[st.name] = {
-            allowed: nextInSeq ? [nextInSeq] : [],
-            type: 'editable',
-            description: st.description || `Transitions originating from ${st.name}.`,
-          };
-        }
+        : DEFAULT_STATE_MACHINE_TRANSITION_RULES;
+      const next = { ...DEFAULT_STATE_MACHINE_TRANSITION_RULES };
+      transitionStatuses.forEach((st) => {
+        if (baseRules[st.name]) next[st.name] = baseRules[st.name];
       });
       setTransitionRules(next);
       setHasTransitionChanges(false);
@@ -2272,17 +2573,7 @@ export default function SuperAdminTicketConfig() {
       showSuccess('Reset Complete', 'Transition rules have been restored to system defaults.');
     } catch {
       transitionDraftDirtyRef.current = false;
-      const next = { ...DEFAULT_WORKFLOW_TRANSITION_RULES };
-      activeWorkflowStatuses.forEach((st, idx) => {
-        if (!next[st.name]) {
-          const nextInSeq = activeWorkflowStatuses[idx + 1]?.name;
-          next[st.name] = {
-            allowed: nextInSeq ? [nextInSeq] : [],
-            type: 'editable',
-            description: st.description || `Transitions originating from ${st.name}.`,
-          };
-        }
-      });
+      const next = { ...DEFAULT_STATE_MACHINE_TRANSITION_RULES };
       setTransitionRules(next);
       setHasTransitionChanges(false);
       showSuccess('Reset Complete', 'Transition rules have been restored to system defaults.');
@@ -4405,7 +4696,7 @@ export default function SuperAdminTicketConfig() {
         try {
           const res = await deleteBranchCategory(activeBranchKey, cat.id);
           showSuccess('Category Removed', res.message || `Category "${cat.name}" removed.`);
-          setBranchCategories((prev) => prev.filter((c) => c.id !== cat.id));
+          // Reload from the server (the list lives in branchCategoryData per branch).
           await loadBranchCategoriesAndSla();
         } catch (err) {
           const body = err.response?.data;
@@ -4949,10 +5240,10 @@ export default function SuperAdminTicketConfig() {
               </div>
               <div>
                 <h4 className="text-xs font-bold text-gray-900 uppercase tracking-wide">
-                  Dynamic Workflow Integration ({activeWorkflowStatuses.length} Stages Connected)
+                  Ticket State Machine ({transitionStatuses.length} States Enforced)
                 </h4>
                 <p className="text-xs text-gray-600 mt-0.5">
-                  All statuses, sequence numbers, colors, and prerequisites below are dynamically mapped from your "Statuses & Sequence" configuration.
+                  These are the lifecycle states the ticket engine enforces. Saved rules apply immediately to every status change (assign, hold, resolve, close, escalate). A blocked change shows an "invalid transition" error to the user, and the Incoming queue only offers "Close Ticket" while Open → Closed is allowed. Every save is recorded in the Audit Logs.
                 </p>
               </div>
             </div>
@@ -4980,7 +5271,7 @@ export default function SuperAdminTicketConfig() {
                     onChange={(e) => setSelectedTransitionStatus(e.target.value)}
                     className="w-full rounded-xl border border-gray-200 bg-gray-50/50 px-4 py-3 text-sm font-semibold text-gray-800 outline-none focus:bg-white focus:ring-2 focus:ring-[#252578] cursor-pointer appearance-none pr-10"
                   >
-                    {activeWorkflowStatuses.map((st, idx) => (
+                    {transitionStatuses.map((st, idx) => (
                       <option key={st.id || st.name} value={st.name}>
                         Step {st.order || idx + 1}: {st.name} {st.isSystem ? '(System)' : '(Custom)'}
                       </option>
@@ -4995,7 +5286,7 @@ export default function SuperAdminTicketConfig() {
 
               {/* Right Column: Status Information Card */}
               {(() => {
-                const currentStatusObj = activeWorkflowStatuses.find((s) => s.name === selectedTransitionStatus);
+                const currentStatusObj = transitionStatuses.find((s) => s.name === selectedTransitionStatus);
                 const currentRule = transitionRules[selectedTransitionStatus];
                 const currentOrder = Number(currentStatusObj?.order) || 1;
 
@@ -5022,7 +5313,7 @@ export default function SuperAdminTicketConfig() {
                                 color: currentStatusObj?.textColor || '#1D4ED8',
                               }}
                             >
-                              Step {currentOrder} of {activeWorkflowStatuses.length}
+                              Step {currentOrder} of {transitionStatuses.length}
                             </span>
                             {currentStatusObj?.isSystem ? (
                               <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700 border border-blue-200">
@@ -5121,7 +5412,7 @@ export default function SuperAdminTicketConfig() {
               {/* Conditional Transition Rendering based on status type */}
               {(() => {
                 const currentRule = transitionRules[selectedTransitionStatus] || { allowed: [], type: 'editable' };
-                const currentStatusObj = activeWorkflowStatuses.find((s) => s.name === selectedTransitionStatus);
+                const currentStatusObj = transitionStatuses.find((s) => s.name === selectedTransitionStatus);
                 const currentOrder = Number(currentStatusObj?.order) || 1;
 
                 if (currentRule.type === 'terminal') {
@@ -5195,7 +5486,7 @@ export default function SuperAdminTicketConfig() {
                 }
 
                 // Dynamically list all other workflow statuses sorted by sequence order
-                const otherStatuses = activeWorkflowStatuses.filter((s) => s.name !== selectedTransitionStatus);
+                const otherStatuses = transitionStatuses.filter((s) => s.name !== selectedTransitionStatus);
 
                 if (otherStatuses.length === 0) {
                   return (
@@ -5314,9 +5605,9 @@ export default function SuperAdminTicketConfig() {
 
               {/* Matrix Stats */}
               {(() => {
-                const totalPossible = activeWorkflowStatuses.length * (activeWorkflowStatuses.length - 1);
+                const totalPossible = transitionStatuses.length * (transitionStatuses.length - 1);
                 let allowedCount = 0;
-                activeWorkflowStatuses.forEach((source) => {
+                transitionStatuses.forEach((source) => {
                   const allowed = transitionRules[source.name]?.allowed || [];
                   allowedCount += allowed.length;
                 });
@@ -5338,7 +5629,7 @@ export default function SuperAdminTicketConfig() {
                     <th className="p-3 font-bold text-gray-700 min-w-[170px] sticky left-0 bg-gray-50 z-10 border-r border-gray-200 shadow-2xs">
                       From \ To Target
                     </th>
-                    {activeWorkflowStatuses.map((colStatus, cIdx) => (
+                    {transitionStatuses.map((colStatus, cIdx) => (
                       <th key={colStatus.id || colStatus.name} className="p-3 text-center min-w-[120px] font-semibold text-gray-700">
                         <div className="flex flex-col items-center gap-1">
                           <span
@@ -5359,7 +5650,7 @@ export default function SuperAdminTicketConfig() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {activeWorkflowStatuses.map((rowStatus, rIdx) => {
+                  {transitionStatuses.map((rowStatus, rIdx) => {
                     const rowRule = transitionRules[rowStatus.name] || { allowed: [], type: 'editable' };
                     const isSelectedRow = rowStatus.name === selectedTransitionStatus;
 
@@ -5401,7 +5692,7 @@ export default function SuperAdminTicketConfig() {
                         </td>
 
                         {/* Transition Cells */}
-                        {activeWorkflowStatuses.map((colStatus) => {
+                        {transitionStatuses.map((colStatus) => {
                           const isSelf = rowStatus.name === colStatus.name;
                           const isAllowed = (rowRule.allowed || []).includes(colStatus.name);
                           const isEditable = rowRule.type === 'editable';
@@ -10244,6 +10535,162 @@ export default function SuperAdminTicketConfig() {
           {selectedDeptId === null ? (
             /* DEPARTMENT LIST VIEW */
             <div className="flex flex-col gap-5">
+              {/* SLA BUSINESS HOURS */}
+              <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm flex flex-col gap-5">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#252578]/10 text-[#252578]">
+                      <Clock size={20} />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-bold text-gray-900">Business Hours</h2>
+                      <p className="text-sm text-gray-500 mt-0.5">
+                        SLA limits only count time inside these working hours, in the selected local timezone.
+                      </p>
+                    </div>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-sm font-semibold text-gray-700 cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      aria-label="Count SLA only during business hours"
+                      checked={businessHours.enabled}
+                      disabled={businessHoursLoading}
+                      onChange={(e) => setBusinessHours((prev) => ({ ...prev, enabled: e.target.checked }))}
+                      className="h-4 w-4 accent-[#252578]"
+                    />
+                    Count SLA only during business hours
+                  </label>
+                </div>
+
+                {!businessHoursLoading && businessHours.enabled && businessHours.timezone !== browserTimezone && (
+                  <div role="alert" className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                    <div className="flex items-start gap-2 text-sm text-amber-800">
+                      <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                      <span>
+                        Working hours are counted in <strong>{businessHours.timezone}</strong>, not your local time (<strong>{browserTimezone}</strong>).
+                        {' '}{businessHours.startTime} to {businessHours.endTime} {businessHours.timezone} is{' '}
+                        <strong>{formatTimeInZone(businessHours.startTime, businessHours.timezone, browserTimezone)} to {formatTimeInZone(businessHours.endTime, businessHours.timezone, browserTimezone)}</strong> on your clock, so SLA deadlines will look shifted.
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setBusinessHours((prev) => ({ ...prev, timezone: browserTimezone }))}
+                      className="inline-flex items-center justify-center rounded-xl bg-amber-600 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-700 shrink-0"
+                    >
+                      Use {browserTimezone}
+                    </button>
+                  </div>
+                )}
+
+                {businessHoursLoading ? (
+                  <div className="h-24 rounded-xl bg-gray-100 animate-pulse" />
+                ) : businessHours.enabled ? (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label htmlFor="bh-timezone" className="mb-1.5 block text-xs font-semibold text-gray-700">Timezone</label>
+                      <select
+                        id="bh-timezone"
+                        value={businessHours.timezone}
+                        onChange={(e) => setBusinessHours((prev) => ({ ...prev, timezone: e.target.value }))}
+                        className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium outline-none focus:ring-2 focus:ring-[#252578]"
+                      >
+                        {(timezoneOptions.includes(businessHours.timezone) ? timezoneOptions : [businessHours.timezone, ...timezoneOptions]).map((tz) => (
+                          <option key={tz} value={tz}>{tz}</option>
+                        ))}
+                      </select>
+                      {businessHours.timezone !== browserTimezone && (
+                        <button
+                          type="button"
+                          onClick={() => setBusinessHours((prev) => ({ ...prev, timezone: browserTimezone }))}
+                          className="mt-1.5 text-xs font-semibold text-[#252578] hover:text-[#2E85D8] underline"
+                        >
+                          Use my local timezone ({browserTimezone})
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label htmlFor="bh-start" className="mb-1.5 block text-xs font-semibold text-gray-700">Start Time</label>
+                        <input
+                          id="bh-start"
+                          type="time"
+                          value={businessHours.startTime}
+                          onChange={(e) => setBusinessHours((prev) => ({ ...prev, startTime: e.target.value }))}
+                          className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium outline-none focus:ring-2 focus:ring-[#252578]"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="bh-end" className="mb-1.5 block text-xs font-semibold text-gray-700">End Time</label>
+                        <input
+                          id="bh-end"
+                          type="time"
+                          value={businessHours.endTime}
+                          onChange={(e) => setBusinessHours((prev) => ({ ...prev, endTime: e.target.value }))}
+                          className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium outline-none focus:ring-2 focus:ring-[#252578]"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <span className="mb-1.5 block text-xs font-semibold text-gray-700">Working Days</span>
+                      <div className="flex flex-wrap gap-2">
+                        {BUSINESS_WEEKDAYS.map((d) => {
+                          const active = businessHours.workingDays.includes(d.value);
+                          return (
+                            <button
+                              key={d.value}
+                              type="button"
+                              aria-pressed={active}
+                              onClick={() => setBusinessHours((prev) => ({
+                                ...prev,
+                                workingDays: active
+                                  ? prev.workingDays.filter((v) => v !== d.value)
+                                  : [...prev.workingDays, d.value].sort((a, b) => a - b),
+                              }))}
+                              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${active ? 'border-[#252578] bg-[#252578] text-white' : 'border-gray-200 bg-white text-gray-600 hover:border-[#252578]/40'}`}
+                            >
+                              {d.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    Business hours are off. SLA limits count around the clock, including nights and weekends.
+                  </p>
+                )}
+
+                {businessHoursError && <p className="text-sm font-medium text-red-600">{businessHoursError}</p>}
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-gray-100 pt-4">
+                  <p className="text-xs text-gray-500">
+                    Currently saved: SLA limits count {describeBusinessHours(savedBusinessHours)}.
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleRecalculateOpenTickets}
+                      disabled={businessHoursLoading || recalculatingSlas || businessHoursDirty}
+                      title={businessHoursDirty ? 'Save business hours first' : undefined}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 hover:border-[#252578]/40 hover:text-[#252578] disabled:opacity-50"
+                    >
+                      <RefreshCw size={16} className={recalculatingSlas ? 'animate-spin' : ''} />
+                      {recalculatingSlas ? 'Recalculating...' : 'Recalculate Open Tickets'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveBusinessHours}
+                      disabled={businessHoursLoading || businessHoursSaving || !businessHoursDirty}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#252578] px-5 py-2.5 text-sm font-semibold text-white transition-all hover:shadow-lg disabled:opacity-50"
+                    >
+                      <Save size={16} />
+                      {businessHoursSaving ? 'Saving...' : 'Save Business Hours'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-xl font-bold text-gray-900">Departments</h2>
@@ -10286,7 +10733,9 @@ export default function SuperAdminTicketConfig() {
                         {/* Summary Rules Preview Chips */}
                         <div className="flex flex-wrap gap-2 pt-3 border-t border-gray-100">
                           {priorityList.map((p) => {
-                            const matchedRule = deptRules.find((r) => r.priority.toLowerCase() === p.name.toLowerCase());
+                            const matchedRule = deptRules
+                              .filter((r) => String(r.priority || '').toLowerCase() === p.name.toLowerCase())
+                              .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')) || Number(b.id) - Number(a.id))[0];
                             return (
                               <div
                                 key={p.name}
@@ -10337,7 +10786,11 @@ export default function SuperAdminTicketConfig() {
                   </div>
                   <div>
                     <h2 className="text-2xl font-bold text-gray-900">{currentDeptObj?.name} Department SLA Rules</h2>
-                    <p className="text-xs text-gray-500 mt-0.5">Fill out response and resolution time limits (in minutes) for every ticket priority level.</p>
+                    <p className="text-xs text-gray-500 mt-0.5">Fill out response and resolution time limits (in minutes, hours, or days) for every ticket priority level.</p>
+                    <p className="text-xs font-medium text-[#252578] mt-1 flex items-center gap-1">
+                      <Clock size={12} />
+                      Limits count {describeBusinessHours(savedBusinessHours)}.
+                    </p>
                   </div>
                 </div>
 
@@ -10356,15 +10809,13 @@ export default function SuperAdminTicketConfig() {
                           {/* Response Time Limit */}
                           <div>
                             <label className="mb-1.5 block text-xs font-semibold text-gray-700">
-                              Response Limit (Mins)
+                              Response Limit
                             </label>
-                            <input
-                              type="number"
-                              min="1"
-                              value={formData.response_time_limit}
-                              onChange={(e) => handleSlaInputChange(p.name, 'response_time_limit', e.target.value)}
-                              placeholder={`e.g. ${p.defaultResp}`}
-                              className="w-full rounded-xl border border-gray-200 bg-gray-50/50 px-3.5 py-2.5 text-sm font-medium outline-none focus:bg-white focus:ring-2 focus:ring-[#252578]"
+                            <DurationInput
+                              ariaLabel={`${p.name} response limit`}
+                              minutes={formData.response_time_limit}
+                              onChange={(mins) => handleSlaInputChange(p.name, 'response_time_limit', mins)}
+                              placeholderMinutes={p.defaultResp}
                             />
                             <p className="mt-1 text-xs font-medium text-[#252578] flex items-center gap-1 min-h-[18px]">
                               {formData.response_time_limit ? (
@@ -10379,15 +10830,13 @@ export default function SuperAdminTicketConfig() {
                           {/* Resolution Time Limit */}
                           <div>
                             <label className="mb-1.5 block text-xs font-semibold text-gray-700">
-                              Resolution Limit (Mins)
+                              Resolution Limit
                             </label>
-                            <input
-                              type="number"
-                              min="1"
-                              value={formData.resolution_time_limit}
-                              onChange={(e) => handleSlaInputChange(p.name, 'resolution_time_limit', e.target.value)}
-                              placeholder={`e.g. ${p.defaultRes}`}
-                              className="w-full rounded-xl border border-gray-200 bg-gray-50/50 px-3.5 py-2.5 text-sm font-medium outline-none focus:bg-white focus:ring-2 focus:ring-[#252578]"
+                            <DurationInput
+                              ariaLabel={`${p.name} resolution limit`}
+                              minutes={formData.resolution_time_limit}
+                              onChange={(mins) => handleSlaInputChange(p.name, 'resolution_time_limit', mins)}
+                              placeholderMinutes={p.defaultRes}
                             />
                             <p className="mt-1 text-xs font-medium text-[#252578] flex items-center gap-1 min-h-[18px]">
                               {formData.resolution_time_limit ? (

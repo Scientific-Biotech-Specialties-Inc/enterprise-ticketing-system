@@ -245,6 +245,34 @@ class TicketActionsTest extends TestCase
     }
 
     /**
+     * Regression: a leading time like "4:37 am" was stripped as a list prefix ("4:"),
+     * leaving "37 am". Real list prefixes such as "1. " must still be removed.
+     */
+    public function test_create_ticket_action_keeps_leading_time_in_title(): void
+    {
+        $uid = uniqid();
+        $client = Client::create([
+            'client_name' => 'Clinic ' . $uid,
+            'email' => 'clinic.' . $uid . '@test.com',
+            'contact_number' => '123-456-7890',
+            'address' => '100 Medical Plaza',
+        ]);
+        $action = app(CreateTicketAction::class);
+        $base = [
+            'description' => 'Monitor alarm went off overnight.',
+            'problem_category_ID' => 1,
+            'priority_ID' => 1,
+            'origin' => 'portal',
+        ];
+
+        $timeTitle = $action->execute($base + ['title' => '4:37 Am Monitor Alarm'], $client, 2);
+        $this->assertDatabaseHas('tickets', ['ticket_ID' => $timeTitle['ticket_id'], 'title' => '4:37 Am Monitor Alarm']);
+
+        $listTitle = $action->execute($base + ['title' => '1. Monitor Alarm'], $client, 2);
+        $this->assertDatabaseHas('tickets', ['ticket_ID' => $listTitle['ticket_id'], 'title' => 'Monitor Alarm']);
+    }
+
+    /**
      * covers: AC-7
      */
     public function test_create_ticket_action_rejects_non_client_user(): void

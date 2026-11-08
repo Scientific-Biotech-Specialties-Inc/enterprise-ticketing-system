@@ -25,6 +25,7 @@ import { formatDisplayDate } from '@/utils/dateUtils';
 import { getTicketDetails, updateEmployeeTicket, saveWorkLog, getAssignableEmployees, acceptTicket } from '@/services/ticketService';
 import { getTicketMessages } from '@/services/messagingService';
 import ProofCompletionModal from '@/components/employee/ProofCompletionModal';
+import ActionErrorModal, { getActionError } from '@/components/employee/ActionErrorModal';
 import ReassignmentModal from '@/components/employee/ReassignmentModal';
 import DelegateTicketModal from '@/components/employee/DelegateTicketModal';
 import ReassignmentDisapprovalBanner from '@/components/employee/ReassignmentDisapprovalBanner';
@@ -65,6 +66,7 @@ export default function EmployeeTicketUpdate() {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [showStatusConfirm, setShowStatusConfirm] = useState(false);
+  const [actionError, setActionError] = useState(null);
 
   const [showProofModal, setShowProofModal] = useState(false);
   const [showReassignModal, setShowReassignModal] = useState(false);
@@ -411,8 +413,12 @@ export default function EmployeeTicketUpdate() {
       setAttachedFiles([]);
       setShowStatusConfirm(false);
       await loadTicketData();
-    } catch {
-      setErrorMessage('Failed to update status.');
+    } catch (err) {
+      // Every failed status change opens a modal explaining why.
+      const notice = getActionError(err, 'Failed to update status.');
+      setShowStatusConfirm(false);
+      setActionError(notice);
+      setErrorMessage(notice.inline);
     } finally {
       setIsSaving(false);
     }
@@ -1273,6 +1279,8 @@ export default function EmployeeTicketUpdate() {
           }
         />
       )}
+
+      <ActionErrorModal error={actionError} onClose={() => setActionError(null)} />
 
       {showReassignModal && (
         <ReassignmentModal

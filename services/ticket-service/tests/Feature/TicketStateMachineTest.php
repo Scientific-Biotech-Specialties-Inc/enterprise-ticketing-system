@@ -337,17 +337,17 @@ class TicketStateMachineTest extends TestCase
     {
         $ticket = $this->createTestTicket(['ticket_status_ID' => 1]); // Open
 
-        // Attempting Open -> Closed should be rejected (Open can only go to In Progress (CS) or Cancelled)
+        // Attempting Open -> Resolved should be rejected (not allowed by the default Transition Matrix)
         $response = $this->actingAs($this->superAdmin, 'api')
             ->putJson("/api/tickets/{$ticket->ticket_ID}", [
-                'ticket_status_ID' => 4, // Closed
+                'ticket_status_ID' => 3, // Resolved
             ]);
 
         $response->assertStatus(422);
         $response->assertJson([
             'code' => 'INVALID_TICKET_TRANSITION',
             'from_status' => TicketStateMachine::STATE_OPEN,
-            'to_status' => TicketStateMachine::STATE_CLOSED,
+            'to_status' => TicketStateMachine::STATE_RESOLVED,
         ]);
         $this->assertIsArray($response->json('allowed_statuses'));
     }

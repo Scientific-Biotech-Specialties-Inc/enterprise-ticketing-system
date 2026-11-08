@@ -34,10 +34,14 @@ class Handler extends ExceptionHandler
     {
         $this->reportable(function (Throwable $e) {
             // Ignore standard user validation, 404, or 401 authentication errors
+            // Passport reports every rejected or expired bearer token as an OAuthServerException.
+            // That is an expected 401, not a system failure; alerting on it cost each such request
+            // a blocking call to notification-service (and timed out file access checks).
             if (
                 $e instanceof ValidationException ||
                 $e instanceof NotFoundHttpException ||
-                $e instanceof AuthenticationException
+                $e instanceof AuthenticationException ||
+                $e instanceof \League\OAuth2\Server\Exception\OAuthServerException
             ) {
                 return;
             }

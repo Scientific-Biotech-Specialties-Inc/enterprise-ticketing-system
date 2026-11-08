@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Image as ImageIcon, FileText, File, X, Download, AlertTriangle, ExternalLink, Loader2 } from 'lucide-react';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
-import tokenStore from '@/auth/tokenStore';
+import { useAttachmentBlobUrl, downloadAttachment, openAttachmentInNewTab } from '@/utils/attachmentFiles';
 import { Button } from '@/components/ui/button';
 
 export default function FilePreviewModal({ file, onClose }) {
@@ -23,51 +23,8 @@ export default function FilePreviewModal({ file, onClose }) {
     (typeof file === 'string' ? file : '');
 
   const [imgError, setImgError] = useState(false);
-  const [fetchError, setFetchError] = useState(false);
-  const [blobUrl, setBlobUrl] = useState('');
-  const [blobLoading, setBlobLoading] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
-
-  const extractCleanSubPath = (inputUrl) => {
-    if (!inputUrl) return '';
-    let cleaned = String(inputUrl).trim().replace(/^https?:\/\/[^\/]+/, '');
-    if (cleaned.includes('/api/ticketing/attachment/storage/')) {
-      cleaned = cleaned.substring(cleaned.indexOf('/api/ticketing/attachment/storage/') + '/api/ticketing/attachment/storage/'.length);
-    } else if (cleaned.includes('/api/ticketing/attachment/download/')) {
-      cleaned = cleaned.substring(cleaned.indexOf('/api/ticketing/attachment/download/') + '/api/ticketing/attachment/download/'.length);
-    } else if (cleaned.includes('/storage/')) {
-      cleaned = cleaned.substring(cleaned.indexOf('/storage/') + '/storage/'.length);
-    } else if (cleaned.includes('/download/')) {
-      cleaned = cleaned.substring(cleaned.indexOf('/download/') + '/download/'.length);
-    } else if (cleaned.startsWith('storage/')) {
-      cleaned = cleaned.substring('storage/'.length);
-    } else if (cleaned.startsWith('/')) {
-      cleaned = cleaned.substring(1);
-    }
-    return cleaned.replace(/^\/+/, '');
-  };
-
-  const getAbsoluteUrl = (inputUrl) => {
-    if (!inputUrl) return '';
-    if (inputUrl.startsWith('blob:') || inputUrl.startsWith('data:')) return inputUrl;
-
-    const subPath = extractCleanSubPath(inputUrl);
-    if (!subPath) return '';
-    return `/api/ticketing/attachment/storage/${subPath}`;
-  };
-
-  const getDownloadUrl = (inputUrl) => {
-    if (!inputUrl) return '';
-    if (inputUrl.startsWith('blob:') || inputUrl.startsWith('data:')) return inputUrl;
-
-    const subPath = extractCleanSubPath(inputUrl);
-    if (!subPath) return '';
-    return `/api/ticketing/attachment/download/${subPath}`;
-  };
-
-  const absoluteUrl = getAbsoluteUrl(rawUrl);
-  const downloadUrl = getDownloadUrl(rawUrl);
-  const previewUrl = blobUrl || absoluteUrl;
+  const [actionError, setActionError] = useState('');
 
   const getExt = (filename) => {
     if (!filename) return '';
@@ -79,140 +36,41 @@ export default function FilePreviewModal({ file, onClose }) {
   const isImg = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].includes(ext);
   const isPdf = ext === 'pdf';
   const isDocx = ['docx', 'doc'].includes(ext);
-  const isOtherOffice = ['xlsx', 'xls', 'pptx', 'ppt', 'txt'].includes(ext);
 
-  const isLocalhost =
-    typeof window !== 'undefined' &&
-    (window.location.hostname === 'localhost' ||
-      window.location.hostname === '127.0.0.1' ||
-      window.location.hostname.startsWith('192.168.') ||
-      window.location.hostname.startsWith('10.'));
+  let typeHint;
+  if (isPdf) typeHint = 'application/pdf';
 
-  const getGoogleDocsUrl = (fileUrl) => {
-    let fullUrl = fileUrl;
-    if (fileUrl.startsWith('/')) {
-      fullUrl = window.location.origin + fileUrl;
-    }
-    return `https://docs.google.com/viewer?url=${encodeURIComponent(fullUrl)}&embedded=true`;
-  };
+  // Spec 0037: files are private. Load them only through the authenticated fetch;
+  // there is no fallback to a bare /storage/ URL.
+  const { url: blobUrl, loading: blobLoading, error: blobError } = useAttachmentBlobUrl(rawUrl, { typeHint });
+  const fetchError = Boolean(blobError);
+  const previewUrl = blobUrl;
 
   useEffect(() => {
-    let objectUrl = '';
-    let cancelled = false;
-
-    const loadBlob = async () => {
-      if (!absoluteUrl || absoluteUrl.startsWith('blob:') || absoluteUrl.startsWith('data:')) {
-        return;
-      }
-
-      try {
-        setBlobLoading(true);
-        setImgError(false);
-        setFetchError(false);
-
-        const headers = {};
-        const token = tokenStore?.getToken ? tokenStore.getToken() : null;
-        if (token) {
-          headers['Authorization'] = `Bearer ${token}`;
-        }
-
-        let res = await fetch(absoluteUrl, { headers });
-        let contentType = res.headers.get('content-type') || '';
-
-        // If gateway route returned HTML (proxy fallback) or 404, try /storage/ subpath fallback
-        if ((!res.ok || contentType.includes('text/html')) && !absoluteUrl.startsWith('/storage/')) {
-          const subPath = extractCleanSubPath(rawUrl);
-          const fallbackDirectUrl = `/storage/${subPath}`;
-          try {
-            const altRes = await fetch(fallbackDirectUrl, { headers });
-            const altType = altRes.headers.get('content-type') || '';
-            if (altRes.ok && !altType.includes('text/html')) {
-              res = altRes;
-              contentType = altType;
-            }
-          } catch {
-            // retain primary response
-          }
-        }
-
-        if (!res.ok || contentType.includes('text/html')) {
-          throw new Error(`HTTP ${res.status} or unexpected content type`);
-        }
-
-        const blob = await res.blob();
-        let finalBlob = blob;
-        if (isPdf && blob.type !== 'application/pdf') {
-          finalBlob = new Blob([blob], { type: 'application/pdf' });
-        } else if (isImg && !blob.type.startsWith('image/')) {
-          finalBlob = new Blob([blob], { type: ext === 'png' ? 'image/png' : 'image/jpeg' });
-        }
-
-        objectUrl = URL.createObjectURL(finalBlob);
-        if (!cancelled) {
-          setBlobUrl(objectUrl);
-        } else {
-          URL.revokeObjectURL(objectUrl);
-        }
-      } catch (err) {
-        console.warn('FilePreviewModal: Direct preview load failed:', err);
-        if (!cancelled) {
-          setFetchError(true);
-        }
-      } finally {
-        if (!cancelled) setBlobLoading(false);
-      }
-    };
-
-    loadBlob();
-
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
-    };
-  }, [absoluteUrl, rawUrl, isPdf, isImg, ext]);
+    setImgError(false);
+    setActionError('');
+  }, [rawUrl]);
 
   const handleDownload = async (e) => {
     if (e) e.preventDefault();
     setIsDownloading(true);
+    setActionError('');
     try {
-      const headers = {};
-      const token = tokenStore?.getToken ? tokenStore.getToken() : null;
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-
-      let blobData = null;
-      const targets = [downloadUrl, absoluteUrl, `/storage/${extractCleanSubPath(rawUrl)}`];
-
-      for (const endpoint of targets) {
-        if (!endpoint) continue;
-        try {
-          const response = await fetch(endpoint, { headers });
-          const cType = response.headers.get('content-type') || '';
-          if (response.ok && !cType.includes('text/html')) {
-            blobData = await response.blob();
-            break;
-          }
-        } catch {
-          // try next target
-        }
-      }
-
-      if (blobData) {
-        const downloadBlobUrl = window.URL.createObjectURL(blobData);
-        const link = document.createElement('a');
-        link.href = downloadBlobUrl;
-        link.setAttribute('download', fileName || 'attachment');
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(downloadBlobUrl);
-      } else {
-        window.open(downloadUrl || absoluteUrl, '_blank');
-      }
+      await downloadAttachment(rawUrl, fileName);
     } catch {
-      window.open(downloadUrl || absoluteUrl, '_blank');
+      setActionError('The file could not be downloaded. You may not have access to it.');
     } finally {
       setIsDownloading(false);
+    }
+  };
+
+  const handleOpenInNewTab = async (e) => {
+    if (e) e.preventDefault();
+    setActionError('');
+    try {
+      await openAttachmentInNewTab(rawUrl);
+    } catch {
+      setActionError('The file could not be opened. You may not have access to it.');
     }
   };
 
@@ -285,13 +143,11 @@ export default function FilePreviewModal({ file, onClose }) {
                 <Button
                   variant="outline"
                   size="sm"
-                  asChild
+                  onClick={handleOpenInNewTab}
                   className="cursor-pointer gap-1.5 bg-slate-900 border-slate-700 text-slate-200 hover:bg-slate-800"
                 >
-                  <a href={downloadUrl || absoluteUrl} target="_blank" rel="noopener noreferrer">
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    Open in New Tab
-                  </a>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Open in New Tab
                 </Button>
               </div>
             </div>
@@ -300,13 +156,7 @@ export default function FilePreviewModal({ file, onClose }) {
               src={previewUrl}
               alt={fileName}
               className="max-w-full max-h-[68vh] object-contain rounded-lg shadow-lg mx-auto"
-              onError={() => {
-                if (blobUrl && previewUrl === blobUrl) {
-                  setBlobUrl('');
-                } else {
-                  setImgError(true);
-                }
-              }}
+              onError={() => setImgError(true)}
             />
           ) : isImg && imgError ? (
             <div className="text-center text-slate-400 py-16">
@@ -368,16 +218,6 @@ export default function FilePreviewModal({ file, onClose }) {
                     </>
                   )}
                 </Button>
-                {!isLocalhost && (
-                  <a
-                    href={getGoogleDocsUrl(absoluteUrl)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full py-2 px-4 bg-slate-100 hover:bg-slate-200 text-dark-slate text-xs font-medium rounded-xl transition-colors inline-block"
-                  >
-                    Open with Google Docs Viewer ↗
-                  </a>
-                )}
               </div>
             </div>
           ) : (
@@ -391,24 +231,19 @@ export default function FilePreviewModal({ file, onClose }) {
 
         {/* Footer */}
         <div className="px-6 py-4 bg-slate-50 flex items-center justify-between border-t border-border">
-          <p className="text-[11px] text-muted-slate truncate max-w-sm" title={fileName}>
-            {fileName}
+          <p className="text-[11px] text-muted-slate truncate max-w-sm" title={actionError || fileName} role={actionError ? 'alert' : undefined}>
+            {actionError || fileName}
           </p>
           <div className="flex items-center gap-2.5">
             <Button
               variant="outline"
               size="sm"
-              asChild
+              onClick={handleOpenInNewTab}
+              disabled={!rawUrl}
               className="cursor-pointer gap-1.5"
             >
-              <a
-                href={absoluteUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <ExternalLink className="h-3.5 w-3.5" />
-                Open in New Tab
-              </a>
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open in New Tab
             </Button>
             <Button
               size="sm"

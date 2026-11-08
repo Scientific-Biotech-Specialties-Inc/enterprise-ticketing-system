@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { Bot, Send, Paperclip, ChevronDown, ChevronUp, X, CheckCircle, AlertTriangle, Plus, MessageSquare, Trash2, ArrowLeft, Clock } from 'lucide-react';
 import axiosInstance from '@/api/axiosInstance';
@@ -230,6 +230,9 @@ function AISourceList({ sources }) {
     </div>
   );
 }
+
+// AI conversation statuses (ai-service) meaning the chat already ended in a ticket.
+const FINISHED_CONVERSATION_STATUSES = ['ticket_created', 'escalated'];
 
 function TicketRecommendationCard({ onCreateTicket, onContinue }) {
   return (
@@ -660,6 +663,10 @@ const getStoredUser = () => {
 
 function AISupportPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  // "Create Ticket" entry points ask for a fresh chat instead of reopening the last one.
+  // Captured once so later re-renders or a page refresh don't keep forcing new chats.
+  const startNewChatRef = useRef(Boolean(location.state?.startNewChat));
   const { user } = useAuth();
   const effectiveUser = user || getStoredUser();
   const currentUserId = effectiveUser?.id ?? effectiveUser?.client_ID ?? effectiveUser?.client_id;
@@ -916,7 +923,7 @@ function AISupportPage() {
             ...c,
             timestamp: c.updated_at || c.created_at || new Date().toISOString(),
             messageCount: c.message_count !== undefined ? c.message_count : (Array.isArray(c.messages) ? c.messages.length : (c.messageCount || 2)),
-            title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : 'Support Inquiry'
+            title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : 'Support Inquiry'
           }));
           setConversations(cleanConvs);
         }
@@ -941,12 +948,18 @@ function AISupportPage() {
             ...c,
             timestamp: c.updated_at || c.created_at || new Date().toISOString(),
             messageCount: c.message_count !== undefined ? c.message_count : (Array.isArray(c.messages) ? c.messages.length : (c.messageCount || 2)),
-            title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : 'Support Inquiry'
+            title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : 'Support Inquiry'
           }));
           setConversations(fetched);
-          if (fetched.length > 0 && fetched[0].id) {
+          if (startNewChatRef.current) {
+            startNewChatRef.current = false;
+            // Drop the one-shot flag from history so a refresh reopens normally.
+            navigate(location.pathname, { replace: true, state: {} });
+            handleNewChat();
+          } else if (fetched.length > 0 && fetched[0].id && !FINISHED_CONVERSATION_STATUSES.includes(String(fetched[0].status || '').toLowerCase())) {
             loadConversation(fetched[0].id);
           } else {
+            // No chats yet, or the latest chat already became a ticket: start fresh.
             handleNewChat();
           }
         } else {
@@ -1238,7 +1251,7 @@ function AISupportPage() {
         }
       }
       // Strip leading question numbers, bullets, list markers e.g. "1.", "1)", "1 -", "Q1:", "Machine:"
-      res = res.replace(/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '');
+      res = res.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '');
       return res.trim();
     };
 
@@ -1474,7 +1487,7 @@ function AISupportPage() {
 
       const activeConv = conversations.find(c => c.id === activeConversationId);
       let ticketTitle = (formData.problemSummary || activeConv?.title || 'Support Ticket').trim();
-      ticketTitle = ticketTitle.replace(/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim();
+      ticketTitle = ticketTitle.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim();
       if (ticketTitle.length > 0) {
         ticketTitle = formatProperTitleCase(ticketTitle);
       } else {
@@ -1576,7 +1589,7 @@ function AISupportPage() {
 
       const activeConv = conversations.find(c => c.id === activeConversationId);
       let ticketTitle = (formData.problemSummary || activeConv?.title || 'Support Ticket').trim();
-      ticketTitle = ticketTitle.replace(/^(?:\d+[\.\)\-:]|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim();
+      ticketTitle = ticketTitle.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim();
       if (ticketTitle.length > 0) {
         ticketTitle = formatProperTitleCase(ticketTitle);
       } else {
@@ -1659,7 +1672,9 @@ function AISupportPage() {
 
   const handleCloseSuccess = useCallback(() => {
     setShowSuccess(false);
-  }, []);
+    // The chat is finished once its ticket exists; move the customer to a new chat.
+    handleNewChat();
+  }, [handleNewChat]);
 
   const handleContinueChatting = useCallback(() => {
     setShowTicketCard(false);

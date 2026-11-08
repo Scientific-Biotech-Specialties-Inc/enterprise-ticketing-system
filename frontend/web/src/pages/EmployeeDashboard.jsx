@@ -285,7 +285,13 @@ export default function EmployeeDashboard() {
   }, []);
 
   const handleAcceptAssignment = useCallback(async (id) => {
-    const numericId = typeof id === 'number' ? id : Number(String(id || '').replace(/\D/g, ''));
+    // `id` is the display number (e.g. INC-OPS-202611-00042); stripping its digits does not
+    // give the database ID, so resolve the real ticket_ID from the ticket itself.
+    const source = (pendingTicket && (pendingTicket.id === id || pendingTicket.ticket_ID === id))
+      ? pendingTicket
+      : assignedTickets.find((t) => t.id === id || t.ticket_ID === id);
+    const numericId = source?.ticket_ID
+      || (typeof id === 'number' ? id : Number(String(id || '').replace(/\D/g, '')));
     setIsAccepting(true);
     try {
       await acceptTicket({ ticketId: numericId });
@@ -304,7 +310,7 @@ export default function EmployeeDashboard() {
         'Accept failed'
       );
     }
-  }, [loadAssigned, toast]);
+  }, [loadAssigned, toast, pendingTicket, assignedTickets]);
 
   const handleReassignSuccess = useCallback((id, reason) => {
     setReassignTicket(null);
