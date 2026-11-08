@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { Filter, Plus, Search, Eye, Inbox, AlertTriangle } from 'lucide-react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Filter, Plus, Search, Eye, Inbox, AlertTriangle, FileText, Edit3, Trash2, AlertCircle } from 'lucide-react';
 import TicketModal from '@/components/TicketModal';
 import { AssignModal } from '@/components/CSModals';
 import { useAuth } from '@/context/AuthContext';
@@ -16,6 +16,8 @@ import {
   getDepartments,
   acceptTicket,
   assignTicketToEmployees,
+  getTicketDrafts,
+  deleteTicketDraft,
 } from '@/services/ticketService';
 import { statusColors } from '@/constants/employeeTickets';
 import { getMaxOpenTicketsLimit, OPEN_STATUS_SET } from '@/data/ticketLimitConfig';
@@ -44,6 +46,7 @@ export default function EmployeeMyTickets({ roleContext }) {
   const { user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [tickets, setTickets] = useState([]);
   const [selectedTicket, setSelectedTicket] = useState(null);
@@ -54,6 +57,13 @@ export default function EmployeeMyTickets({ roleContext }) {
   const [loadingText, setLoadingText] = useState('Loading...');
   const [error, setError] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingDraft, setEditingDraft] = useState(null);
+  const [activeTab, setActiveTab] = useState(
+    location.state?.tab === 'drafts' || searchParams.get('tab') === 'drafts' ? 'drafts' : 'tickets'
+  );
+  const [drafts, setDrafts] = useState([]);
+  const [loadingDrafts, setLoadingDrafts] = useState(false);
+  const [formOptions, setFormOptions] = useState(() => getCachedTicketFormOptions() || {});
   const isHistory = false;
   // CS delegation state
   const [csAssignTicket, setCsAssignTicket] = useState(null);
@@ -61,6 +71,88 @@ export default function EmployeeMyTickets({ roleContext }) {
   const [csDepartments, setCsDepartments] = useState([]);
   const [csPriorityOptions] = useState(['Low', 'Medium', 'High', 'Critical']);
   const storageKey = roleContext === 'cs' ? 'cs_created_tickets' : 'employee_created_tickets';
+
+  const currentUserId = useMemo(() => {
+    const uid = user?.client_ID ?? user?.client_id ?? user?.id ?? user?.emp_id;
+    if (uid) return Number(uid);
+    for (const key of ['user', 'auth_user']) {
+      for (const store of [sessionStorage, localStorage]) {
+        try {
+          const parsed = JSON.parse(store.getItem(key) || 'null');
+          const id = parsed?.client_ID ?? parsed?.client_id ?? parsed?.id ?? parsed?.emp_id;
+          if (id) return Number(id);
+        } catch { /* ignore */ }
+      }
+    }
+    return 1;
+  }, [user]);
+
+  const loadDrafts = useCallback(async () => {
+    setLoadingDrafts(true);
+    try {
+      const list = await getTicketDrafts({ client_id: currentUserId });
+      setDrafts(list || []);
+    } catch (err) {
+      console.warn('Failed to load ticket drafts:', err);
+    } finally {
+      setLoadingDrafts(false);
+    }
+  }, [currentUserId]);
+
+  useEffect(() => {
+    loadDrafts();
+    getTicketFormOptions({ forceRefresh: false })
+      .then((opts) => {
+        if (opts) setFormOptions(opts);
+      })
+      .catch(() => {});
+  }, [loadDrafts]);
+
+  useEffect(() => {
+    const targetTab = location.state?.tab || searchParams.get('tab');
+    if (targetTab) {
+      setActiveTab(targetTab);
+      if (targetTab === 'drafts') {
+        loadDrafts();
+      }
+    }
+  }, [location.state?.tab, location.state?.draftSavedAt, searchParams, loadDrafts]);
+
+  const handleEditDraft = (draft) => {
+    setEditingDraft(draft);
+    setIsModalOpen(true);
+  };
+
+  const handleDeleteDraft = async (draft) => {
+    if (!draft?.id) return;
+    try {
+      await deleteTicketDraft(draft.id, { client_id: currentUserId });
+      setDrafts((prev) => prev.filter((d) => d.id !== draft.id));
+    } catch (err) {
+      console.error('Failed to delete draft:', err);
+      window.alert(err?.response?.data?.message || 'Failed to delete draft.');
+    }
+  };
+
+  const getEquipmentName = (machineId) => {
+    if (!machineId) return '—';
+    const eqOpts = formOptions?.equipment_options || [];
+    const found = eqOpts.find((o) => String(o.value) === String(machineId));
+    if (found) return found.label;
+    const mach = (formOptions?.machines || []).find((m) => String(m.machine_ID) === String(machineId));
+    if (mach) return `${mach.machine_name} - ${mach.serial_number}`;
+    return `Equipment #${machineId}`;
+  };
+
+  const getCategoryName = (catId) => {
+    if (!catId) return '—';
+    const catOpts = formOptions?.category_options || [];
+    const found = catOpts.find((o) => String(o.value) === String(catId));
+    if (found) return found.label;
+    const cat = (formOptions?.problem_categories || []).find((c) => String(c.problem_category_ID) === String(catId));
+    if (cat) return cat.category_name;
+    return `Category #${catId}`;
+  };
 
   const [filters, setFilters] = useState({
     status: '',
@@ -446,7 +538,10 @@ export default function EmployeeMyTickets({ roleContext }) {
         subtitle="Track and manage your submitted support tickets."
         actions={
           <Button
-            onClick={() => setIsModalOpen(true)}
+            onClick={() => {
+              setEditingDraft(null);
+              setIsModalOpen(true);
+            }}
             icon={<Plus className="h-4 w-4" />}
           >
             Create Ticket
@@ -454,136 +549,318 @@ export default function EmployeeMyTickets({ roleContext }) {
         }
       />
 
-      <div className="w-full space-y-3 shrink-0">
-        <div className="relative w-full">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-slate" />
-          <input
-            type="text"
-            placeholder="Search ID or title..."
-            value={filters.search}
-            onChange={(event) => updateFilter('search', event.target.value)}
-            className="w-full rounded-xl border border-gray-200 bg-surface pl-9 pr-4 py-2.5 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent placeholder:text-muted-slate/60"
-          />
-        </div>
-        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full">
-          <select
-            value={filters.status}
-            onChange={(event) => updateFilter('status', event.target.value)}
-            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
-          >
-            <option value="">All statuses</option>
-            {(roleContext === 'cs' ? STATUSES.filter(s => s !== 'Pending Assignment') : STATUSES).map((status) => (
-              <option key={status} value={status}>{status}</option>
-            ))}
-          </select>
-          <select
-            value={filters.category}
-            onChange={(event) => updateFilter('category', event.target.value)}
-            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
-          >
-            <option value="">All categories</option>
-            {categories.map((category) => (
-              <option key={category} value={category}>{category}</option>
-            ))}
-          </select>
-          <input
-            type="date"
-            value={filters.dateFrom}
-            onChange={(event) => {
-              const v = event.target.value;
-              setFilters((c) => ({ ...c, dateFrom: v, dateTo: v }));
-            }}
-            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
-          />
-        </div>
+      <div className="flex border-b border-gray-200 gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('tickets');
+            setSearchParams({});
+          }}
+          className={`pb-3 px-4 text-sm font-bold transition-all border-b-2 -mb-px flex items-center gap-2 cursor-pointer ${
+            activeTab === 'tickets'
+              ? 'border-brand-primary text-brand-primary'
+              : 'border-transparent text-muted-slate hover:text-dark-slate'
+          }`}
+        >
+          All Tickets
+          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+            activeTab === 'tickets' ? 'bg-brand-primary/10 text-brand-primary' : 'bg-page text-muted-slate'
+          }`}>
+            {visibleTickets.length}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('drafts');
+            setSearchParams({ tab: 'drafts' });
+            loadDrafts();
+          }}
+          className={`pb-3 px-4 text-sm font-bold transition-all border-b-2 -mb-px flex items-center gap-2 cursor-pointer ${
+            activeTab === 'drafts'
+              ? 'border-brand-primary text-brand-primary'
+              : 'border-transparent text-muted-slate hover:text-dark-slate'
+          }`}
+        >
+          My Drafts
+          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+            activeTab === 'drafts' ? 'bg-amber-100 text-amber-800' : 'bg-page text-muted-slate'
+          }`}>
+            {drafts.length}
+          </span>
+        </button>
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
-
-      <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-surface shadow-xs">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-[120px]">ID</TableHead>
-              <TableHead className="min-w-[240px]">Title</TableHead>
-              <TableHead className="w-[160px]">Category</TableHead>
-              <TableHead className="w-[140px]">Status</TableHead>
-              <TableHead className="w-[140px]">Date Created</TableHead>
-              <TableHead className="w-[140px]">Last Updated</TableHead>
-              <TableHead className="w-[100px] text-center">Action</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {visibleTickets.length === 0 && loading && (
-              <DataTableSkeleton columns={7} rows={4} />
-            )}
-            {visibleTickets.length === 0 && !loading && (
-              <DataTableEmptyState
-                colSpan={7}
-                icon={Inbox}
-                title="No tickets found"
-                description="No tickets match the current filters."
+      {activeTab !== 'drafts' ? (
+        <>
+          <div className="w-full space-y-3 shrink-0">
+            <div className="relative w-full">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-slate" />
+              <input
+                type="text"
+                placeholder="Search ID or title..."
+                value={filters.search}
+                onChange={(event) => updateFilter('search', event.target.value)}
+                className="w-full rounded-xl border border-gray-200 bg-surface pl-9 pr-4 py-2.5 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent placeholder:text-muted-slate/60"
               />
-            )}
-            {visibleTickets.map((ticket) => (
-              <TableRow key={ticket.id}>
-                <TableCell className="font-semibold text-brand-primary whitespace-nowrap">
-                  {ticket.id}
-                </TableCell>
-                <TableCell className="max-w-[280px]">
-                  <p className="font-medium text-dark-slate line-clamp-2">{ticket.title}</p>
-                </TableCell>
-                <TableCell className="text-muted-slate text-sm truncate">
-                  {ticket.category}
-                </TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <Badge variant={getStatusBadgeVariant(ticket.status)}>
-                      {ticket.status}
-                    </Badge>
-                    {(() => {
-                      const rawSla = ticket.sla_status || ticket.slaStatus || (ticket.sla_breached ? 'Breached' : null);
-                      const normalized = rawSla ? String(rawSla).toLowerCase().replace(/[\s_-]+/g, '') : '';
-                      if (normalized === 'breached' || normalized === 'violated') {
-                        return (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
-                            <AlertTriangle className="h-2.5 w-2.5 text-rose-600 shrink-0" />
-                            <span>Breached</span>
-                          </span>
-                        );
-                      }
-                      return null;
-                    })()}
-                  </div>
-                </TableCell>
-                <TableCell className="text-muted-slate text-xs whitespace-nowrap">
-                  {formatDate(ticket.date_created)}
-                </TableCell>
-                <TableCell className="text-muted-slate text-xs whitespace-nowrap">
-                  {formatDate(ticket.last_updated)}
-                </TableCell>
-                <TableCell className="text-center">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleViewTicket(ticket)}
-                    icon={<Eye className="h-3.5 w-3.5" />}
-                  >
-                    View
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+            </div>
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full">
+              <select
+                value={filters.status}
+                onChange={(event) => updateFilter('status', event.target.value)}
+                className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+              >
+                <option value="">All statuses</option>
+                {(roleContext === 'cs' ? STATUSES.filter(s => s !== 'Pending Assignment') : STATUSES).map((status) => (
+                  <option key={status} value={status}>{status}</option>
+                ))}
+              </select>
+              <select
+                value={filters.category}
+                onChange={(event) => updateFilter('category', event.target.value)}
+                className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+              >
+                <option value="">All categories</option>
+                {categories.map((category) => (
+                  <option key={category} value={category}>{category}</option>
+                ))}
+              </select>
+              <input
+                type="date"
+                value={filters.dateFrom}
+                onChange={(event) => {
+                  const v = event.target.value;
+                  setFilters((c) => ({ ...c, dateFrom: v, dateTo: v }));
+                }}
+                className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+              />
+            </div>
+          </div>
+
+          {error && <p className="text-sm text-red-600">{error}</p>}
+
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-surface shadow-xs">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[120px]">ID</TableHead>
+                  <TableHead className="min-w-[240px]">Title</TableHead>
+                  <TableHead className="w-[160px]">Category</TableHead>
+                  <TableHead className="w-[140px]">Status</TableHead>
+                  <TableHead className="w-[140px]">Date Created</TableHead>
+                  <TableHead className="w-[140px]">Last Updated</TableHead>
+                  <TableHead className="w-[100px] text-center">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visibleTickets.length === 0 && loading && (
+                  <DataTableSkeleton columns={7} rows={4} />
+                )}
+                {visibleTickets.length === 0 && !loading && (
+                  <DataTableEmptyState
+                    colSpan={7}
+                    icon={Inbox}
+                    title="No tickets found"
+                    description="No tickets match the current filters."
+                  />
+                )}
+                {visibleTickets.map((ticket) => (
+                  <TableRow key={ticket.id}>
+                    <TableCell className="font-semibold text-brand-primary whitespace-nowrap">
+                      {ticket.id}
+                    </TableCell>
+                    <TableCell className="max-w-[280px]">
+                      <p className="font-medium text-dark-slate line-clamp-2">{ticket.title}</p>
+                    </TableCell>
+                    <TableCell className="text-muted-slate text-sm truncate">
+                      {ticket.category}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <Badge variant={getStatusBadgeVariant(ticket.status)}>
+                          {ticket.status}
+                        </Badge>
+                        {(() => {
+                          const rawSla = ticket.sla_status || ticket.slaStatus || (ticket.sla_breached ? 'Breached' : null);
+                          const normalized = rawSla ? String(rawSla).toLowerCase().replace(/[\s_-]+/g, '') : '';
+                          if (normalized === 'breached' || normalized === 'violated') {
+                            return (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                                <AlertTriangle className="h-2.5 w-2.5 text-rose-600 shrink-0" />
+                                <span>Breached</span>
+                              </span>
+                            );
+                          }
+                          return null;
+                        })()}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-muted-slate text-xs whitespace-nowrap">
+                      {formatDate(ticket.date_created)}
+                    </TableCell>
+                    <TableCell className="text-muted-slate text-xs whitespace-nowrap">
+                      {formatDate(ticket.last_updated)}
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleViewTicket(ticket)}
+                        icon={<Eye className="h-3.5 w-3.5" />}
+                      >
+                        View
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </>
+      ) : (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-gray-150 shadow-xs">
+            <div>
+              <h2 className="text-sm font-bold text-gray-800">Your Saved Drafts</h2>
+              <p className="text-xs text-gray-500">Finish and submit in-progress tickets at your convenience.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`px-3 py-1 rounded-full text-xs font-bold border ${
+                drafts.length >= 10
+                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                  : drafts.length >= 7
+                  ? 'bg-amber-50 text-amber-700 border-amber-200'
+                  : 'bg-blue-50 text-[#252578] border-blue-200'
+              }`}>
+                {drafts.length} / 10 Drafts
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingDraft(null);
+                  setIsModalOpen(true);
+                }}
+                disabled={drafts.length >= 10}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#252578] hover:bg-[#1f1f66] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition cursor-pointer"
+              >
+                + New Ticket
+              </button>
+            </div>
+          </div>
+
+          {drafts.length >= 10 && (
+            <div className="rounded-xl bg-amber-50 border border-amber-200 p-3.5 text-xs font-semibold text-amber-800 flex items-center gap-2.5">
+              <AlertCircle size={16} className="text-amber-600 shrink-0" />
+              <span>You have reached the maximum allowed limit of 10 drafts. Please submit or delete an existing draft to create new ones.</span>
+            </div>
+          )}
+
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-surface shadow-xs">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Draft Title / Summary</TableHead>
+                  <TableHead>Equipment</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead>Last Saved</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {drafts.length === 0 && loadingDrafts && (
+                  <DataTableSkeleton columns={5} rows={3} />
+                )}
+                {drafts.length === 0 && !loadingDrafts && (
+                  <DataTableEmptyState
+                    colSpan={5}
+                    icon={FileText}
+                    title="No saved drafts"
+                    description="When creating a ticket, you can click 'Save as Draft' to continue anytime."
+                    action={
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setEditingDraft(null);
+                          setIsModalOpen(true);
+                        }}
+                        icon={<Plus className="h-3.5 w-3.5" />}
+                      >
+                        Create New Ticket
+                      </Button>
+                    }
+                  />
+                )}
+                {drafts.map((draft) => (
+                  <TableRow key={draft.id}>
+                    <TableCell className="max-w-[280px]">
+                      <div className="truncate font-semibold text-dark-slate" title={draft.title}>
+                        {draft.title || 'Untitled Draft'}
+                      </div>
+                      {draft.description && (
+                        <div className="text-xs text-muted-slate truncate mt-0.5">
+                          {draft.description}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-muted-slate max-w-[220px] truncate">
+                      {getEquipmentName(draft.machine_ID)}
+                    </TableCell>
+                    <TableCell className="text-muted-slate">
+                      {getCategoryName(draft.problem_category_ID)}
+                    </TableCell>
+                    <TableCell className="text-muted-slate text-xs whitespace-nowrap">
+                      {formatDate(draft.last_saved_at || draft.updated_at)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleEditDraft(draft)}
+                          icon={<Edit3 className="h-3.5 w-3.5" />}
+                        >
+                          Continue
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => handleDeleteDraft(draft)}
+                          icon={<Trash2 className="h-3.5 w-3.5" />}
+                        >
+                          Delete
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+      )}
 
       <TicketModal
         showDepartmentSelector
         isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        onSubmit={handleCreateTicket}
+        onClose={() => {
+          setIsModalOpen(false);
+          setEditingDraft(null);
+        }}
+        onSubmit={async (payload) => {
+          await handleCreateTicket(payload);
+          setEditingDraft(null);
+          setActiveTab('tickets');
+          setSearchParams({});
+          loadDrafts();
+        }}
         openTicketsCount={openInternalTicketsCount}
+        initialDraft={editingDraft}
+        onDraftSaved={() => {
+          setEditingDraft(null);
+          setActiveTab('drafts');
+          setSearchParams({ tab: 'drafts' });
+          loadDrafts();
+        }}
       />
       
       {roleContext === 'cs' && assignModalTicket && (

@@ -346,7 +346,7 @@ export default function Header({ sidebarHovered }) {
               <div className="w-8 h-8 rounded-full bg-[#A7A7C8] text-white flex items-center justify-center text-xs font-bold flex-shrink-0 shadow-sm">
                 {userInitial}
               </div>
-              <div className="flex flex-col items-start leading-tight text-left">
+              <div className="hidden sm:flex flex-col items-start leading-tight text-left">
                 <span className="text-sm font-semibold text-dark-slate">{user?.name || 'User'}</span>
                 <span className="text-xs text-muted-slate capitalize">{user?.role || ''}</span>
               </div>
@@ -356,7 +356,7 @@ export default function Header({ sidebarHovered }) {
             {dropdownOpen && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setDropdownOpen(false)} />
-                <div className="absolute right-0 top-full mt-2 w-48 bg-surface border border-slate-100 rounded-xl shadow-md py-1.5 z-50 animate-fade-slide-in">
+                <div className="absolute right-0 top-full mt-2 w-48 max-w-[calc(100vw-2rem)] bg-surface border border-slate-100 rounded-xl shadow-md py-1.5 z-50 animate-fade-slide-in">
                   <button
                     onClick={() => { setDropdownOpen(false); navigate(`${basePath}/profile`); }}
                     className="flex items-center w-full px-4 py-2.5 hover:bg-slate-50 text-dark-slate text-sm font-medium transition-colors cursor-pointer"
@@ -389,7 +389,11 @@ export default function Header({ sidebarHovered }) {
               if (updatedFields.reassignmentStatus) {
                 const numericId = Number(String(activeTicket.ticket_ID || activeTicket.id).replace(/\D/g, ''));
                 const action = updatedFields.reassignmentStatus === 'Approved' ? 'approve' : 'deny';
-                await respondReassignment({ ticketId: numericId, action });
+                await respondReassignment({
+                  ticketId: numericId,
+                  action,
+                  reason: updatedFields.reassignmentDenyReason || updatedFields.disapprovalReason || '',
+                });
               }
             } catch (e) { console.warn(e); }
           }}

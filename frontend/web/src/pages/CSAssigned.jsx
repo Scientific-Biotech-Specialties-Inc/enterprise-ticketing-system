@@ -866,7 +866,15 @@ export default function CSAssigned() {
                         {isReassignmentReq && (
                           <div className="text-xs text-warning bg-warning/10 p-1.5 rounded border border-warning/20">
                             <p className="font-semibold">
-                              Req: {t.reassignmentRequestedBy || 'Employee'} {t.reassignmentDepartment ? `• ${t.reassignmentDepartment}` : ''}
+                              Req: {(() => {
+                                const rawReq = t.reassignmentRequestedBy;
+                                if (rawReq) {
+                                  const emp = employees.find(e => Number(e.id) === Number(rawReq));
+                                  if (emp?.name) return emp.name;
+                                  if (typeof rawReq === 'string' && isNaN(Number(rawReq))) return rawReq.replace(/^Employee ID:\s*/i, '').trim();
+                                }
+                                return t.assigned_employee || (Array.isArray(t.assigned) && employees.find(e => Number(e.id) === Number(t.assigned[0]))?.name) || 'Assigned Employee';
+                              })()} {t.reassignmentDepartment ? `• ${t.reassignmentDepartment}` : ''}
                             </p>
                             {t.reassignmentReason && (
                               <p className="text-muted-foreground italic truncate max-w-xs">

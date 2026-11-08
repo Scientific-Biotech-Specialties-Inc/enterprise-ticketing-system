@@ -55,6 +55,12 @@ const getFileUrlRaw = (file) => {
   if (clean.startsWith('storage/')) {
     return `/api/ticketing/attachment/${clean}`;
   }
+  if (clean.startsWith('api/ticketing/attachment/')) {
+    return `/${clean}`;
+  }
+  if (clean.startsWith('api/storage/')) {
+    return `/api/ticketing/attachment/${clean.substring(4)}`;
+  }
   if (clean.startsWith('api/')) {
     return `/${clean}`;
   }
@@ -79,6 +85,8 @@ export default function CustomerTicketDetailModal({
   const navigate = useNavigate();
   const [currentTicket, setCurrentTicket] = useState(ticket);
   const [timelineSortOrder, setTimelineSortOrder] = useState('asc');
+  const [showDirectChat, setShowDirectChat] = useState(() => Boolean(ticket?.openDirectChat));
+  const directChatRef = React.useRef(null);
   const [showReopenModal, setShowReopenModal] = useState(false);
   const [reopenReason, setReopenReason] = useState('');
   const [reopenValidationError, setReopenValidationError] = useState('');
@@ -94,6 +102,12 @@ export default function CustomerTicketDetailModal({
   useEffect(() => {
     setCurrentTicket(ticket);
     setReopenSuccessNotice('');
+    if (ticket?.openDirectChat) {
+      setShowDirectChat(true);
+      setTimeout(() => {
+        directChatRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 150);
+    }
   }, [ticket]);
 
   const effectiveTicket = currentTicket || ticket;
@@ -113,27 +127,28 @@ export default function CustomerTicketDetailModal({
     const numId = Number(String(rawId).replace(/\D/g, ''));
     if (!numId) return;
 
-    if (normalizedAttachments.length === 0) {
+    const needsFetch =
+      normalizedAttachments.length === 0 ||
+      normalizedAttachments.some(
+        (att) =>
+          typeof att === 'number' ||
+          typeof att === 'string' ||
+          (!att.url && !att.file_path && !att.path)
+      );
+
+    if (needsFetch) {
       let isMounted = true;
-      import('@/services/ticketService')
-        .then((mod) => {
-          if (typeof mod?.getTicketAttachments === 'function') {
-            return mod.getTicketAttachments(numId);
-          }
-          return [];
-        })
-        .then((atts) => {
-          if (isMounted && Array.isArray(atts) && atts.length > 0) {
-            setCurrentTicket((prev) => ({
-              ...prev,
-              attachments: atts,
-            }));
-          }
-        })
-        .catch(() => {});
+      getTicketAttachments(numId).then((atts) => {
+        if (isMounted && Array.isArray(atts) && atts.length > 0) {
+          setCurrentTicket((prev) => ({
+            ...(prev || effectiveTicket),
+            attachments: atts,
+          }));
+        }
+      }).catch(() => {});
       return () => { isMounted = false; };
     }
-  }, [effectiveTicket?.ticket_ID, effectiveTicket?.id, normalizedAttachments.length]);
+  }, [effectiveTicket?.ticket_ID, effectiveTicket?.id, normalizedAttachments]);
 
   useEffect(() => {
     let isMounted = true;
@@ -665,6 +680,32 @@ export default function CustomerTicketDetailModal({
           )}
 
 
+          {/* Pending Reassignment Banner for Requestor / Customer (TS Defect 3) */}
+          {(effectiveTicket.reassignmentRequested ||
+            effectiveTicket.status === 'Pending Reassignment' ||
+            effectiveTicket.reassignmentStatus === 'Pending' ||
+            effectiveTicket.reassignment_requested) && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900 shadow-xs mb-4">
+              <div className="flex items-start gap-2.5">
+                <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-200 text-amber-800">
+                  <Clock className="h-3.5 w-3.5 text-amber-700" />
+                </div>
+                <div className="flex-1">
+                  <p className="font-bold text-amber-900">Reassignment Requested by Assigned Specialist</p>
+                  <p className="mt-1 text-amber-800 leading-relaxed">
+                    The assigned engineer has requested to reassign this ticket to another specialist.
+                  </p>
+                  {(effectiveTicket.reassignmentReason || effectiveTicket.reassignment_reason) && (
+                    <div className="mt-2 rounded-lg border border-amber-200/80 bg-white/80 p-2.5 text-slate-800">
+                      <span className="font-bold text-amber-900">Reason for Request: </span>
+                      <span className="italic">{effectiveTicket.reassignmentReason || effectiveTicket.reassignment_reason}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="grid gap-4 md:grid-cols-2">
             <div className="md:col-span-2 min-w-0">
               <p className="text-xs font-bold uppercase tracking-wider text-slate-dark">Description</p>
@@ -688,9 +729,42 @@ export default function CustomerTicketDetailModal({
             </div>
             <div>
               <p className="text-xs font-bold uppercase tracking-wider text-slate-dark">Assigned Employee</p>
-              <p className="mt-1 text-sm font-normal text-slate-600">
-                {effectiveTicket.assigned_employee || effectiveTicket.assigned_employee_name || effectiveTicket.assigned_to_name || (effectiveTicket.assigned_employees?.[0]?.name) || (typeof effectiveTicket.assigned_to === 'string' ? effectiveTicket.assigned_to : null) || 'Unassigned'}
-              </p>
+              {(() => {
+                const assignedName =
+                  effectiveTicket.assigned_employee ||
+                  effectiveTicket.assigned_employee_name ||
+                  effectiveTicket.assigned_to_name ||
+                  (effectiveTicket.assigned_employees?.[0]?.name) ||
+                  (typeof effectiveTicket.assigned_to === 'string' && effectiveTicket.assigned_to.trim().toLowerCase() !== 'unassigned' ? effectiveTicket.assigned_to : null) ||
+                  'Unassigned';
+                const isTicketAssigned = assignedName !== 'Unassigned';
+                return (
+                  <div className="mt-1 flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-normal text-slate-600">{assignedName}</span>
+                    {isTicketAssigned && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowDirectChat((prev) => {
+                            const next = !prev;
+                            if (next) {
+                              setTimeout(() => {
+                                directChatRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                              }, 100);
+                            }
+                            return next;
+                          });
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-[#252578] hover:bg-[#1e1e62] text-white px-2.5 py-1 text-[11px] font-semibold shadow-xs transition-all cursor-pointer"
+                        title={`Message ${assignedName} directly`}
+                      >
+                        <MessageCircle className="w-3.5 h-3.5" />
+                        <span>{showDirectChat ? 'Hide Message' : `Message ${assignedName.split(' ')[0]}`}</span>
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
             <div>
               <p className="text-xs font-bold uppercase tracking-wider text-slate-dark">Category</p>
@@ -730,6 +804,15 @@ export default function CustomerTicketDetailModal({
                 <p className="mt-1 text-sm font-semibold text-emerald-700">
                   {formatDisplayDate(effectiveTicket.resolved_at || effectiveTicket.closed_at)}
                 </p>
+              </div>
+            )}
+
+            {(effectiveTicket.reassignmentReason || effectiveTicket.reassignment_reason) && (
+              <div className="md:col-span-2">
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-dark">Reassignment Reason</p>
+                <div className="mt-1 rounded-xl bg-amber-50/60 border border-amber-200 p-3 text-sm text-slate-700 leading-relaxed">
+                  {effectiveTicket.reassignmentReason || effectiveTicket.reassignment_reason}
+                </div>
               </div>
             )}
 
@@ -844,12 +927,23 @@ export default function CustomerTicketDetailModal({
               />
             </div>
 
-            {(effectiveTicket.is_internal || effectiveTicket.ticket_type === 'Internal' || effectiveTicket.type === 'Internal' || effectiveTicket.title?.startsWith('[Internal]')) && (
-              <div className="md:col-span-2">
+            {(showDirectChat || effectiveTicket.is_internal || effectiveTicket.ticket_type === 'Internal' || effectiveTicket.type === 'Internal' || effectiveTicket.title?.startsWith('[Internal]')) && (
+              <div ref={directChatRef} className="md:col-span-2">
                 <InternalTicketMessageThread
                   ticketId={effectiveTicket.ticket_ID || effectiveTicket.id}
                   ticket={effectiveTicket}
                   isClosed={effectiveTicket.status === 'Closed' || Number(effectiveTicket.ticket_status_ID) === 4}
+                  isCustomerThread={!(effectiveTicket.is_internal || effectiveTicket.ticket_type === 'Internal' || effectiveTicket.type === 'Internal' || effectiveTicket.title?.startsWith('[Internal]'))}
+                  title={
+                    (effectiveTicket.is_internal || effectiveTicket.ticket_type === 'Internal' || effectiveTicket.type === 'Internal' || effectiveTicket.title?.startsWith('[Internal]'))
+                      ? 'Internal Ticket Discussion'
+                      : `Direct Message — ${effectiveTicket.assigned_employee || effectiveTicket.assigned_employee_name || effectiveTicket.assigned_to_name || (effectiveTicket.assigned_employees?.[0]?.name) || 'Assigned Support Specialist'}`
+                  }
+                  subtitle={
+                    (effectiveTicket.is_internal || effectiveTicket.ticket_type === 'Internal' || effectiveTicket.type === 'Internal' || effectiveTicket.title?.startsWith('[Internal]'))
+                      ? 'Direct collaboration between Requestor, Assigned Employee, and Support staff.'
+                      : 'Message your assigned technician and Customer Support directly from this ticket view.'
+                  }
                 />
               </div>
             )}
@@ -939,22 +1033,29 @@ export default function CustomerTicketDetailModal({
               )
             )}
 
-            {/* Direct Link to Unified Message Thread (TS062) */}
-            {effectiveTicket && (
+            {/* Direct Link to Unified Message Thread (TS062) — only available when ticket is assigned */}
+            {effectiveTicket && isAlreadyAssigned && (
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => {
                   onClose();
                   const tId = effectiveTicket.ticket_ID || effectiveTicket.id;
-                  const path = window.location.pathname.startsWith('/cs')
-                    ? '/cs/messages'
-                    : window.location.pathname.startsWith('/employee')
-                      ? '/employee/messages'
-                      : '/messages';
+                  let path = '/messages';
+                  if (window.location.pathname.startsWith('/cs-manager')) {
+                    path = '/cs-manager/messages';
+                  } else if (window.location.pathname.startsWith('/service-manager')) {
+                    path = '/service-manager/messages';
+                  } else if (window.location.pathname.startsWith('/it-manager')) {
+                    path = '/it-manager/messages';
+                  } else if (window.location.pathname.startsWith('/cs')) {
+                    path = '/cs/messages';
+                  } else if (window.location.pathname.startsWith('/employee')) {
+                    path = '/employee/messages';
+                  }
                   navigate(path, { state: { selectedTicketId: tId } });
                 }}
-                className="gap-1.5"
+                className="gap-1.5 cursor-pointer"
                 title="Open unified message thread for this ticket"
               >
                 <MessageCircle size={14} />

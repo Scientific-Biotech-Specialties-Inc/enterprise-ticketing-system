@@ -36,9 +36,10 @@ COPY --from=build /app/dist /tmp/dist
 # For VITE_BASE_PATH=/ticketing/ → files go to /usr/share/nginx/html/ticketing/
 # For VITE_BASE_PATH=/ → files go to /usr/share/nginx/html/
 RUN mkdir -p /usr/share/nginx/html${VITE_BASE_PATH} && \
-    cp -r /tmp/dist/* /usr/share/nginx/html${VITE_BASE_PATH} && \
+    cp -r /tmp/dist/* /usr/share/nginx/html${VITE_BASE_PATH}/ && \
+    cp -r /tmp/dist/* /usr/share/nginx/html/ && \
     rm -rf /tmp/dist
 COPY nginx.template.conf /etc/nginx/templates/default.conf.template
-ENV NGINX_PORT=80
-EXPOSE 80 5005 5006
+ENV NGINX_PORT=5005
+EXPOSE 5005
 CMD ["nginx", "-g", "daemon off;"]

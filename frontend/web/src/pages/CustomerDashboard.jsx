@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Inbox, Clock, CheckCircle2, Archive, Bot, Eye, ArrowRight } from 'lucide-react';
+import { Inbox, Clock, CheckCircle2, Archive, Bot, Eye, ArrowRight, MessageCircle } from 'lucide-react';
 import TicketModal from '@/components/TicketModal';
 import CustomerTicketDetailModal from '@/components/CustomerTicketDetailModal';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
@@ -201,6 +201,7 @@ export default function CustomerDashboard() {
       setSelectedTicket({
         ...t,
         ...fullTicket,
+        openDirectChat: Boolean(t?.openDirectChat),
         description: fullTicket.description || t.description || '',
         resolved_at: fullTicket.resolved_at || null,
         proofAttachments: fullTicket.proofAttachments || [],
@@ -483,14 +484,33 @@ export default function CustomerDashboard() {
                     </Badge>
                   </TableCell>
                   <TableCell className="text-center">
-                    <button
-                      type="button"
-                      onClick={() => handleViewTicket(t)}
-                      aria-label={`View ticket ${t.id}`}
-                      className="p-1.5 rounded-lg text-muted-slate hover:text-accent hover:bg-slate-100 transition-colors"
-                    >
-                      <Eye className="h-4 w-4" />
-                    </button>
+                    <div className="inline-flex items-center justify-center gap-1">
+                      {Boolean(
+                        (t.assigned_to && String(t.assigned_to).trim().toLowerCase() !== 'unassigned') ||
+                        (t.assigned_employee && String(t.assigned_employee).trim().toLowerCase() !== 'unassigned') ||
+                        (Array.isArray(t.assigned_employees) && t.assigned_employees.length > 0)
+                      ) && (
+                        <button
+                          type="button"
+                          onClick={() => handleViewTicket({ ...t, openDirectChat: true })}
+                          aria-label={`Message assigned employee for ticket ${t.id}`}
+                          title="Open message with assigned employee"
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[#252578]/10 hover:bg-[#252578] text-[#252578] hover:text-white text-[11px] font-semibold transition-all cursor-pointer"
+                        >
+                          <MessageCircle className="h-3.5 w-3.5" />
+                          <span className="hidden sm:inline">Message</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleViewTicket(t)}
+                        aria-label={`View ticket ${t.id}`}
+                        title="View ticket details"
+                        className="p-1.5 rounded-lg text-muted-slate hover:text-accent hover:bg-slate-100 transition-colors cursor-pointer"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

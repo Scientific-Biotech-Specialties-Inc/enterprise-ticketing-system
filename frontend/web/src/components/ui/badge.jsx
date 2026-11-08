@@ -31,6 +31,11 @@ const badgeVariants = cva(
         "low-info": "bg-sky-50 text-sky-700",
         "low-violet": "bg-indigo-50 text-indigo-700",
         "low-muted": "bg-slate-100 text-slate-600",
+
+        // Aliases for component compatibility
+        emerald: "bg-emerald-100 text-emerald-700 border border-emerald-300",
+        secondary: "bg-slate-100 text-slate-700 border border-slate-300",
+        outline: "bg-white text-slate-700 border border-slate-300",
       },
       size: {
         default: "h-6 px-3 text-xs",

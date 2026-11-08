@@ -113,10 +113,10 @@ const MOCK_DOCUMENTS = [
     fileType: 'DOCX',
     uploadedBy: 'Admin',
     uploadDate: '2026-06-13',
-    size: '876 KB',
+    size: '0.9 MB',
     status: 'Draft',
     publishState: 'Draft',
-    processingStatus: 'Processing',
+    processingStatus: 'Ready for AI Search',
     tags: ['faq'],
     description: 'Frequently asked questions compilation.',
     history: [
@@ -897,6 +897,10 @@ function ReplaceConfirmModal({ isOpen, doc, onClose, onReplaceComplete, onProces
     if (onReplaceComplete) {
       onReplaceComplete(doc.id, replacedArticle || selectedFile);
     }
+
+    setTimeout(() => {
+      handleForceClose();
+    }, 1200);
   };
 
   const newFileSizeMb = selectedFile ? (selectedFile.size / (1024 * 1024)).toFixed(1) : 0;
@@ -3790,6 +3794,7 @@ function AIKnowledgeBase() {
     }
 
     fetchDocuments();
+    setShowReplaceModal(false);
   };
 
   // Dynamic processing status updater while replacement is mid-pipeline:
@@ -3914,12 +3919,11 @@ function AIKnowledgeBase() {
         }
       />
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-        <StatCard icon={FileText} label="Total Documents" value={summary.total} bgClass="bg-purple-100 text-purple-700" sub={`${summary.published} published · ${summary.draft} draft`} />
-        <StatCard icon={CheckCircle} label="Published" value={summary.published} bgClass="bg-green-100 text-green-700" />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard icon={FileText} label="Total Documents" value={summary.total} bgClass="bg-purple-100 text-purple-700" sub={`${summary.draft} draft · ${summary.published} published`} />
         <StatCard icon={FileText} label="Drafts" value={summary.draft} bgClass="bg-amber-100 text-amber-700" />
+        <StatCard icon={CheckCircle} label="Published" value={summary.published} bgClass="bg-green-100 text-green-700" />
         <StatCard icon={Archive} label="Archived" value={summary.archived} bgClass="bg-gray-100 text-gray-700" />
-        <StatCard icon={Loader} label="Processing" value={summary.processing} bgClass="bg-blue-100 text-blue-700" />
       </div>
 
       {publishBlockedMsg && (
@@ -4023,7 +4027,6 @@ function AIKnowledgeBase() {
                   {activeTab === 'draft' ? (
                     <>
                       <option value="Draft">Draft</option>
-                      <option value="Processing">Processing</option>
                       <option value="Archived">Archived</option>
                     </>
                   ) : (

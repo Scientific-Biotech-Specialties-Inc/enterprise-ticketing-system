@@ -1,6 +1,6 @@
 import { safeUrl } from '@/utils/safeUrl';
 import React, { useState, useEffect } from 'react';
-import { ShieldAlert, AlertTriangle, Clock, Bell } from 'lucide-react';
+import { ShieldAlert, AlertTriangle, Clock, Bell, MessageCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { statusColors, priorityColors } from '@/constants/employeeTickets';
 import { formatDisplayDate } from '@/utils/dateUtils';
@@ -56,20 +56,38 @@ export default function TicketInfoModal({ ticket, onClose, onReassignSuccess }) 
     navigate('/employee/ticket-update', { state: { ticketId: tId, ticket: currentTicket } });
   };
 
+  const handleOpenMessages = () => {
+    onClose();
+    const tId = currentTicket?.ticket_ID || currentTicket?.id;
+    let path = '/employee/messages';
+    if (window.location.pathname.startsWith('/cs-manager')) {
+      path = '/cs-manager/messages';
+    } else if (window.location.pathname.startsWith('/service-manager')) {
+      path = '/service-manager/messages';
+    } else if (window.location.pathname.startsWith('/it-manager')) {
+      path = '/it-manager/messages';
+    } else if (window.location.pathname.startsWith('/cs')) {
+      path = '/cs/messages';
+    }
+    navigate(path, { state: { selectedTicketId: tId } });
+  };
+
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 p-4 backdrop-blur-[1.5px]"
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 relative flex flex-col max-h-[85vh] overflow-hidden"
+        className="bg-white rounded-xl shadow-2xl w-full max-w-2xl mx-4 relative flex flex-col max-h-[88vh] overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="p-6 border-b border-gray-100 flex-shrink-0 relative">
-          <button type="button" onClick={onClose} className="absolute top-5 right-5 p-2 rounded-full hover:bg-gray-100 transition-colors text-gray-400">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-          </button>
+          <div className="absolute top-5 right-5 flex items-center gap-2">
+            <button type="button" onClick={onClose} className="p-2 rounded-full hover:bg-gray-100 transition-colors text-gray-400">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          </div>
           <h2 className="text-xl font-bold text-gray-900 leading-snug pr-8">{ticket.title}</h2>
           <div className="flex flex-wrap items-center gap-2 mt-2 pr-8">
             <span className="text-xs font-bold text-[#252578] bg-blue-50 px-3 py-1 rounded-full">{ticket.id}</span>
@@ -317,23 +335,33 @@ export default function TicketInfoModal({ ticket, onClose, onReassignSuccess }) 
         </div>
 
         {/* Footer */}
-        <div className="p-6 border-t border-gray-150 flex-shrink-0 flex justify-end gap-3">
-          {isReassignmentDenied(currentTicket) && (
-            <button
-              type="button"
-              onClick={() => setShowReassignModal(true)}
-              className="px-5 py-2.5 border border-red-200 text-red-700 hover:bg-red-50 text-sm font-semibold rounded-xl transition-all"
-            >
-              Request Reassignment Again
-            </button>
-          )}
+        <div className="p-6 border-t border-gray-150 flex-shrink-0 flex items-center justify-between gap-3">
           <button
             type="button"
-            onClick={handleUpdate}
-            className="px-7 py-2.5 bg-[#252578] hover:bg-[#1a1a5c] text-white text-sm font-semibold rounded-xl transition-all shadow-md shadow-[#252578]/25"
+            onClick={handleOpenMessages}
+            className="flex items-center gap-1.5 px-4 py-2.5 border border-primary/20 text-[#252578] hover:bg-primary/5 text-sm font-semibold rounded-xl transition-all cursor-pointer"
           >
-            Update
+            <MessageCircle className="w-4 h-4 text-[#252578]" />
+            <span>Messages</span>
           </button>
+          <div className="flex items-center gap-3">
+            {isReassignmentDenied(currentTicket) && (
+              <button
+                type="button"
+                onClick={() => setShowReassignModal(true)}
+                className="px-5 py-2.5 border border-red-200 text-red-700 hover:bg-red-50 text-sm font-semibold rounded-xl transition-all"
+              >
+                Request Reassignment Again
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleUpdate}
+              className="px-7 py-2.5 bg-[#252578] hover:bg-[#1a1a5c] text-white text-sm font-semibold rounded-xl transition-all shadow-md shadow-[#252578]/25"
+            >
+              Update
+            </button>
+          </div>
         </div>
       </div>
       {previewFile && (

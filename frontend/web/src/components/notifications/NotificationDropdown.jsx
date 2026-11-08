@@ -68,7 +68,7 @@ export default function NotificationDropdown({
   return (
     <div
       ref={dropdownRef}
-      className="absolute right-0 top-full mt-2 w-[22rem] sm:w-96 bg-white border border-gray-100 rounded-2xl shadow-xl z-50 animate-fade-slide-in overflow-hidden font-sans"
+      className="fixed inset-x-2 top-16 sm:absolute sm:inset-x-auto sm:right-0 sm:top-full mt-2 sm:w-96 max-w-[calc(100vw-1rem)] bg-white border border-gray-100 rounded-2xl shadow-xl z-50 animate-fade-slide-in overflow-hidden font-sans"
       role="menu"
       aria-label="Notifications"
     >

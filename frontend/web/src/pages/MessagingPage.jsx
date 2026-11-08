@@ -1322,6 +1322,50 @@ export default function MessagingPage() {
                                           );
                                         }
 
+                                        const attName = att.name || att.file_name || 'attachment';
+                                        const isImageAtt =
+                                          /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(attName || '') ||
+                                          /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(fileUrl || '') ||
+                                          String(att.mime_type || att.file_type || '').toLowerCase().startsWith('image/');
+
+                                        if (isImageAtt && fileUrl) {
+                                          return (
+                                            <div key={attIdx} className="space-y-1.5 text-left">
+                                              <div className={`overflow-hidden rounded-xl border max-w-[280px] sm:max-w-[340px] ${
+                                                isMine ? 'border-white/20 bg-black/10' : 'border-gray-200 bg-gray-50'
+                                              }`}>
+                                                <img
+                                                  src={fileUrl}
+                                                  alt={attName}
+                                                  loading="lazy"
+                                                  className="w-full max-h-[260px] object-contain bg-white block"
+                                                />
+                                                <div className={`flex items-center justify-between gap-2 px-2.5 py-1.5 text-[11px] ${
+                                                  isMine ? 'bg-white/10 text-white' : 'bg-gray-50 text-slate-800 border-t border-gray-200'
+                                                }`}>
+                                                  <div className="min-w-0 flex-1">
+                                                    <p className="truncate font-semibold leading-tight">{attName}</p>
+                                                    {formattedSize && (
+                                                      <p className={`text-[10px] ${isMine ? 'text-white/70' : 'text-slate-400'}`}>
+                                                        {formattedSize}
+                                                      </p>
+                                                    )}
+                                                  </div>
+                                                  <a
+                                                    href={fileUrl}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="shrink-0 opacity-80 hover:opacity-100 p-1 rounded"
+                                                    title={`Download ${attName}`}
+                                                  >
+                                                    <Download size={14} />
+                                                  </a>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          );
+                                        }
+
                                         return (
                                           <a
                                             key={attIdx}

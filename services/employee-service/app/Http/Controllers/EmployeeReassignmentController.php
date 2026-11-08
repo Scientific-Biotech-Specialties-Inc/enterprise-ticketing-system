@@ -40,7 +40,9 @@ class EmployeeReassignmentController extends Controller
 
         $user = $request->user();
         $role = strtolower(trim((string) ($user->role ?? '')));
-        $isCS = in_array($role, ['customer service', 'customer support', 'cs', 'admin', 'superadmin', 'super admin']);
+        $dept = strtolower(trim((string) ($user->department ?? '')));
+        $isCS = in_array($role, ['customer service', 'customer support', 'cs', 'head of cs', 'head of customer service', 'cs_manager', 'admin', 'superadmin', 'super admin'])
+            || in_array($dept, ['customer service', 'customer support']);
         if (!$user || !$isCS) {
             return response()->json(['message' => 'Forbidden'], 403);
         }

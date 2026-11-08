@@ -1,10 +1,140 @@
-import React, { useEffect, useState } from 'react';
-import { getCachedTicketFormOptions, getTicketFormOptions } from '@/services/ticketService';
+import React, { useEffect, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { Check, ChevronDown, Search } from 'lucide-react';
+import { getCachedTicketFormOptions, getTicketFormOptions, saveTicketDraft, deleteTicketDraft } from '@/services/ticketService';
 import TitleCasingModal from '@/components/TitleCasingModal';
 import { formatProperTitleCase, needsProperCasing } from '@/utils/titleCaseUtils';
 import { getMaxOpenTicketsLimit } from '@/data/ticketLimitConfig';
+import { useAuth } from '@/context/AuthContext';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import useMaxFileCount from '@/hooks/useMaxFileCount';
+
+function BoundedSelect({
+  value,
+  onChange,
+  onBlur,
+  options = [],
+  placeholder = 'Select an option',
+  disabled = false,
+  hasError = false,
+  searchable = false,
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const containerRef = useRef(null);
+
+  const selectedOption = options.find((opt) => String(opt.value) === String(value));
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClickOutside = (event) => {
+      if (containerRef.current && !containerRef.current.contains(event.target)) {
+        setIsOpen(false);
+        setSearchQuery('');
+        onBlur?.();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen, onBlur]);
+
+  const filteredOptions = searchable && searchQuery.trim()
+    ? options.filter((opt) => String(opt.label || '').toLowerCase().includes(searchQuery.trim().toLowerCase()))
+    : options;
+
+  return (
+    <div ref={containerRef} className="relative w-full min-w-0">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => {
+          if (disabled) return;
+          setIsOpen((prev) => {
+            if (prev) {
+              setSearchQuery('');
+              onBlur?.();
+            }
+            return !prev;
+          });
+        }}
+        className={`flex w-full min-w-0 items-center justify-between gap-2 rounded-xl border bg-white px-4 py-3 text-left text-sm outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-[#252578] disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer ${
+          hasError ? 'border-red-400 bg-red-50' : isOpen ? 'border-[#252578] ring-2 ring-[#252578]/20' : 'border-gray-200'
+        }`}
+      >
+        <span className={`min-w-0 flex-1 truncate ${selectedOption ? 'text-dark-slate font-medium' : 'text-gray-500'}`}>
+          {selectedOption ? selectedOption.label : placeholder}
+        </span>
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 text-gray-500 transition-transform duration-150 ${isOpen ? 'rotate-180 text-[#252578]' : ''}`}
+        />
+      </button>
+
+      {isOpen && (
+        <div className="absolute left-0 right-0 z-50 mt-1.5 w-full overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl">
+          {(searchable || options.length > 6) && (
+            <div className="border-b border-gray-100 p-2 bg-gray-50/60">
+              <div className="relative flex items-center">
+                <Search className="absolute left-2.5 h-3.5 w-3.5 text-gray-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search options..."
+                  className="w-full rounded-lg border border-gray-200 bg-white pl-8 pr-3 py-1.5 text-xs text-dark-slate outline-none focus:border-[#252578]"
+                  autoFocus
+                />
+              </div>
+            </div>
+          )}
+          <div className="max-h-56 overflow-y-auto p-1">
+            <button
+              type="button"
+              onClick={() => {
+                onChange('');
+                setIsOpen(false);
+                setSearchQuery('');
+                onBlur?.();
+              }}
+              className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-xs sm:text-sm transition-colors cursor-pointer ${
+                !value ? 'bg-[#252578]/10 font-semibold text-[#252578]' : 'text-gray-500 hover:bg-gray-50'
+              }`}
+            >
+              <span className="truncate">{placeholder}</span>
+              {!value && <Check className="h-3.5 w-3.5 shrink-0 text-[#252578]" />}
+            </button>
+            {filteredOptions.length === 0 ? (
+              <div className="px-3 py-3 text-center text-xs text-gray-400">No matching options found</div>
+            ) : (
+              filteredOptions.map((opt) => {
+                const isSelected = String(opt.value) === String(value);
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => {
+                      onChange(String(opt.value));
+                      setIsOpen(false);
+                      setSearchQuery('');
+                      onBlur?.();
+                    }}
+                    className={`flex w-full items-start justify-between gap-2 rounded-lg px-3 py-2 text-left text-xs sm:text-sm transition-colors cursor-pointer ${
+                      isSelected
+                        ? 'bg-[#252578] font-semibold text-white'
+                        : 'text-dark-slate hover:bg-[#252578]/5'
+                    }`}
+                  >
+                    <span className="min-w-0 flex-1 break-words leading-snug">{opt.label}</span>
+                    {isSelected && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-white" />}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const initialFormData = {
   title: '',
@@ -28,10 +158,22 @@ const MAX_DESCRIPTION_CHARS = 500;
 const MIN_TITLE_CHARS = 5;
 const MIN_DESCRIPTION_CHARS = 20;
 
-export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCount = null, showDepartmentSelector = false }) {
+export default function TicketModal({
+  isOpen,
+  onClose,
+  onSubmit,
+  openTicketsCount = null,
+  initialDraft = null,
+  onDraftSaved = null,
+  showDepartmentSelector = false,
+}) {
   useLockBodyScroll(isOpen);
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [loadingOptions, setLoadingOptions] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
   const [optionsError, setOptionsError] = useState('');
   const [submitError, setSubmitError] = useState('');
   const [options, setOptions] = useState({
@@ -41,12 +183,38 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
     problem_categories: [],
   });
   const [formData, setFormData] = useState(initialFormData);
+  const [draftId, setDraftId] = useState(null);
   const [attachments, setAttachments] = useState([]);
   const maxFileCount = useMaxFileCount();
   const [fileError, setFileError] = useState('');
   const [touched, setTouched] = useState({});
   const [titleCasingData, setTitleCasingData] = useState(null);
   const [showTitleCasingModal, setShowTitleCasingModal] = useState(false);
+
+  const resolveCurrentUserId = () => {
+    const authId = user?.client_ID ?? user?.client_id ?? user?.id ?? user?.emp_id;
+    if (authId) return Number(authId);
+    for (const key of ['auth_user', 'user']) {
+      for (const store of [sessionStorage, localStorage]) {
+        try {
+          const parsed = JSON.parse(store.getItem(key) || 'null');
+          const id = parsed?.client_ID ?? parsed?.client_id ?? parsed?.id ?? parsed?.emp_id;
+          if (id) return Number(id);
+        } catch { /* ignore */ }
+      }
+    }
+    return 1;
+  };
+
+  const resolveTargetMyTicketsPath = () => {
+    const path = location?.pathname || window.location.pathname || '';
+    if (path.startsWith('/cs-manager')) return '/cs-manager/my-tickets';
+    if (path.startsWith('/cs')) return '/cs/my-tickets';
+    if (path.startsWith('/service-manager')) return '/service-manager/my-tickets';
+    if (path.startsWith('/it-manager')) return '/it-manager/my-tickets';
+    if (path.startsWith('/employee')) return '/employee/my-tickets';
+    return '/my-tickets';
+  };
 
   const touch = (field) => setTouched((prev) => ({ ...prev, [field]: true }));
 
@@ -75,6 +243,7 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
 
   const resetFormState = () => {
     setFormData(initialFormData);
+    setDraftId(null);
     setAttachments([]);
     setFileError('');
     setSubmitError('');
@@ -87,6 +256,17 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
     if (!isOpen) return;
 
     resetFormState();
+
+    if (initialDraft) {
+      setDraftId(initialDraft.id ?? null);
+      setFormData({
+        title: initialDraft.title || '',
+        machine_ID: initialDraft.machine_ID ? String(initialDraft.machine_ID) : '',
+        problem_category_ID: initialDraft.problem_category_ID ? String(initialDraft.problem_category_ID) : '',
+        description: initialDraft.description || '',
+        created_by: resolveCurrentUserId(),
+      });
+    }
 
     const cachedOptions = getCachedTicketFormOptions();
     if (cachedOptions) {
@@ -113,7 +293,7 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
     };
 
     loadOptions();
-  }, [isOpen]);
+  }, [isOpen, initialDraft]);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -204,15 +384,8 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
       return;
     }
 
-    if (needsProperCasing(titleTrim)) {
-      const proper = formatProperTitleCase(titleTrim);
-      setTitleCasingData({
-        original: titleTrim,
-        formatted: proper,
-      });
-      setShowTitleCasingModal(true);
-      return;
-    }
+    const finalTitle = needsProperCasing(titleTrim) ? formatProperTitleCase(titleTrim) : titleTrim;
+    setFormData((prev) => ({ ...prev, title: finalTitle }));
 
     setSubmitError('');
     setIsSubmitting(true);
@@ -220,9 +393,15 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
     try {
       await onSubmit?.({
         ...buildSubmitData(),
-        title: titleTrim,
+        title: finalTitle,
         attachments,
+        draftId,
       });
+      if (draftId) {
+        try {
+          await deleteTicketDraft(draftId);
+        } catch { /* ignore */ }
+      }
       resetFormState();
     } catch (error) {
       setSubmitError(error?.response?.data?.message || error?.message || 'Failed to create ticket. Please try again.');
@@ -253,7 +432,13 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
         ...buildSubmitData(),
         title: formatted,
         attachments,
+        draftId,
       });
+      if (draftId) {
+        try {
+          await deleteTicketDraft(draftId);
+        } catch { /* ignore */ }
+      }
       resetFormState();
     } catch (error) {
       setSubmitError(error?.response?.data?.message || error?.message || 'Failed to create ticket. Please try again.');
@@ -263,12 +448,53 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
   };
 
   const handleClose = () => {
-    if (isSubmitting) {
+    if (isSubmitting || isSavingDraft) {
       return;
     }
 
     resetFormState();
     onClose();
+  };
+
+  const handleSaveAsDraft = async () => {
+    if (isSubmitting || isSavingDraft) return;
+    setSubmitError('');
+    setIsSavingDraft(true);
+    try {
+      const clientId = resolveCurrentUserId();
+      const draftPayload = {
+        client_id: clientId,
+        title: (formData.title || '').trim() || 'Untitled Draft',
+        machine_ID: formData.machine_ID ? Number(formData.machine_ID) : null,
+        problem_category_ID: formData.problem_category_ID ? Number(formData.problem_category_ID) : null,
+        description: formData.description || '',
+        priority_ID: 1,
+        attachments: [],
+      };
+      if (draftId) {
+        draftPayload.id = draftId;
+      }
+
+      const res = await saveTicketDraft(draftPayload);
+      const savedDraft = res?.draft || {
+        ...draftPayload,
+        id: draftId || Date.now(),
+        last_saved_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      const targetPath = resolveTargetMyTicketsPath();
+      resetFormState();
+      onClose();
+      onDraftSaved?.(savedDraft);
+      navigate(`${targetPath}?tab=drafts`, {
+        state: { tab: 'drafts', draftSavedAt: Date.now() },
+      });
+    } catch (error) {
+      setSubmitError(error?.response?.data?.message || error?.message || 'Failed to save draft. Please try again.');
+    } finally {
+      setIsSavingDraft(false);
+    }
   };
 
   const equipmentOptions = options.equipment_options?.length
@@ -298,10 +524,10 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] animate-in fade-in duration-200">
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-surface shadow-level-4">
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto overflow-x-hidden rounded-2xl bg-surface shadow-level-4">
         <div className="flex items-center justify-between border-b border-gray-150 bg-surface px-8 py-6 shrink-0">
           <div>
-            <h2 className="text-xl font-bold text-dark-slate">Create New Ticket</h2>
+            <h2 className="text-xl font-bold text-dark-slate">{draftId ? 'Continue Draft Ticket' : 'Create New Ticket'}</h2>
             <p className="mt-1 text-xs text-muted-slate">Submit a new support request for your equipment</p>
           </div>
           <button
@@ -358,45 +584,34 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
           )}
 
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-            <div>
+            <div className="min-w-0">
               <label className="mb-2 block text-sm font-medium text-gray-700">Category</label>
-              <select
-                name="problem_category_ID"
-                required
+              <BoundedSelect
                 value={formData.problem_category_ID}
-                onChange={handleChange}
+                onChange={(val) => setFormData((prev) => ({ ...prev, problem_category_ID: val }))}
                 onBlur={() => touch('category')}
+                options={categoryOptions}
+                placeholder="Select Category"
                 disabled={loadingOptions || isSubmitting}
-                className={`w-full rounded-xl border bg-white px-4 py-3 outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-[#252578] ${touched.category && categoryError ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}
-              >
-                <option value="">Select Category</option>
-                {categoryOptions.map((category) => (
-                  <option key={category.value} value={category.value}>
-                    {category.label}
-                  </option>
-                ))}
-              </select>
+                hasError={Boolean(touched.category && categoryError)}
+              />
               {touched.category && categoryError && <p className="mt-1.5 text-xs text-red-500">{categoryError}</p>}
             </div>
 
-            <div>
-              <label className="mb-2 block text-sm font-medium text-gray-700">Equipment Name / ID{isItDepartment && <span className="ml-1 text-xs font-normal text-muted-slate">(Optional for IT)</span>}</label>
-              <select
-                name="machine_ID"
-                required={!isItDepartment}
+            <div className="min-w-0">
+              <label className="mb-2 block text-sm font-medium text-gray-700">
+                Equipment Name / ID{isItDepartment && <span className="ml-1 text-xs font-normal text-muted-slate">(Optional for IT)</span>}
+              </label>
+              <BoundedSelect
                 value={formData.machine_ID}
-                onChange={handleChange}
+                onChange={(val) => setFormData((prev) => ({ ...prev, machine_ID: val }))}
                 onBlur={() => touch('equipment')}
+                options={equipmentOptions}
+                placeholder={isItDepartment ? 'No equipment' : 'Select Equipment'}
                 disabled={loadingOptions || isSubmitting}
-                className={`w-full rounded-xl border bg-white px-4 py-3 outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-[#252578] ${touched.equipment && equipmentError ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}
-              >
-                <option value="">{isItDepartment ? 'No equipment' : 'Select Equipment'}</option>
-                {equipmentOptions.map((machine) => (
-                  <option key={machine.value} value={machine.value}>
-                    {machine.label}
-                  </option>
-                ))}
-              </select>
+                hasError={Boolean(touched.equipment && equipmentError)}
+                searchable
+              />
               {touched.equipment && equipmentError && <p className="mt-1.5 text-xs text-red-500">{equipmentError}</p>}
             </div>
           </div>
@@ -475,18 +690,26 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
             {fileError && <p className="mt-2 text-sm text-red-500">{fileError}</p>}
           </div>
 
-          <div className="mt-4 flex justify-end gap-3 border-t border-gray-150 pt-5">
+          <div className="mt-4 flex flex-wrap justify-end gap-3 border-t border-gray-150 pt-5">
             <button
               type="button"
               onClick={handleClose}
-              disabled={isSubmitting}
+              disabled={isSubmitting || isSavingDraft}
               className="rounded-xl border border-gray-200 px-5 py-2.5 text-sm font-semibold text-dark-slate hover:bg-page transition cursor-pointer"
             >
               Cancel
             </button>
             <button
+              type="button"
+              onClick={handleSaveAsDraft}
+              disabled={loadingOptions || isSubmitting || isSavingDraft}
+              className="rounded-xl border border-[#252578]/30 bg-white px-5 py-2.5 text-sm font-semibold text-[#252578] hover:bg-[#252578]/5 transition cursor-pointer disabled:opacity-50"
+            >
+              {isSavingDraft ? 'Saving Draft...' : 'Save as Draft'}
+            </button>
+            <button
               type="submit"
-              disabled={loadingOptions || isSubmitting || !isFormValid}
+              disabled={loadingOptions || isSubmitting || isSavingDraft || !isFormValid}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-primary px-6 py-2.5 text-sm font-semibold text-white transition-all hover:bg-brand-deep active:scale-98 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer shadow-level-1"
             >
               {isSubmitting && (
@@ -500,14 +723,6 @@ export default function TicketModal({ isOpen, onClose, onSubmit, openTicketsCoun
           </div>
         </form>
       </div>
-
-      <TitleCasingModal
-        isOpen={showTitleCasingModal}
-        originalTitle={titleCasingData?.original}
-        formattedTitle={titleCasingData?.formatted}
-        onConfirm={handleConfirmTitleCasing}
-        onCancel={() => setShowTitleCasingModal(false)}
-      />
     </div>
   );
 }

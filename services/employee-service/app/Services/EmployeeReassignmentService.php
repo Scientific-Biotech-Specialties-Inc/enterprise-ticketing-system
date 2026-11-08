@@ -341,7 +341,8 @@ class EmployeeReassignmentService
                     'Reassignment Approved',
                     "Your reassignment request for Ticket {$ticketRef}: \"" . $title . "\" was approved.",
                     $ticketId,
-                    ['ticket_id' => $ticketId, 'ticket_ref' => $ticketRef, 'title' => $title, 'type' => 'reassignment_approved']
+                    ['ticket_id' => $ticketId, 'ticket_ref' => $ticketRef, 'title' => $title, 'type' => 'reassignment_approved'],
+                    'reassignment'
                 );
 
                 if ($newEmpId) {
@@ -469,7 +470,8 @@ class EmployeeReassignmentService
                     'Reassignment Rejected',
                     "Your reassignment request for Ticket {$ticketRef}: \"" . $title . "\" was rejected." . ($denyReason !== '' ? " Reason: \"" . $denyReason . "\"." : ""),
                     $ticketId,
-                    $denialData
+                    $denialData,
+                    'reassignment'
                 );
 
                 $this->notificationService->notifyCS(

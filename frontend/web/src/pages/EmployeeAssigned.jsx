@@ -162,7 +162,11 @@ export default function EmployeeAssigned() {
       if (match) {
         // Open the ticket based on its status
         if (match.deniedReassignment || isReassignmentDenied(match)) {
-          setDeniedReassignTicket(match);
+          if (!match.accepted) {
+            setPendingTicket(match);
+          } else {
+            setDeniedReassignTicket(match);
+          }
         } else if (!match.accepted) {
           setPendingTicket(match);
         } else {

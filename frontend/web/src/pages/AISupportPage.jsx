@@ -31,65 +31,115 @@ const formatShortTime = (iso) => {
 };
 
 function FormattedText({ text }) {
+  const [completedSteps, setCompletedSteps] = useState({});
+
   if (typeof text !== 'string') return text;
 
   const lines = text.split('\n');
+  const stepRegex = /^(?:\*\*step\s*(\d+)[:\.\-]?\*\*|step\s*(\d+)[:\.\-]|(\d+)[\.\)])\s*(.*)$/i;
+
+  const totalDetectedSteps = lines.reduce((acc, line) => {
+    const trimmed = line.trim();
+    const isBullet = trimmed.startsWith('- ') || trimmed.startsWith('* ');
+    const cleanLine = isBullet ? trimmed.substring(2) : trimmed;
+    return stepRegex.test(cleanLine) ? acc + 1 : acc;
+  }, 0);
+
+  const completedCount = Object.values(completedSteps).filter(Boolean).length;
+
+  const renderInlineTokens = (rawStr) =>
+    rawStr.split(/(\*\*.*?\*\*|\*.*?\*|`.*?`)/g).map((part, idx) => {
+      if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
+        return <strong key={idx} className="font-bold text-slate-900">{part.slice(2, -2)}</strong>;
+      }
+      if (part.startsWith('*') && part.endsWith('*') && part.length >= 2) {
+        return <em key={idx} className="italic">{part.slice(1, -1)}</em>;
+      }
+      if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
+        return <code key={idx} className="bg-white border border-gray-200 px-1.5 py-0.5 rounded text-xs font-mono text-[#252578]">{part.slice(1, -1)}</code>;
+      }
+      return part;
+    });
+
   return (
-    <div className="text-sm leading-relaxed break-words space-y-1">
+    <div className="text-sm leading-relaxed break-words space-y-1.5">
+      {totalDetectedSteps >= 2 && (
+        <div className="mb-2.5 flex items-center justify-between gap-2 rounded-xl bg-[#252578]/5 border border-[#252578]/15 px-3 py-2 text-xs">
+          <span className="font-bold text-[#252578] flex items-center gap-1.5">
+            <CheckCircle2 size={14} className="text-[#2E85D8]" />
+            Guided Troubleshooting Steps
+          </span>
+          <span className="text-[11px] font-semibold text-slate-600 bg-white px-2 py-0.5 rounded-full border border-slate-200">
+            {completedCount} / {totalDetectedSteps} Completed
+          </span>
+        </div>
+      )}
       {lines.map((line, lineIdx) => {
         const trimmed = line.trim();
         const isBullet = trimmed.startsWith('- ') || trimmed.startsWith('* ');
-        const cleanLine = isBullet ? trimmed.substring(2) : line;
+        const cleanLine = isBullet ? trimmed.substring(2) : trimmed;
 
-        // Structured step detection: "Step 1: ...", "1. ...", "2) ..."
-        const stepMatch = cleanLine.match(/^(?:step\s*(\d+)[:\.]|(\d+)[\.\)])\s*(.*)$/i);
-        if (stepMatch && !isBullet) {
-          const stepNum = stepMatch[1] || stepMatch[2];
-          const stepBody = stepMatch[3];
-          const stepParts = stepBody.split(/(\*\*.*?\*\*|\*.*?\*|`.*?`)/g).map((part, idx) => {
-            if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
-              return <strong key={idx} className="font-bold text-gray-900">{part.slice(2, -2)}</strong>;
-            }
-            if (part.startsWith('*') && part.endsWith('*') && part.length >= 2) {
-              return <em key={idx} className="italic">{part.slice(1, -1)}</em>;
-            }
-            if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
-              return <code key={idx} className="bg-white border border-gray-200 px-1 py-0.5 rounded text-xs font-mono">{part.slice(1, -1)}</code>;
-            }
-            return part;
-          });
+        // Structured step detection: "Step 1: ...", "**Step 1:** ...", "1. ...", "2) ..."
+        const stepMatch = cleanLine.match(stepRegex);
+        if (stepMatch) {
+          const stepNum = stepMatch[1] || stepMatch[2] || stepMatch[3];
+          const stepBody = stepMatch[4] || '';
+          const isDone = Boolean(completedSteps[stepNum]);
+
+          // Extract optional leading bold title e.g. "**Power Cycle Unit** — Unplug the main cord..."
+          const titleMatch = stepBody.match(/^\*\*(.+?)\*\*\s*(?:[:\-—–]\s*)?(.*)$/);
+          const stepTitle = titleMatch ? titleMatch[1] : null;
+          const stepDesc = titleMatch ? titleMatch[2] : stepBody;
 
           return (
-            <div key={lineIdx} className="my-2 p-3 bg-blue-50/70 border border-blue-200/80 rounded-xl flex items-start gap-2.5 text-left shadow-xs">
-              <span className="bg-[#252578] text-white text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 mt-0.5 shadow-xs">
-                Step {stepNum}
-              </span>
-              <div className="flex-1 text-gray-800 text-xs font-medium leading-relaxed">
-                {stepParts}
+            <div
+              key={lineIdx}
+              onClick={() => setCompletedSteps((prev) => ({ ...prev, [stepNum]: !prev[stepNum] }))}
+              className={`my-2 p-3.5 rounded-xl border transition-all cursor-pointer flex items-start gap-3 text-left shadow-xs ${
+                isDone
+                  ? 'bg-emerald-50/70 border-emerald-200'
+                  : 'bg-blue-50/60 hover:bg-blue-50/90 border-blue-200/80'
+              }`}
+              title="Click to mark step as completed"
+            >
+              <div className="flex items-center gap-2 shrink-0 mt-0.5">
+                <span
+                  className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold transition-colors ${
+                    isDone
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-[#252578] text-white'
+                  }`}
+                >
+                  {isDone ? '✓' : stepNum}
+                </span>
+                <span
+                  className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                    isDone
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-[#252578]/10 text-[#252578]'
+                  }`}
+                >
+                  Step {stepNum}
+                </span>
+              </div>
+              <div className={`flex-1 text-xs leading-relaxed ${isDone ? 'line-through text-slate-500' : 'text-slate-800 font-medium'}`}>
+                {stepTitle && (
+                  <p className={`font-bold text-xs mb-0.5 ${isDone ? 'text-emerald-800' : 'text-[#252578]'}`}>
+                    {stepTitle}
+                  </p>
+                )}
+                <div>{renderInlineTokens(stepDesc || stepTitle || '')}</div>
               </div>
             </div>
           );
         }
 
-        // Match **bold**, *italic*, and `code`
-        const parts = cleanLine.split(/(\*\*.*?\*\*|\*.*?\*|`.*?`)/g);
-        const elements = parts.map((part, idx) => {
-          if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
-            return <strong key={idx} className="font-bold">{part.slice(2, -2)}</strong>;
-          }
-          if (part.startsWith('*') && part.endsWith('*') && part.length >= 2) {
-            return <em key={idx} className="italic">{part.slice(1, -1)}</em>;
-          }
-          if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
-            return <code key={idx} className="bg-gray-100 px-1 py-0.5 rounded text-xs font-mono">{part.slice(1, -1)}</code>;
-          }
-          return part;
-        });
+        const elements = renderInlineTokens(cleanLine);
 
         if (isBullet) {
           return (
             <div key={lineIdx} className="flex items-start gap-2 pl-2">
-              <span className="text-gray-900 font-bold flex-shrink-0 select-none">•</span>
+              <span className="text-[#252578] font-bold flex-shrink-0 select-none">•</span>
               <div>{elements}</div>
             </div>
           );
@@ -146,12 +196,12 @@ const isTroubleshootingResponse = (content) => {
 };
 
 const suggestionChips = [
-  'Printer won\'t start',
-  'Machine Error 402',
-  'Paper Jam',
-  'Scanner not detected',
-  'Network Issue',
-  'Replace Toner',
+  'Machine Calibration Error',
+  'Display Panel Unresponsive',
+  'Sensor Connection Fault',
+  'Power Supply / Startup Issue',
+  'Software Sync Error',
+  'Network Connectivity Issue',
 ];
 
 const welcomeMessage = {
@@ -172,15 +222,40 @@ const gatherDetailsMessage = {
   id: 'gather-details',
   role: 'ai',
   content: (
-    <div>
-      <p className="text-sm font-semibold mb-2">Before I begin troubleshooting, I'd like to gather a few details so I can provide the most accurate assistance</p>
-      <ol className="list-decimal list-inside text-sm space-y-1 text-gray-700">
-        <li>What machine are you having an issue?</li>
-        <li>What is the brand and model of the machine?</li>
-        <li>Do you know the serial number? (Type "Not Available" if you dont)</li>
-        <li>What problem are you experiencing?</li>
-        <li>Are there any troubleshooting you already did?</li>
-      </ol>
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
+        <p className="text-xs sm:text-sm font-bold text-[#252578]">
+          Diagnostic Intake — 5 Quick Steps to Get Started
+        </p>
+        <span className="text-[10px] font-bold uppercase tracking-wider bg-[#252578]/10 text-[#252578] px-2 py-0.5 rounded-full shrink-0">
+          Step-by-Step Guide
+        </span>
+      </div>
+      <p className="text-xs text-slate-600 leading-relaxed">
+        Share the details below in a single message (or one by one) so I can provide accurate, model-specific troubleshooting steps:
+      </p>
+      <div className="space-y-2">
+        {[
+          { step: 1, title: 'Equipment / Machine Name', desc: 'Which machine or equipment unit is experiencing the issue?' },
+          { step: 2, title: 'Brand & Model', desc: 'What is the manufacturer brand and specific model number?' },
+          { step: 3, title: 'Serial Number', desc: 'Provide the unit serial number (or reply "Not Available" if unknown).' },
+          { step: 4, title: 'Symptom & Error Code', desc: 'Describe the exact fault, behavior, or error code displayed on screen.' },
+          { step: 5, title: 'Prior Troubleshooting', desc: 'List any checks, restarts, or actions you have already tried.' },
+        ].map((item) => (
+          <div
+            key={item.step}
+            className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 text-xs"
+          >
+            <span className="bg-[#252578] text-white text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 mt-0.5">
+              Step {item.step}
+            </span>
+            <div className="min-w-0 flex-1">
+              <span className="font-bold text-slate-800">{item.title}: </span>
+              <span className="text-slate-600">{item.desc}</span>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   ),
   timestamp: new Date().toISOString(),
@@ -919,13 +994,18 @@ function AISupportPage() {
     axiosInstance.get(`${AI_API_URL}/conversations`, { baseURL: '', params: { user_id: currentUserId } })
       .then(res => {
         if (res.data.success && Array.isArray(res.data.conversations)) {
-          const cleanConvs = res.data.conversations.map(c => ({
-            ...c,
-            timestamp: c.updated_at || c.created_at || new Date().toISOString(),
-            messageCount: c.message_count !== undefined ? c.message_count : (Array.isArray(c.messages) ? c.messages.length : (c.messageCount || 2)),
-            title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : 'Support Inquiry'
-          }));
-          setConversations(cleanConvs);
+          const cleanConvs = res.data.conversations
+            .filter(c => !/paper jam/i.test(c.title || ''))
+            .map(c => ({
+              ...c,
+              timestamp: c.updated_at || c.created_at || new Date().toISOString(),
+              messageCount: c.message_count !== undefined ? c.message_count : (Array.isArray(c.messages) ? c.messages.length : (c.messageCount || 2)),
+              title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : 'AI Support Session'
+            }));
+          setConversations(prev => {
+            const activeDraft = prev.find(c => String(c.id).startsWith('draft-'));
+            return activeDraft ? [activeDraft, ...cleanConvs] : cleanConvs;
+          });
         }
       })
       .catch(err => {
@@ -944,24 +1024,17 @@ function AISupportPage() {
       .then(res => {
         if (!isMounted) return;
         if (res.data.success && Array.isArray(res.data.conversations)) {
-          const fetched = res.data.conversations.map(c => ({
-            ...c,
-            timestamp: c.updated_at || c.created_at || new Date().toISOString(),
-            messageCount: c.message_count !== undefined ? c.message_count : (Array.isArray(c.messages) ? c.messages.length : (c.messageCount || 2)),
-            title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : 'Support Inquiry'
-          }));
+          const fetched = res.data.conversations
+            .filter(c => !/paper jam/i.test(c.title || ''))
+            .map(c => ({
+              ...c,
+              timestamp: c.updated_at || c.created_at || new Date().toISOString(),
+              messageCount: c.message_count !== undefined ? c.message_count : (Array.isArray(c.messages) ? c.messages.length : (c.messageCount || 2)),
+              title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : 'AI Support Session'
+            }));
           setConversations(fetched);
-          if (startNewChatRef.current) {
-            startNewChatRef.current = false;
-            // Drop the one-shot flag from history so a refresh reopens normally.
-            navigate(location.pathname, { replace: true, state: {} });
-            handleNewChat();
-          } else if (fetched.length > 0 && fetched[0].id && !FINISHED_CONVERSATION_STATUSES.includes(String(fetched[0].status || '').toLowerCase())) {
-            loadConversation(fetched[0].id);
-          } else {
-            // No chats yet, or the latest chat already became a ticket: start fresh.
-            handleNewChat();
-          }
+          // Always open on a clean New Support Session by default instead of loading stale test chats
+          handleNewChat();
         } else {
           handleNewChat();
         }
@@ -1657,8 +1730,8 @@ function AISupportPage() {
       setShowReviewModal(false);
       setShowTicketCard(false);
 
-      // Redirect to the draft ticket creation page with draft data pre-loaded
-      navigate('/create-ticket', { state: { draftId: savedDraftId } });
+      // Redirect directly to My Drafts tab
+      navigate('/my-tickets', { state: { tab: 'drafts', draftId: savedDraftId } });
     } catch (err) {
       console.error('Failed to save draft from AI Support:', err);
       throw err;

@@ -866,7 +866,7 @@ export default function CSIncoming() {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-border gap-2">
+      <div className="flex border-b border-border gap-2 overflow-x-auto scrollbar-none">
         <button
           type="button"
           onClick={() => { setIncomingTab('open'); setPage(1); }}

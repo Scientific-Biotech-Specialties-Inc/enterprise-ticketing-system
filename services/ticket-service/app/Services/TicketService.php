@@ -366,7 +366,7 @@ class TicketService
         $this->cacheService->clearTicketCaches();
 
         $dashboardTicket = DB::table('tickets as t')
-            ->join('machines as m', 'm.machine_ID', '=', 't.machine_ID')
+            ->leftJoin('machines as m', 'm.machine_ID', '=', 't.machine_ID')
             ->join('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
             ->select('t.ticket_ID', 't.title', 'm.machine_name', 'm.serial_number', 'ts.status_name')
             ->where('t.ticket_ID', $ticketId)
@@ -454,7 +454,7 @@ class TicketService
                 'id' => $ticketNumber,
                 'ticket_number' => $ticketNumber,
                 'title' => $dashboardTicket->title,
-                'equipment' => $dashboardTicket->machine_name . ' - ' . $dashboardTicket->serial_number,
+                'equipment' => $dashboardTicket->machine_name ? ($dashboardTicket->machine_name . ($dashboardTicket->serial_number ? ' - ' . $dashboardTicket->serial_number : '')) : 'General Issue',
                 'status' => $dashboardTicket->status_name,
             ] : null,
             'attachments' => $storedAttachments,
