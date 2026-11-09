@@ -27,4 +27,4 @@ COPY . .
 # Run composer install at build time
 RUN mkdir -p bootstrap/cache storage && composer install --no-interaction --no-dev --prefer-dist --optimize-autoloader
 
-CMD sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php /usr/local/bin/init-db.php && (php artisan migrate --force || true) && php -d variables_order=EGPCS -d upload_max_filesize=20M -d post_max_size=25M artisan serve --no-reload --host=0.0.0.0 --port=8000"
+CMD sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php /usr/local/bin/init-db.php && (php artisan migrate --force || true) && (php artisan db:seed --force || true) && if [ ! -f storage/oauth-private.key ]; then php artisan passport:keys --force || true; fi && php -d variables_order=EGPCS -d upload_max_filesize=20M -d post_max_size=25M artisan serve --no-reload --host=0.0.0.0 --port=8000"
