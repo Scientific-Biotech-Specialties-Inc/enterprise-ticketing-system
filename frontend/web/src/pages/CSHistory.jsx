@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search } from 'lucide-react';
-import Pagination from '@/components/Pagination';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import {
   getCSIncomingTickets,
@@ -12,70 +11,10 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
 import { DataTableSkeleton, DataTableEmptyState } from '@/components/ui/data-table';
-const HISTORY_STATUSES = ['Closed', 'Resolved'];
+
+const HISTORY_STATUSES = ['Closed', 'Resolved', 'Discarded', 'Discarded by Customer'];
 
 const getDisplayStatus = (ticket) => ticket.status;
-
-const buildTicketSearchString = (t) => {
-  if (!t) return '';
-  const id = String(t.id || t.ticket_ID || t.ticket_number || '');
-  const customer = String(
-    t.customer ||
-    t.customer_name ||
-    t.requestor ||
-    t.created_by_name ||
-    (typeof t.customer === 'object' ? t.customer?.name : '') ||
-    ''
-  );
-  const isInternal = Boolean(
-    t.title?.startsWith('[Internal]') ||
-    t.is_internal ||
-    t.ticket_type === 'Internal' ||
-    t.type === 'Internal'
-  );
-  const typeStr = isInternal ? 'internal' : 'external';
-  const title = String(t.title || '');
-  const category = String(t.category || '');
-  const rawStatus = String(t.status || '');
-  const displayStatus = String(
-    getDisplayStatus(t) === 'Reopen' ? 'Reopened' : (getDisplayStatus(t) || '')
-  );
-  const statusStr = `${rawStatus} ${displayStatus}`;
-  const dept = String(t.department || '');
-  const equip = String(t.equipment || t.machine_name || '');
-
-  const dateValue = t.date || t.created_at || t.submitted_at || t.updated_at || '';
-  const rawDate = String(dateValue);
-  const formattedDate = formatDisplayDate(dateValue);
-  let extraDates = '';
-  try {
-    const parsed = parseUTCDate(dateValue);
-    if (parsed && !isNaN(parsed.getTime())) {
-      extraDates = [
-        parsed.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
-        parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-        parsed.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }),
-        parsed.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' }),
-      ].join(' ');
-    }
-  } catch (e) {}
-
-  return [
-    id,
-    customer,
-    typeStr,
-    title,
-    category,
-    statusStr,
-    dept,
-    equip,
-    rawDate,
-    formattedDate,
-    extraDates,
-  ]
-    .join(' ')
-    .toLowerCase();
-};
 
 export default function CSHistory({ roleContext = 'cs' }) {
   const navigate = useNavigate();
@@ -84,10 +23,12 @@ export default function CSHistory({ roleContext = 'cs' }) {
   const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
   const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('All Categories');
   const [statusFilter, setStatusFilter] = useState('All Status');
-  const [typeFilter, setTypeFilter] = useState('all');
+  const [categoryFilter, setCategoryFilter] = useState('All Category');
+  const [priorityFilter, setPriorityFilter] = useState('All Priority');
+  const [dateFilter, setDateFilter] = useState('');
 
   const loadStaticData = useCallback(async () => {
     try {
@@ -107,13 +48,13 @@ export default function CSHistory({ roleContext = 'cs' }) {
     setError('');
 
     try {
-      const incomingResult = await getCSIncomingTickets({ limit: 100, forceRefresh });
+      const incomingResult = await getCSIncomingTickets({ limit: 150, forceRefresh });
       const list = incomingResult.filter((ticket) =>
-        HISTORY_STATUSES.includes(ticket.status)
+        HISTORY_STATUSES.includes(ticket.status) || ticket.reassignmentRequested
       );
       setTickets(list);
     } catch {
-      setError('Unable to load history tickets from ticket-service.');
+      setError('Unable to load ticket history.');
     } finally {
       if (source !== 'websocket' && source !== 'poll') {
         setLoading(false);
@@ -130,11 +71,9 @@ export default function CSHistory({ roleContext = 'cs' }) {
         const { action, ticket } = payload;
         if (!ticket) return;
 
-        if (action === 'created') {
-          return;
-        }
+        if (action === 'created') return;
 
-        const isHistoryTicket = HISTORY_STATUSES.includes(ticket.status);
+        const isHistoryTicket = HISTORY_STATUSES.includes(ticket.status) || ticket.reassignmentRequested;
 
         setTickets((prev) => {
           const index = prev.findIndex((t) => t.id === ticket.id || t.ticket_ID === ticket.ticket_ID);
@@ -166,85 +105,78 @@ export default function CSHistory({ roleContext = 'cs' }) {
 
   useRealtimeRefresh({
     refresh: handleRealtimeUpdate,
-    channels: [
-      { name: 'ticket-updates', event: 'ticket.changed' },
-    ],
+    channels: [{ name: 'ticket-updates', event: 'ticket.changed' }],
     intervalMs: 30000,
     deferRefresh: false,
   });
 
-  const categories = useMemo(
-    () => ['All Categories', ...Array.from(new Set(tickets.map((t) => t.category)))],
-    [tickets]
-  );
+  const categories = useMemo(() => {
+    const list = Array.from(new Set(tickets.map((t) => t.category).filter(Boolean)));
+    return ['All Category', ...list.sort()];
+  }, [tickets]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return tickets.filter((t) => {
-      if (category !== 'All Categories' && t.category !== category) return false;
-      
       const displayStatus = getDisplayStatus(t);
+
       if (statusFilter !== 'All Status' && displayStatus !== statusFilter) return false;
-      
-      if (typeFilter === 'internal') {
-        const isInternal = t.title?.startsWith('[Internal]') || t.is_internal || t.ticket_type === 'Internal' || t.type === 'Internal';
-        if (!isInternal) return false;
-      } else if (typeFilter === 'external') {
-        const isInternal = t.title?.startsWith('[Internal]') || t.is_internal || t.ticket_type === 'Internal' || t.type === 'Internal';
-        if (isInternal) return false;
+      if (categoryFilter !== 'All Category' && t.category !== categoryFilter) return false;
+      if (priorityFilter !== 'All Priority' && t.priority !== priorityFilter) return false;
+
+      if (dateFilter) {
+        const rawDate = t.resolved_at || t.closed_at || t.updated_at || t.lastUpdate || t.date || t.created_at;
+        if (!rawDate) return false;
+        try {
+          const d = new Date(rawDate);
+          if (!isNaN(d.getTime())) {
+            const iso = d.toISOString().split('T')[0];
+            const local = d.toLocaleDateString('en-CA');
+            if (iso !== dateFilter && local !== dateFilter) return false;
+          }
+        } catch {
+          return false;
+        }
       }
 
-      if (!q) return true;
-      const cleanQ = q.trim().toLowerCase();
-      const searchBlob = buildTicketSearchString(t);
-      if (searchBlob.includes(cleanQ)) return true;
-      const tokens = cleanQ.replace(/,/g, ' ').split(/\s+/).filter(Boolean);
-      return tokens.length > 0 && tokens.every((token) => searchBlob.includes(token));
+      if (q) {
+        const id = String(t.id || t.ticket_ID || t.ticket_number || '');
+        const title = String(t.title || '');
+        const customer = String(
+          t.customer ||
+          t.customer_name ||
+          t.requestor ||
+          t.created_by_name ||
+          ''
+        );
+        const facility = String(t.facility || '');
+        const blob = `${id} ${title} ${customer} ${facility}`.toLowerCase();
+        if (!blob.includes(q)) return false;
+      }
+      return true;
     });
-  }, [tickets, search, category, statusFilter, typeFilter]);
+  }, [tickets, search, statusFilter, categoryFilter, priorityFilter, dateFilter]);
 
-  const ITEMS_PER_PAGE = 10;
-  const [page, setPage] = useState(1);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE));
-
-  useEffect(() => {
-    if (page > totalPages) setPage(1);
-  }, [filtered.length, totalPages, page]);
-
-  const paginated = useMemo(() => {
-    const start = (page - 1) * ITEMS_PER_PAGE;
-    return filtered.slice(start, start + ITEMS_PER_PAGE);
-  }, [filtered, page]);
-
-  const handleRowAction = (t) => {
+  const openDetail = (t) => {
     const ticketId = t.ticket_ID || Number(String(t.id).replace(/\D/g, ''));
-    const basePath = roleContext === 'it_manager' ? '/it-manager' : roleContext === 'service_manager' ? '/service-manager' : roleContext === 'cs_manager' ? '/cs-manager' : '/cs';
-    navigate(`${basePath}/history/${ticketId}`, { state: { ticket: t, backPath: `${basePath}/history` } });
+    const basePath =
+      roleContext === 'it_manager'
+        ? '/it-manager'
+        : roleContext === 'service_manager'
+        ? '/service-manager'
+        : roleContext === 'cs_manager'
+        ? '/cs-manager'
+        : '/cs';
+    navigate(`${basePath}/history/${ticketId}`, {
+      state: { ticket: t, backPath: `${basePath}/history` },
+    });
   };
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Ticket History"
-        subtitle="View resolved, closed, and completed tickets"
-        actions={
-          <div className="flex border border-border rounded-lg overflow-hidden bg-card shrink-0">
-            {['all', 'external', 'internal'].map((type) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => setTypeFilter(type)}
-                className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
-                  typeFilter === type
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-card hover:bg-muted text-muted-foreground'
-                }`}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
-        }
+        subtitle="Closed, resolved, and completed tickets on record."
       />
 
       {error && (
@@ -253,124 +185,146 @@ export default function CSHistory({ roleContext = 'cs' }) {
         </div>
       )}
 
-      {/* Filter toolbar */}
-      <div className="w-full space-y-3 shrink-0">
-        <div className="relative w-full">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+      {/* Filter toolbar: Single unified row matching Employee Ticket History standard */}
+      <div className="flex flex-col lg:flex-row items-center gap-2.5 w-full shrink-0">
+        <div className="relative flex-1 w-full min-w-[200px]">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <input
+            type="search"
+            placeholder="Search ID, title, customer..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search history by ID, customer, title..."
-            className="w-full rounded-lg border border-border bg-card pl-9 pr-4 py-2.5 text-sm text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+            className="w-full rounded-xl border border-gray-200 bg-card pl-10 pr-4 py-2 text-sm text-foreground outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent placeholder:text-muted-foreground h-10"
           />
         </div>
-        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full">
+        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full lg:w-auto shrink-0">
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="flex-1 min-w-[140px] rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+            className="h-10 flex-1 sm:flex-initial min-w-[120px] rounded-xl border border-gray-200 bg-card px-3 text-sm text-foreground outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
           >
-            <option value="All Status">All Statuses</option>
-            <option value="Resolved">Resolved</option>
-            <option value="Closed">Closed</option>
+            {['All Status', 'Closed', 'Resolved'].map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
           </select>
           <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            className="flex-1 min-w-[140px] rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            className="h-10 flex-1 sm:flex-initial min-w-[120px] rounded-xl border border-gray-200 bg-card px-3 text-sm text-foreground outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
           >
             {categories.map((c) => (
               <option key={c} value={c}>{c}</option>
             ))}
           </select>
+          <select
+            value={priorityFilter}
+            onChange={(e) => setPriorityFilter(e.target.value)}
+            className="h-10 flex-1 sm:flex-initial min-w-[110px] rounded-xl border border-gray-200 bg-card px-3 text-sm text-foreground outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
+          >
+            {['All Priority', 'Critical', 'High', 'Medium', 'Low'].map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+          <div className="relative flex-1 sm:flex-initial">
+            <input
+              type="date"
+              aria-label="Filter by date"
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value)}
+              className="h-10 w-full sm:w-auto min-w-[130px] rounded-xl border border-gray-200 bg-card px-3 text-sm text-foreground outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
+            />
+            {dateFilter && (
+              <button
+                type="button"
+                onClick={() => setDateFilter('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs px-1 font-bold cursor-pointer"
+                title="Clear date"
+              >
+                ✕
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Table Card */}
       <div className="overflow-hidden rounded-xl border border-border bg-card shadow-xs">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <h2 className="text-base font-bold text-foreground">Completed Logs</h2>
-          <div className="text-xs text-muted-foreground">{filtered.length} tickets</div>
-        </div>
-
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[140px]">Ticket ID</TableHead>
+              <TableHead className="w-[130px]">Ticket ID</TableHead>
               <TableHead>Customer</TableHead>
-              <TableHead>Type</TableHead>
               <TableHead>Title</TableHead>
               <TableHead>Category</TableHead>
+              <TableHead>Priority</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="w-[150px]">Date Submitted</TableHead>
+              <TableHead className="w-[150px]">Last Update</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
-              <DataTableSkeleton columns={7} rows={6} />
+              <DataTableSkeleton columns={7} rows={5} />
             ) : filtered.length === 0 ? (
               <DataTableEmptyState
                 colSpan={7}
-                message="No tickets found in the history queue."
+                message="No history tickets found. Closed, resolved, and completed tickets will appear here."
               />
             ) : (
-              paginated.map((t) => {
-                const isInternalTicket =
-                  t.title?.startsWith('[Internal]') ||
-                  t.is_internal ||
-                  t.ticket_type === 'Internal' ||
-                  t.type === 'Internal';
-
-                return (
-                  <TableRow
-                    key={t.id}
-                    onClick={() => handleRowAction(t)}
-                    className="cursor-pointer hover:bg-muted/50 transition-colors"
-                  >
-                    <TableCell className="font-semibold text-primary whitespace-nowrap">
-                      {t.id}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground truncate max-w-[12rem]">
-                      {t.customer}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={isInternalTicket ? 'secondary' : 'outline'}>
-                        {isInternalTicket ? 'Internal' : 'External'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="font-medium text-foreground max-w-[18rem] truncate">
-                      {t.title}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {t.category}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={getStatusBadgeVariant(getDisplayStatus(t))}>
-                        {getDisplayStatus(t)}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                      {formatDisplayDate(t.date || t.created_at)}
-                    </TableCell>
-                  </TableRow>
-                );
-              })
+              filtered.map((t) => (
+                <TableRow
+                  key={t.id}
+                  onClick={() => openDetail(t)}
+                  className="cursor-pointer hover:bg-muted/50 transition-colors"
+                >
+                  <TableCell className="font-semibold text-primary whitespace-nowrap">
+                    <div className="flex flex-col min-w-0">
+                      <span>{t.id}</span>
+                      {t.reassignmentRequested && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-warning/15 text-warning mt-1 w-fit">
+                          Reassigned
+                        </span>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <p className="font-medium text-foreground text-sm truncate">{t.customer || t.customer_name || 'Customer'}</p>
+                    <p className="text-xs text-muted-foreground truncate">{t.facility || ''}</p>
+                  </TableCell>
+                  <TableCell className="font-medium text-foreground line-clamp-2 max-w-[16rem]">
+                    {t.title}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{t.category}</TableCell>
+                  <TableCell>
+                    <Badge
+                      variant={
+                        t.priority?.toLowerCase() === 'critical'
+                          ? 'destructive'
+                          : t.priority?.toLowerCase() === 'high'
+                          ? 'warning'
+                          : 'secondary'
+                      }
+                    >
+                      {t.priority}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={getStatusBadgeVariant(getDisplayStatus(t))}>
+                      {getDisplayStatus(t)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                    {formatDisplayDate(t.lastUpdate || t.updated_at || t.resolved_at || t.closed_at || t.date)}
+                  </TableCell>
+                </TableRow>
+              ))
             )}
           </TableBody>
         </Table>
-
         {!loading && filtered.length > 0 && (
-          <div className="px-4 py-3 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="text-xs text-muted-foreground">
-              Showing {(page - 1) * ITEMS_PER_PAGE + 1} -{' '}
-              {Math.min(page * ITEMS_PER_PAGE, filtered.length)} of {filtered.length}
-            </div>
-            <Pagination
-              totalItems={filtered.length}
-              itemsPerPage={ITEMS_PER_PAGE}
-              currentPage={page}
-              onPageChange={(p) => setPage(p)}
-            />
+          <div className="px-4 py-3 border-t border-border bg-card">
+            <p className="text-xs text-muted-foreground">
+              Showing {filtered.length} of {tickets.length} history records
+            </p>
           </div>
         )}
       </div>

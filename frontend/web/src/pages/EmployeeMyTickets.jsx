@@ -212,12 +212,9 @@ export default function EmployeeMyTickets({ roleContext }) {
         }
       } catch (apiErr) {
         console.warn('API getInternalTickets failed, falling back to local storage:', apiErr);
-        if (roleContext === 'cs') {
-          throw apiErr;
-        }
       }
 
-      if (roleContext !== 'cs' && mapped.length === 0) {
+      if (mapped.length === 0) {
         let stored = JSON.parse(sessionStorage.getItem(storageKey) || '[]');
         let healed = false;
         mapped = stored.map(t => {
@@ -384,22 +381,7 @@ export default function EmployeeMyTickets({ roleContext }) {
       // State updated directly
       setTickets(updatedList);
       setIsModalOpen(false);
-
-      // CS: immediately open delegation modal instead of success dialog
-      if (roleContext === 'cs') {
-        // Refresh employees list before showing modal
-        const emps = await getAssignableEmployees({ forceRefresh: true }).catch(() => csEmployees);
-        const mappedEmps = (emps || []).map((row) => ({
-          id: Number(row.id ?? row.emp_id),
-          name: row.name || `${row.first_name || ''} ${row.last_name || ''}`.trim() || row.email,
-          status: row.is_active ? 'active' : 'inactive',
-          department: row.department?.trim() || 'Unassigned',
-        }));
-        setCsEmployees(mappedEmps);
-        setCsAssignTicket(newTicket);
-      } else {
-        setConfirmCreated(newTicket);
-      }
+      setConfirmCreated(newTicket);
     } catch (err) {
       console.error('Failed to create internal ticket:', err);
       throw err;
@@ -630,7 +612,7 @@ export default function EmployeeMyTickets({ roleContext }) {
                 className="h-10 flex-1 sm:flex-initial min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
               >
                 <option value="">All statuses</option>
-                {(roleContext === 'cs' ? STATUSES.filter(s => s !== 'Pending Assignment') : STATUSES).map((status) => (
+                {STATUSES.map((status) => (
                   <option key={status} value={status}>{status}</option>
                 ))}
               </select>

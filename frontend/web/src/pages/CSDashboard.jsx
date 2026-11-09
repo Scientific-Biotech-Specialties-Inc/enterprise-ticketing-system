@@ -13,7 +13,10 @@ import {
   RefreshCw,
   ExternalLink,
   UserCheck,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import {
   getCSDashboardSummary,
   getTicketDetails,
@@ -93,6 +96,11 @@ export default function CSDashboard() {
   const displayName = user?.first_name
     ? `${user.first_name}${user.last_name ? ' ' + user.last_name : ''}`
     : user?.name || 'Customer Service Representative';
+
+  // Active view toggle: 'all' (Overview), 'attention' (Immediate Attention), 'queued' (Incoming Queue), 'assigned' (Assigned & Monitored)
+  const [activeSection, setActiveSection] = useState('all');
+  // In 'all' overview, Section I (Immediate Attention) is compact/chevron-collapsible
+  const [isAttentionExpanded, setIsAttentionExpanded] = useState(false);
 
   // ─── SLA helper ───────────────────────────────────────────────────────────
   // ─── Load the signed in agent's own summary ─────────────────────────────────
@@ -252,357 +260,586 @@ export default function CSDashboard() {
         badgeVariant="emerald"
       />
 
-      {/* ─── SECTION 1: CS WORKLOAD & SLA RISK METRICS ─────────────────────── */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-bold text-foreground">Traffic &amp; Workload Metrics</h2>
-            <p className="text-xs text-muted-foreground">Click any metric to navigate to the filtered queue or work list.</p>
-          </div>
-          <span className="text-[11px] text-muted-foreground bg-muted/40 px-2.5 py-1 rounded-md border border-border">
-            Read-Only Summary
-          </span>
-        </div>
-
-        {workloadError ? (
-          <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive flex items-center justify-between">
-            <span>{workloadError}</span>
-            <Button variant="outline" size="sm" onClick={() => loadDashboardData()} className="h-7 text-xs">
-              <RefreshCw className="w-3.5 h-3.5 mr-1" /> Retry
-            </Button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-            {/* 1. Queued Tickets */}
-            <MetricCard
-              title="Queued Tickets"
-              value={workloadMetrics.queuedCount}
-              subtitle="Awaiting CS review"
-              icon={<Inbox className="w-5 h-5 text-accent" />}
-              loading={loadingWorkload}
-              onClick={() => navigate('/ticketing/cs/incoming')}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-            />
-
-            {/* 2. Assigned / Monitored */}
-            <MetricCard
-              title="Assigned Workload"
-              value={workloadMetrics.assignedCount}
-              subtitle="Technicians assigned"
-              icon={<UserCheck className="w-5 h-5 text-primary" />}
-              loading={loadingWorkload}
-              onClick={() => navigate('/ticketing/cs/assigned')}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-            />
-
-            {/* 3. At Risk (Approaching SLA Breach) - Non-color cues */}
-            <MetricCard
-              title="Approaching SLA"
-              value={workloadMetrics.atRiskCount}
-              subtitle="At Risk (warning)"
-              icon={<Clock className="w-5 h-5 text-amber-600" />}
-              variant="amber"
-              loading={loadingWorkload}
-              onClick={() => navigate('/ticketing/cs/incoming?sla=At+Risk')}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-            />
-
-            {/* 4. Breached SLA */}
-            <MetricCard
-              title="SLA Breached"
-              value={workloadMetrics.breachedCount}
-              subtitle="Breached targets"
-              icon={<AlertTriangle className="w-5 h-5 text-rose-600" />}
-              variant="crimson"
-              loading={loadingWorkload}
-              onClick={() => navigate('/ticketing/cs/incoming?sla=Breached')}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-            />
-
-            {/* 5. Pending Reassignments */}
-            <MetricCard
-              title="Pending Reassign"
-              value={workloadMetrics.pendingReassignCount}
-              subtitle="Requests awaiting action"
-              icon={<ShieldAlert className="w-5 h-5 text-amber-600" />}
-              variant="amber"
-              loading={loadingWorkload}
-              onClick={() => navigate('/ticketing/cs/incoming?status=Pending+Reassignment')}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-            />
-
-            {/* 6. Critical Escalations */}
-            <MetricCard
-              title="Critical Priority"
-              value={workloadMetrics.escalatedCount}
-              subtitle="Requires priority triage"
-              icon={<AlertTriangle className="w-5 h-5 text-rose-600" />}
-              variant="crimson"
-              loading={loadingWorkload}
-              onClick={() => navigate('/ticketing/cs/incoming?priority=Critical')}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-            />
-          </div>
-        )}
-      </div>
-
-      {/* ─── SECTION 2: TICKETS NEEDING IMMEDIATE ATTENTION (TS059) ───────── */}
-      <div className="rounded-xl border border-border bg-card p-6 shadow-xs space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div>
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-rose-600" />
-              <h2 className="text-base font-bold text-foreground">Tickets Needing Immediate Attention</h2>
-              <Badge variant="destructive" className="text-[10px]">Action Required</Badge>
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              SLA breached, at-risk, and pending technician reassignment tickets requiring prompt CS traffic handling.
-            </p>
-          </div>
+      {/* Visual Navigation Pill Switcher (Preventing Information Overload) */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-1 bg-muted/40 p-1.5 rounded-xl border border-border w-fit flex-wrap">
           <Button
-            variant="outline"
+            variant={activeSection === 'all' ? 'default' : 'ghost'}
             size="sm"
-            onClick={() => navigate('/ticketing/cs/incoming?sla=Breached')}
-            className="text-xs gap-1.5 shrink-0"
+            onClick={() => setActiveSection('all')}
+            className="text-xs gap-1.5"
           >
-            <span>Open Incoming Queue</span>
-            <ArrowRight className="w-3.5 h-3.5" />
+            <span>All Overview</span>
+          </Button>
+          <Button
+            variant={activeSection === 'attention' ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => setActiveSection('attention')}
+            className="text-xs gap-1.5"
+          >
+            <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+            <span>Immediate Attention</span>
+            <Badge variant="destructive" className="ml-1 text-[10px]">{attentionTickets.length}</Badge>
+          </Button>
+          <Button
+            variant={activeSection === 'queued' ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => setActiveSection('queued')}
+            className="text-xs gap-1.5"
+          >
+            <Inbox className="w-3.5 h-3.5 text-accent" />
+            <span>Incoming Queue</span>
+            <Badge variant="secondary" className="ml-1 text-[10px]">{workloadMetrics.queuedCount}</Badge>
+          </Button>
+          <Button
+            variant={activeSection === 'assigned' ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => setActiveSection('assigned')}
+            className="text-xs gap-1.5"
+          >
+            <UserCheck className="w-3.5 h-3.5 text-primary" />
+            <span>Assigned &amp; Monitored</span>
+            <Badge variant="secondary" className="ml-1 text-[10px]">{workloadMetrics.assignedCount}</Badge>
           </Button>
         </div>
 
-        {attentionError ? (
-          <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive flex items-center justify-between">
-            <span>{attentionError}</span>
-            <Button variant="outline" size="sm" onClick={() => loadDashboardData()} className="h-7 text-xs">
-              <RefreshCw className="w-3.5 h-3.5 mr-1" /> Retry
-            </Button>
-          </div>
-        ) : loadingAttention ? (
-          <div className="overflow-hidden rounded-lg border border-border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[130px]">Ticket ID</TableHead>
-                  <TableHead>Issue / Subject</TableHead>
-                  <TableHead>Attention Reason</TableHead>
-                  <TableHead>Current SLA</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <DataTableSkeleton columns={4} rows={3} />
-              </TableBody>
-            </Table>
-          </div>
-        ) : attentionTickets.length === 0 ? (
-          <div className="rounded-lg border border-border/60 bg-muted/20 py-8 text-center text-xs text-muted-foreground">
-            <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
-            <p className="font-semibold text-foreground">No urgent tickets pending attention</p>
-            <p className="mt-0.5">All tickets are currently within acceptable SLA thresholds with zero pending reassignments.</p>
-          </div>
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[130px]">Ticket ID</TableHead>
-                  <TableHead>Issue / Subject</TableHead>
-                  <TableHead>Attention Reason</TableHead>
-                  <TableHead>Current SLA</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {attentionTickets.map((t) => (
-                  <TableRow
-                    key={t.id}
-                    onClick={() => handleViewTicket(t)}
-                    className="hover:bg-muted/40 transition-colors cursor-pointer"
-                  >
-                    <TableCell className="font-semibold text-primary text-xs whitespace-nowrap">
-                      {t.id}
-                    </TableCell>
-                    <TableCell>
-                      <div className="font-medium text-foreground text-xs truncate max-w-xs">{t.title}</div>
-                      <div className="text-[11px] text-muted-foreground mt-0.5">{t.customer}</div>
-                    </TableCell>
-                    <TableCell>
-                      {t.attentionType === 'reassign' ? (
-                        <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-md inline-flex">
-                          <ShieldAlert className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          <span>Reassignment Pending</span>
-                        </div>
-                      ) : t.attentionType === 'breached' ? (
-                        <div className="flex items-center gap-1.5 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-1 rounded-md inline-flex">
-                          <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                          <span>SLA Breached</span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-md inline-flex">
-                          <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          <span>Approaching Breach</span>
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <SlaStatusBadge ticket={t} />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
+        <span className="text-[11px] text-muted-foreground bg-muted/40 px-2.5 py-1 rounded-md border border-border w-fit">
+          Read-Only Summary
+        </span>
       </div>
 
-      {/* ─── SECTION 3 & 4: QUEUED SUMMARY & ASSIGNED SUMMARY ─────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {workloadError && (
+        <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive flex items-center justify-between">
+          <span>{workloadError}</span>
+          <Button variant="outline" size="sm" onClick={() => loadDashboardData()} className="h-7 text-xs">
+            <RefreshCw className="w-3.5 h-3.5 mr-1" /> Retry
+          </Button>
+        </div>
+      )}
 
-        {/* SECTION 3: Queued Tickets Summary */}
-        <div className="rounded-xl border border-border bg-card p-6 shadow-xs space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="flex items-center gap-2">
-                <Inbox className="w-4 h-4 text-primary" />
-                <h2 className="text-base font-bold text-foreground">Incoming Queued Tickets</h2>
+      {/* ═════════════════════════════════════════════════════════════════════ */}
+      {/* SECTION 1: TICKETS NEEDING IMMEDIATE ATTENTION                       */}
+      {/* ═════════════════════════════════════════════════════════════════════ */}
+      {(activeSection === 'all' || activeSection === 'attention') && (
+        activeSection === 'all' && !isAttentionExpanded ? (
+          /* Compact Collapsed Section 1: Immediate Attention */
+          <div className="rounded-2xl border border-border bg-card p-4 sm:p-5 shadow-xs transition-all duration-200">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div
+                className="flex items-start sm:items-center gap-3 min-w-0 cursor-pointer select-none flex-1 group"
+                onClick={() => setIsAttentionExpanded(true)}
+                title="Click to expand Immediate Attention"
+              >
+                <Badge
+                  variant="outline"
+                  className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 border-rose-300 text-rose-700 bg-rose-50 rounded-full shrink-0 group-hover:bg-rose-100 transition-colors"
+                >
+                  Immediate Attention
+                </Badge>
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-sm sm:text-base font-bold text-foreground group-hover:text-primary transition-colors">
+                      Section I: Immediate Attention
+                    </h2>
+                    {attentionTickets.length === 0 ? (
+                      <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-2.5 py-0.5 rounded-full">
+                        All clear: no urgent tickets pending
+                      </span>
+                    ) : (
+                      <span className="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-0.5 rounded-full">
+                        {attentionTickets.length} urgent ticket{attentionTickets.length === 1 ? '' : 's'} requiring action
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <span className={cn(workloadMetrics.breachedCount > 0 && "text-rose-700 font-semibold")}>
+                      SLA breached <strong className="font-semibold">{workloadMetrics.breachedCount}</strong>
+                    </span>
+                    <span>·</span>
+                    <span className={cn(workloadMetrics.atRiskCount > 0 && "text-amber-700 font-semibold")}>
+                      Approaching SLA <strong className="font-semibold">{workloadMetrics.atRiskCount}</strong>
+                    </span>
+                    <span>·</span>
+                    <span className={cn(workloadMetrics.pendingReassignCount > 0 && "text-amber-700 font-semibold")}>
+                      Pending reassign <strong className="font-semibold">{workloadMetrics.pendingReassignCount}</strong>
+                    </span>
+                    <span>·</span>
+                    <span>Critical priority <strong className="font-semibold text-foreground">{workloadMetrics.escalatedCount}</strong></span>
+                  </div>
+                </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-0.5">Tickets awaiting initial CS validation &amp; dispatch</p>
+
+              <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => navigate('/cs/incoming?sla=Breached')}
+                  className="text-xs text-rose-700 hover:text-rose-800 hover:bg-rose-50 gap-1.5 font-medium"
+                >
+                  <span>Open queue</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsAttentionExpanded(true)}
+                  className="text-xs gap-1.5 h-8 px-2.5 text-muted-foreground hover:text-foreground border-border hover:bg-muted/50"
+                  aria-label="Expand Immediate Attention details"
+                >
+                  <span className="hidden sm:inline">Expand</span>
+                  <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                </Button>
+              </div>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => navigate('/ticketing/cs/incoming')}
-              className="text-xs gap-1"
-            >
-              <span>View Queue</span>
-              <ArrowRight className="w-3 h-3" />
-            </Button>
+          </div>
+        ) : (
+          /* Full Expanded Section 1 */
+          <div className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-6">
+            {/* Section Banner Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold text-foreground">Section I: Immediate Attention</h2>
+                    <Badge variant="destructive" className="text-[10px]">Action Required</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    SLA breached, approaching breach, and pending technician reassignment tickets requiring prompt CS traffic handling.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate('/cs/incoming?sla=Breached')}
+                  className="text-xs gap-1.5 shrink-0"
+                >
+                  <span>Open Incoming Queue</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Button>
+                {activeSection === 'all' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsAttentionExpanded(false)}
+                    className="text-xs gap-1.5 h-8 px-2.5 text-muted-foreground hover:text-foreground border-border hover:bg-muted/50"
+                    aria-label="Collapse Immediate Attention details"
+                  >
+                    <span className="hidden sm:inline">Collapse</span>
+                    <ChevronUp className="w-4 h-4 text-muted-foreground" />
+                  </Button>
+                )}
+              </div>
+            </div>
+
+          {/* Attention Metric Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <MetricCard
+              title="SLA Breached"
+              value={workloadMetrics.breachedCount}
+              subtitle="Resolution overdue"
+              icon={<AlertTriangle className="w-4 h-4 text-rose-600" />}
+              variant="crimson"
+              loading={loadingWorkload}
+              onClick={() => navigate('/cs/incoming?sla=Breached')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+            <MetricCard
+              title="Approaching SLA"
+              value={workloadMetrics.atRiskCount}
+              subtitle="Near threshold"
+              icon={<Clock className="w-4 h-4 text-amber-600" />}
+              variant="amber"
+              loading={loadingWorkload}
+              onClick={() => navigate('/cs/incoming?sla=At+Risk')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+            <MetricCard
+              title="Pending Reassign"
+              value={workloadMetrics.pendingReassignCount}
+              subtitle="Technician requests"
+              icon={<ShieldAlert className="w-4 h-4 text-amber-600" />}
+              variant="amber"
+              loading={loadingWorkload}
+              onClick={() => navigate('/cs/incoming?status=Pending+Reassignment')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+            <MetricCard
+              title="Critical Priority"
+              value={workloadMetrics.escalatedCount}
+              subtitle="Urgent triage"
+              icon={<AlertTriangle className="w-4 h-4 text-rose-600" />}
+              variant="crimson"
+              loading={loadingWorkload}
+              onClick={() => navigate('/cs/incoming?priority=Critical')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
           </div>
 
-          {queuedError ? (
+          {attentionError ? (
             <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive flex items-center justify-between">
-              <span>{queuedError}</span>
+              <span>{attentionError}</span>
               <Button variant="outline" size="sm" onClick={() => loadDashboardData()} className="h-7 text-xs">
-                Retry
+                <RefreshCw className="w-3.5 h-3.5 mr-1" /> Retry
               </Button>
             </div>
-          ) : loadingQueued ? (
-            <div className="space-y-2">
-              {Array.from({ length: 4 }).map((_, idx) => (
-                <div key={idx} className="p-3 rounded-lg border border-border/80 animate-pulse space-y-2">
-                  <div className="h-4 bg-muted rounded w-1/3" />
-                  <div className="h-3 bg-muted rounded w-3/4" />
-                  <div className="h-3 bg-muted rounded w-1/2" />
-                </div>
-              ))}
+          ) : loadingAttention ? (
+            <div className="overflow-hidden rounded-lg border border-border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[130px]">Ticket ID</TableHead>
+                    <TableHead>Issue / Subject</TableHead>
+                    <TableHead>Attention Reason</TableHead>
+                    <TableHead>Current SLA</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <DataTableSkeleton columns={4} rows={3} />
+                </TableBody>
+              </Table>
             </div>
-          ) : queuedTickets.length === 0 ? (
-            <div className="py-8 text-center text-xs text-muted-foreground">Queue is empty.</div>
+          ) : attentionTickets.length === 0 ? (
+            <div className="rounded-lg border border-border/60 bg-muted/20 py-8 text-center text-xs text-muted-foreground">
+              <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
+              <p className="font-semibold text-foreground">No urgent tickets pending attention</p>
+              <p className="mt-0.5">All tickets are currently within acceptable SLA thresholds with zero pending reassignments.</p>
+            </div>
           ) : (
-            <div className="space-y-2">
-              {queuedTickets.map((t) => (
-                <div
-                  key={t.id}
-                  onClick={() => handleViewTicket(t)}
-                  className="flex items-center justify-between p-3 rounded-lg border border-border/80 hover:bg-muted/40 transition-colors cursor-pointer"
-                >
-                  <div className="min-w-0 pr-3">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-xs text-primary">{t.id}</span>
-                      <Badge variant={getStatusBadgeVariant(t.status)}>{t.status}</Badge>
-                    </div>
-                    <p className="text-xs font-medium text-foreground truncate mt-1">{t.title}</p>
-                    <p className="text-[11px] text-muted-foreground">{t.customer || 'Customer'} • {t.updated}</p>
-                  </div>
-                  <div className="shrink-0 flex items-center gap-2">
-                    <Badge variant={t.priority === 'Critical' ? 'destructive' : t.priority === 'High' ? 'warning' : 'secondary'}>
-                      {t.priority}
-                    </Badge>
-                    <SlidersHorizontal className="w-4 h-4 text-muted-foreground" />
-                  </div>
-                </div>
-              ))}
+            <div className="overflow-hidden rounded-lg border border-border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[130px]">Ticket ID</TableHead>
+                    <TableHead>Issue / Subject</TableHead>
+                    <TableHead>Attention Reason</TableHead>
+                    <TableHead>Current SLA</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {attentionTickets.map((t) => (
+                    <TableRow
+                      key={t.id}
+                      onClick={() => handleViewTicket(t)}
+                      className="hover:bg-muted/40 transition-colors cursor-pointer"
+                    >
+                      <TableCell className="font-semibold text-primary text-xs whitespace-nowrap">
+                        {t.id}
+                      </TableCell>
+                      <TableCell>
+                        <div className="font-medium text-foreground text-xs truncate max-w-xs">{t.title}</div>
+                        <div className="text-[11px] text-muted-foreground mt-0.5">{t.customer}</div>
+                      </TableCell>
+                      <TableCell>
+                        {t.attentionType === 'reassign' ? (
+                          <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-md inline-flex">
+                            <ShieldAlert className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            <span>Reassignment Pending</span>
+                          </div>
+                        ) : t.attentionType === 'breached' ? (
+                          <div className="flex items-center gap-1.5 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-1 rounded-md inline-flex">
+                            <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                            <span>SLA Breached</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-md inline-flex">
+                            <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            <span>Approaching Breach</span>
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <SlaStatusBadge ticket={t} />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </div>
           )}
         </div>
+        )
+      )}
 
-        {/* SECTION 4: Assigned / Monitored Tickets Summary */}
-        <div className="rounded-xl border border-border bg-card p-6 shadow-xs space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="flex items-center gap-2">
-                <UserCheck className="w-4 h-4 text-primary" />
-                <h2 className="text-base font-bold text-foreground">Assigned &amp; Monitored Tickets</h2>
+      {/* ═════════════════════════════════════════════════════════════════════ */}
+      {/* SECTION 2: INCOMING QUEUED TICKETS                                   */}
+      {/* ═════════════════════════════════════════════════════════════════════ */}
+      {(activeSection === 'all' || activeSection === 'queued') && (
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-6">
+          {/* Section Banner Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-accent/10 border border-accent/20 text-accent flex items-center justify-center shrink-0">
+                <Inbox className="w-5 h-5" />
               </div>
-              <p className="text-xs text-muted-foreground mt-0.5">Summary of tickets actively handled or delegated by CS</p>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-foreground">Section II: Incoming Queued Tickets</h2>
+                  <Badge variant="outline" className="text-[10px] bg-accent/5 text-accent border-accent/20">
+                    Unassigned Queue ({workloadMetrics.queuedCount})
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Tickets awaiting initial CS validation, category triage, and technician dispatch.
+                </p>
+              </div>
             </div>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => navigate('/ticketing/cs/assigned')}
-              className="text-xs gap-1"
+              onClick={() => navigate('/cs/incoming')}
+              className="text-xs gap-1.5 shrink-0"
             >
-              <span>View Assigned</span>
-              <ArrowRight className="w-3 h-3" />
+              <span>View Queue</span>
+              <ArrowRight className="w-3.5 h-3.5" />
             </Button>
           </div>
 
+            {/* Queued Metric Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <MetricCard
+                title="Queued Tickets"
+                value={workloadMetrics.queuedCount}
+                subtitle="Awaiting CS review"
+                icon={<Inbox className="w-4 h-4 text-accent" />}
+                loading={loadingQueued}
+                onClick={() => navigate('/cs/incoming')}
+                className="cursor-pointer hover:shadow-md transition-shadow"
+              />
+              <MetricCard
+                title="Open / Unassigned"
+                value={workloadMetrics.queuedCount}
+                subtitle="Initial triage"
+                icon={<Clock className="w-4 h-4 text-amber-600" />}
+                loading={loadingQueued}
+                onClick={() => navigate('/cs/incoming?status=Open')}
+                className="cursor-pointer hover:shadow-md transition-shadow"
+              />
+              <MetricCard
+                title="Pending Assignment"
+                value={workloadMetrics.pendingReassignCount}
+                subtitle="Ready for dispatch"
+                icon={<UserCheck className="w-4 h-4 text-primary" />}
+                loading={loadingQueued}
+                onClick={() => navigate('/cs/incoming?status=Pending+Assignment')}
+                className="cursor-pointer hover:shadow-md transition-shadow"
+              />
+            </div>
+
+            {/* Queued Tickets Table */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
+                  Queued Tickets Awaiting Triage ({queuedTickets.length})
+                </h3>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => navigate('/cs/incoming')}
+                  className="text-xs text-primary hover:text-primary gap-1"
+                >
+                  <span>View All</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+
+              {queuedError ? (
+                <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive flex items-center justify-between">
+                  <span>{queuedError}</span>
+                  <Button variant="outline" size="sm" onClick={() => loadDashboardData()} className="h-7 text-xs">
+                    Retry
+                  </Button>
+                </div>
+              ) : loadingQueued ? (
+                <div className="overflow-hidden rounded-lg border border-border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-[130px]">Ticket ID</TableHead>
+                        <TableHead>Title / Subject</TableHead>
+                        <TableHead>Customer</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Priority</TableHead>
+                        <TableHead className="w-[130px]">Received</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      <DataTableSkeleton columns={6} rows={3} />
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : queuedTickets.length === 0 ? (
+                <div className="rounded-lg border border-border/60 bg-muted/20 py-8 text-center text-xs text-muted-foreground">
+                  <Inbox className="w-8 h-8 text-muted-foreground/60 mx-auto mb-2" />
+                  <p className="font-semibold text-foreground">Queue is clear</p>
+                  <p className="mt-0.5">No unassigned incoming tickets currently awaiting triage.</p>
+                </div>
+              ) : (
+                <div className="overflow-hidden rounded-lg border border-border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-[130px]">Ticket ID</TableHead>
+                        <TableHead>Title / Subject</TableHead>
+                        <TableHead>Customer</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Priority</TableHead>
+                        <TableHead className="w-[130px]">Received</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {queuedTickets.map((t) => (
+                        <TableRow
+                          key={t.id}
+                          onClick={() => handleViewTicket(t)}
+                          className="hover:bg-muted/40 transition-colors cursor-pointer"
+                        >
+                          <TableCell className="font-semibold text-primary text-xs whitespace-nowrap">
+                            {t.id}
+                          </TableCell>
+                          <TableCell>
+                            <div className="font-medium text-foreground text-xs truncate max-w-xs">{t.title}</div>
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-xs truncate">
+                            {t.customer || 'Customer'}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={getStatusBadgeVariant(t.status)}>{t.status}</Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={t.priority === 'Critical' ? 'destructive' : t.priority === 'High' ? 'warning' : 'secondary'}>
+                              {t.priority}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                            {t.updated}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+        </div>
+      )}
+
+      {/* ═════════════════════════════════════════════════════════════════════ */}
+      {/* SECTION 3: ASSIGNED & MONITORED TICKETS                              */}
+      {/* ═════════════════════════════════════════════════════════════════════ */}
+      {(activeSection === 'all' || activeSection === 'assigned') && (
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-6">
+          {/* Section Banner Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 text-primary flex items-center justify-center shrink-0">
+                <UserCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-foreground">Section III: Assigned &amp; Monitored Tickets</h2>
+                  <Badge variant="outline" className="text-[10px] bg-primary/5 text-primary border-primary/20">
+                    Active Workload ({workloadMetrics.assignedCount})
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Summary of active tickets delegated to technicians under continuous CS SLA monitoring.
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate('/cs/assigned')}
+              className="text-xs gap-1.5 shrink-0"
+            >
+              <span>View Assigned</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+
+          {/* Assigned Workload Metric */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <MetricCard
+              title="Assigned Workload"
+              value={workloadMetrics.assignedCount}
+              subtitle="Technicians actively assigned"
+              icon={<UserCheck className="w-4 h-4 text-primary" />}
+              loading={loadingWorkload}
+              onClick={() => navigate('/cs/assigned')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+            <div className="p-3.5 bg-muted/20 border border-border rounded-xl flex items-center justify-between">
+              <div>
+                <span className="text-xs font-semibold text-foreground">Traffic Routing Policy</span>
+                <p className="text-[11px] text-muted-foreground mt-0.5">Continuous CS SLA monitoring &amp; reassignment tracking active.</p>
+              </div>
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-primary/10 text-primary px-2 py-0.5 rounded-full border border-primary/20">Active</span>
+            </div>
+          </div>
+
           {/* Counts by Status Breakdown */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div
-              onClick={() => navigate('/ticketing/cs/assigned?status=Open')}
-              className="p-3 bg-muted/30 border border-border rounded-lg text-center cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => navigate('/cs/assigned?status=Open')}
+              className="p-3.5 bg-muted/30 border border-border rounded-xl text-center cursor-pointer hover:bg-muted/50 hover:border-primary/30 transition-all shadow-xs"
             >
               <span className="text-[11px] text-muted-foreground font-medium">Open</span>
-              <p className="text-lg font-bold text-primary mt-0.5">{assignedStatusCounts.open}</p>
+              <p className="text-xl font-bold text-primary mt-1">{assignedStatusCounts.open}</p>
             </div>
             <div
-              onClick={() => navigate('/ticketing/cs/assigned?status=In+Progress')}
-              className="p-3 bg-muted/30 border border-border rounded-lg text-center cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => navigate('/cs/assigned?status=In+Progress')}
+              className="p-3.5 bg-muted/30 border border-border rounded-xl text-center cursor-pointer hover:bg-muted/50 hover:border-amber-300 transition-all shadow-xs"
             >
               <span className="text-[11px] text-muted-foreground font-medium">In Progress</span>
-              <p className="text-lg font-bold text-amber-600 mt-0.5">{assignedStatusCounts.inProgress}</p>
+              <p className="text-xl font-bold text-amber-600 mt-1">{assignedStatusCounts.inProgress}</p>
             </div>
             <div
-              onClick={() => navigate('/ticketing/cs/assigned?status=On+Hold')}
-              className="p-3 bg-muted/30 border border-border rounded-lg text-center cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => navigate('/cs/assigned?status=On+Hold')}
+              className="p-3.5 bg-muted/30 border border-border rounded-xl text-center cursor-pointer hover:bg-muted/50 hover:border-slate-400 transition-all shadow-xs"
             >
               <span className="text-[11px] text-muted-foreground font-medium flex items-center justify-center gap-1">
-                <PauseCircle className="w-3 h-3 text-muted-foreground" />
+                <PauseCircle className="w-3.5 h-3.5 text-muted-foreground" />
                 On Hold
               </span>
-              <p className="text-lg font-bold text-slate-700 mt-0.5">{assignedStatusCounts.onHold}</p>
+              <p className="text-xl font-bold text-slate-700 mt-1">{assignedStatusCounts.onHold}</p>
             </div>
             <div
-              onClick={() => navigate('/ticketing/cs/assigned?status=Resolved')}
-              className="p-3 bg-muted/30 border border-border rounded-lg text-center cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => navigate('/cs/assigned?status=Resolved')}
+              className="p-3.5 bg-muted/30 border border-border rounded-xl text-center cursor-pointer hover:bg-muted/50 hover:border-emerald-300 transition-all shadow-xs"
             >
               <span className="text-[11px] text-muted-foreground font-medium">Resolved</span>
-              <p className="text-lg font-bold text-emerald-600 mt-0.5">{assignedStatusCounts.resolved}</p>
+              <p className="text-xl font-bold text-emerald-600 mt-1">{assignedStatusCounts.resolved}</p>
             </div>
           </div>
 
-          <div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-2">
-            <div className="flex items-center justify-between text-xs font-semibold text-foreground">
-              <span>Traffic Routing Rules</span>
-              <Badge variant="outline" className="text-[10px]">Active</Badge>
+          <div className="p-4 rounded-xl border border-border/80 bg-muted/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
+                <span>Traffic Routing &amp; Monitoring Rules</span>
+                <Badge variant="outline" className="text-[10px]">Active</Badge>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1 max-w-2xl">
+                Assigned tickets undergo continuous SLA tracking. Action triggers (assignment, hold, resolve, reassign) are managed from the dedicated Queue views.
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              Assigned tickets undergo continuous SLA tracking. When a technician is assigned, tickets transition from Queued to Monitored status. Action triggers (assignment, hold, resolve) are performed from the dedicated Queue views.
-            </p>
-            <div className="pt-2 flex justify-end">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => navigate('/ticketing/cs/assigned')}
-                className="text-xs text-primary hover:text-primary gap-1"
-              >
-                <span>Navigate to Assigned List</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </Button>
-            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate('/cs/assigned')}
+              className="text-xs text-primary hover:text-primary gap-1 shrink-0 self-start sm:self-auto"
+            >
+              <span>Navigate to Assigned List</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Button>
           </div>
         </div>
-
-      </div>
+      )}
 
       {/* ─── TICKET DETAILS MODAL WITH ACTIVE ASSIGNMENT DISPATCH ────────────── */}
       {selectedTicket && (
