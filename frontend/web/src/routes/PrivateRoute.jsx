@@ -115,26 +115,27 @@ export default function PrivateRoute({ children, role }) {
     const handlePageShow = (e) => {
       // Customer and employee portals: a page restored from the back/forward cache keeps its old DOM.
       // Hide it and reload so the session is re-checked before anything is shown.
+      //
+      // Only bfcache restores are handled here. `pageshow` also fires on every normal page load,
+      // usually while AuthContext is still probing /me (isLoading=true, no in-memory token yet).
+      // Redirecting on that event bounced SSO users back to the central portal right after they
+      // opened /ticketing/ ("it logs me out"). Normal loads are guarded by the render logic below,
+      // which waits for isLoading=false before deciding.
       if (e.persisted) {
         document.documentElement.style.visibility = 'hidden';
         window.location.reload();
         return;
       }
-      const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('is_logged_out') === 'true';
-      const token = tokenStore.getToken();
-      if (e.persisted || !token || !isAuthenticated || isLoggedOut) {
-        if (!token || !isAuthenticated || isLoggedOut) {
-          if (isCustomerSite) {
-            window.location.replace(import.meta.env.BASE_URL || '/');
-          } else {
-            window.location.replace('/');
-          }
+      if (isCustomerSite) {
+        const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('is_logged_out') === 'true';
+        if (isLoggedOut) {
+          window.location.replace(import.meta.env.BASE_URL || '/');
         }
       }
     };
     window.addEventListener('pageshow', handlePageShow);
     return () => window.removeEventListener('pageshow', handlePageShow);
-  }, [isLoading, isAuthenticated]);
+  }, []);
 
   useEffect(() => {
     if (isLoading || !isAuthenticated) return undefined;

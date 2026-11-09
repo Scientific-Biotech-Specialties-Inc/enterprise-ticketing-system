@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Inbox, Clock, CheckCircle2, Archive, Bot, Eye, ArrowRight, MessageCircle } from 'lucide-react';
+import { Inbox, Clock, CheckCircle2, Archive, Bot, ArrowRight, MessageCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import TicketModal from '@/components/TicketModal';
 import CustomerTicketDetailModal from '@/components/CustomerTicketDetailModal';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
@@ -54,6 +54,21 @@ export default function CustomerDashboard() {
     closed: 0,
   });
   const [recentTickets, setRecentTickets] = useState([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 5;
+
+  const totalPages = Math.max(1, Math.ceil(recentTickets.length / pageSize));
+  const paginatedTickets = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return recentTickets.slice(start, start + pageSize);
+  }, [recentTickets, currentPage, pageSize]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(1);
+    }
+  }, [totalPages, currentPage]);
+
   const [modalLoading, setModalLoading] = useState(false);
   const [loadingText, setLoadingText] = useState('Loading...');
   const navigate = useNavigate();
@@ -441,11 +456,10 @@ export default function CustomerDashboard() {
                 <TableHead className="w-32">Ticket ID</TableHead>
                 <TableHead>Title & Equipment</TableHead>
                 <TableHead className="w-36">Status</TableHead>
-                <TableHead className="w-20 text-center">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              <DataTableSkeleton columns={4} rows={4} />
+              <DataTableSkeleton columns={3} rows={4} />
             </TableBody>
           </Table>
         ) : recentTickets.length === 0 ? (
@@ -453,69 +467,92 @@ export default function CustomerDashboard() {
             No tickets found. Submit a support ticket to get started.
           </div>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-32">Ticket ID</TableHead>
-                <TableHead>Title & Equipment</TableHead>
-                <TableHead className="w-36">Status</TableHead>
-                <TableHead className="w-20 text-center">Action</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {recentTickets.map((t) => (
-                <TableRow key={t.id || t.ticket_ID}>
-                  <TableCell className="font-semibold text-primary text-xs">
-                    {t.id || t.ticket_ID}
-                  </TableCell>
-                  <TableCell className="max-w-[280px]">
-                    <div className="font-semibold text-dark-slate text-xs truncate" title={t.title}>
-                      {t.title}
-                    </div>
-                    {t.equipment && (
-                      <div className="text-[11px] text-muted-slate truncate mt-0.5" title={t.equipment}>
-                        {t.equipment}
-                      </div>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={getStatusBadgeVariant(t.status)}>
-                      {t.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-center">
-                    <div className="inline-flex items-center justify-center gap-1">
-                      {Boolean(
-                        (t.assigned_to && String(t.assigned_to).trim().toLowerCase() !== 'unassigned') ||
-                        (t.assigned_employee && String(t.assigned_employee).trim().toLowerCase() !== 'unassigned') ||
-                        (Array.isArray(t.assigned_employees) && t.assigned_employees.length > 0)
-                      ) && (
-                        <button
-                          type="button"
-                          onClick={() => handleViewTicket({ ...t, openDirectChat: true })}
-                          aria-label={`Message assigned employee for ticket ${t.id}`}
-                          title="Open message with assigned employee"
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[#252578]/10 hover:bg-[#252578] text-[#252578] hover:text-white text-[11px] font-semibold transition-all cursor-pointer"
-                        >
-                          <MessageCircle className="h-3.5 w-3.5" />
-                          <span className="hidden sm:inline">Message</span>
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => handleViewTicket(t)}
-                        aria-label={`View ticket ${t.id}`}
-                        title="View ticket details"
-                        className="p-1.5 rounded-lg text-muted-slate hover:text-accent hover:bg-slate-100 transition-colors cursor-pointer"
-                      >
-                        <Eye className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </TableCell>
+          <>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-32">Ticket ID</TableHead>
+                  <TableHead>Title & Equipment</TableHead>
+                  <TableHead className="w-36">Status</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {paginatedTickets.map((t) => (
+                  <TableRow
+                    key={t.id || t.ticket_ID}
+                    onClick={() => handleViewTicket(t)}
+                    className="cursor-pointer hover:bg-slate-50/80 transition-colors duration-150"
+                  >
+                    <TableCell className="font-semibold text-primary text-xs">
+                      {t.id || t.ticket_ID}
+                    </TableCell>
+                    <TableCell className="max-w-[280px]">
+                      <div className="font-semibold text-dark-slate text-xs truncate" title={t.title}>
+                        {t.title}
+                      </div>
+                      {t.equipment && (
+                        <div className="text-[11px] text-muted-slate truncate mt-0.5" title={t.equipment}>
+                          {t.equipment}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={getStatusBadgeVariant(t.status)}>
+                        {t.status}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+
+            {/* Pagination Controls */}
+            {recentTickets.length > pageSize && (
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 mt-3 border-t border-slate-100 text-xs text-muted-slate">
+                <span>
+                  Showing <strong>{(currentPage - 1) * pageSize + 1}</strong> to{' '}
+                  <strong>{Math.min(currentPage * pageSize, recentTickets.length)}</strong> of{' '}
+                  <strong>{recentTickets.length}</strong> tickets
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 text-dark-slate hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition font-medium cursor-pointer"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                    <span>Previous</span>
+                  </button>
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
+                      <button
+                        key={pageNum}
+                        type="button"
+                        onClick={() => setCurrentPage(pageNum)}
+                        className={`w-7 h-7 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                          pageNum === currentPage
+                            ? 'bg-[#252578] text-white shadow-xs'
+                            : 'text-dark-slate hover:bg-slate-100 border border-transparent'
+                        }`}
+                      >
+                        {pageNum}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={currentPage === totalPages}
+                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 text-dark-slate hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition font-medium cursor-pointer"
+                  >
+                    <span>Next</span>
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 

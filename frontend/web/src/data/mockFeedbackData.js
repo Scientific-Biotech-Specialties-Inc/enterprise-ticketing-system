@@ -249,6 +249,10 @@ export async function saveFeedback(ticketId, ratings, comments, overallComment, 
   }
 
   // Send rating payload to legacy DB via analytics-service backend API
+  if (!tokenStore.getToken()) {
+    return all[ticketId];
+  }
+
   try {
     const res = await fetch('/api/ticketing/analytics/feedback', {
       method: 'POST',
@@ -304,6 +308,10 @@ export async function updateFeedback(ticketId, ratings, comments, overallComment
     // ignore
   }
 
+  if (!tokenStore.getToken()) {
+    return all[ticketId];
+  }
+
   try {
     const res = await fetch(`/api/ticketing/analytics/feedback/ticket/${ticketId}`, {
       method: 'PUT',
@@ -345,6 +353,10 @@ export async function deleteFeedback(ticketId) {
     // ignore
   }
 
+  if (!tokenStore.getToken()) {
+    return true;
+  }
+
   try {
     const res = await fetch(`/api/ticketing/analytics/feedback/ticket/${ticketId}`, {
       method: 'DELETE',
@@ -365,10 +377,16 @@ export async function deleteFeedback(ticketId) {
 export async function fetchFeedbackForTicket(ticketId) {
   if (!ticketId) return null;
   const local = getTicketFeedback(ticketId);
+  const token = tokenStore.getToken();
+  if (!token) return local;
+
   try {
     let res = await fetch(`/api/ticketing/analytics/feedback/ticket/${ticketId}`, {
       headers: { Accept: 'application/json', ...authHeaders() },
     });
+    if (res.status === 401 || res.status === 403) {
+      return local;
+    }
     if (!res.ok && res.status === 404) {
       const strId = String(ticketId);
       const numMatch = strId.match(/\d+/);

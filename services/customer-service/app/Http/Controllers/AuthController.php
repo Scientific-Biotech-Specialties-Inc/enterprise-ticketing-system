@@ -640,8 +640,25 @@ class AuthController extends Controller
     public function heartbeat(Request $request)
     {
         $user = $request->user();
-        if (!$user || !($user instanceof Employee)) {
+        if (!$user) {
             return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        // Central-SSO sessions authenticate as AuthenticatedUserDto, not an Employee model.
+        // Map them to the local employee row; answering 401 here made the SPA drop the session.
+        if (!($user instanceof Employee)) {
+            $employee = null;
+            if (!empty($user->emp_id)) {
+                $employee = Employee::find($user->emp_id);
+            }
+            if (!$employee && !empty($user->email)) {
+                $employee = Employee::where('email', $user->email)->first();
+            }
+            if (!$employee) {
+                // Authenticated, but no local employee to record presence for (e.g. a customer).
+                return response()->noContent();
+            }
+            $user = $employee;
         }
 
         $redisKey = 'employee:presence:' . $user->emp_id;

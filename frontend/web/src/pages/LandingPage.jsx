@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import sbsiLogo from '@/assets/SBSI.png';
 import heroBg from '@/assets/SBSI-bg.png';
+import customerSystemUi from '@/assets/customer-system-ui.png';
 
 /* ── Inline SVG Icon Components (matching lucide style) ── */
 const ArrowRightIcon = ({ size = 18 }) => (
@@ -251,19 +252,19 @@ const styles = `
 }
 .lp-carousel-card {
   position: relative;
-  max-width: 1060px;
+  max-width: 1160px;
   margin: 0 auto;
   background: #f8f9fa;
   border: 1px solid #e2e8f0;
   border-radius: 18px;
-  padding: 28px 36px;
+  padding: 32px 36px;
   box-shadow: 0 4px 20px -2px rgba(0,0,0,0.05);
   overflow: hidden;
 }
 .lp-slide-content {
   display: grid;
-  grid-template-columns: 1fr 0.88fr;
-  gap: 28px;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
   align-items: center;
 }
 .lp-slide-text { display: flex; flex-direction: column; }
@@ -337,11 +338,11 @@ const styles = `
 .lp-mock-window {
   position: relative;
   width: 100%;
-  max-width: 380px;
+  max-width: 500px;
   background: #fff;
   border: 1px solid #e2e8f0;
   border-radius: 14px;
-  box-shadow: 0 12px 24px -8px rgba(0,0,0,0.06);
+  box-shadow: 0 16px 36px -8px rgba(0,0,0,0.12);
   overflow: hidden;
 }
 .lp-mock-topbar {
@@ -462,22 +463,22 @@ const styles = `
 }
 .lp-system-cards-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 20px;
-  margin-top: 24px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 28px;
+  margin-top: 32px;
 }
 .lp-sys-card {
   position: relative;
   background: #fff;
   border: 1.5px solid #e2e8f0;
   border-radius: 20px;
-  padding: 28px 22px;
-  min-height: 240px;
+  padding: 36px 30px;
+  min-height: 280px;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: flex-start;
-  gap: 16px;
+  gap: 18px;
   overflow: hidden;
   transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   box-shadow: 0 4px 16px rgba(0,0,0,0.04);
@@ -686,84 +687,66 @@ const styles = `
 const ticketingSystem = {
   id: 'ts',
   slug: 'ts',
-  title: 'Ticketing System',
-  shortTitle: 'Support & SLA',
-  fullName: 'Enterprise Ticketing System',
+  title: 'Customer Support Portal',
+  shortTitle: 'Customer Care',
+  fullName: 'Enterprise Customer Support Portal',
   acronym: 'TS',
-  category: 'Enterprise Helpdesk & SLA Support',
+  category: '24/7 Equipment & Diagnostic Support',
   accentColor: '#F59E0B',
   lightBg: '#FFFBEB',
-  tagline: 'Enterprise Helpdesk, Support Queuing & SLA Resolution',
+  tagline: 'Fast, Transparent Care for Your Laboratory & Diagnostic Equipment',
   detailedDesc:
-    'A centralized engine for internal and client support requests. Resolve issues efficiently with priority-based queuing, automated SLA escalation, and full knowledge base integration.',
+    'Keep your laboratory and diagnostic operations running without interruption. Easily request equipment maintenance, get instant troubleshooting answers, and stay connected with certified specialists until your issue is resolved.',
   keyFeatures: [
-    'Automated Priority-Based Ticket Routing',
-    'Live SLA Breach Countdown Timers',
-    'Centralized Knowledge Base Integration',
-    'Customer Satisfaction (CSAT) Metrics',
+    'Effortless Online Service Requests',
+    'Live Repair & Resolution Updates',
+    '24/7 Instant AI Troubleshooting',
+    'Direct Chat with Certified Specialists',
   ],
   metrics: [
     { val: '18 mins', lbl: 'Avg First Response' },
-    { val: '99.4%', lbl: 'SLA Adherence Rate' },
-    { val: '4.9 / 5', lbl: 'Customer Rating' },
+    { val: '99.4%', lbl: 'On-Time Resolution' },
+    { val: '4.9 / 5', lbl: 'Customer Satisfaction' },
   ],
-  badgeText: 'Helpdesk Engine',
-  chartTitle: 'Ticket Volume Resolution & Response Times',
+  badgeText: 'Customer Portal',
+  chartTitle: 'Equipment Uptime & Fast Resolution Delivery',
   chartPathFill: 'M 0 115 L 0 70 Q 95 50 190 40 T 380 25 L 380 120 L 0 120 Z',
   chartPathStroke: 'M 0 70 Q 95 50 190 40 T 380 25',
   recentItems: [
     { title: 'Reagent Analyzer Firmware Calibration #TS-892', status: 'Resolved', statusClass: 'status-approved' },
-    { title: 'User Access Permission Escalation #TS-893', status: 'In Progress', statusClass: 'status-pending' },
+    { title: 'Centrifuge Preventive Maintenance Check #TS-893', status: 'In Progress', statusClass: 'status-pending' },
     { title: 'Laboratory Network Interface Diagnostic', status: 'Resolved', statusClass: 'status-approved' },
   ],
 };
 
-/* Feature cards for Section 3 — ticketing-specific */
+/* Feature cards for Section 3 — customer benefit focused */
 const featureCards = [
   {
     id: 'ticket-mgmt',
-    title: 'Ticket Management',
-    desc: 'Submit, track, and manage support tickets with automated priority assignment and real-time status updates across all stages.',
+    title: 'Effortless Service Requests',
+    desc: 'Report equipment concerns or request preventive maintenance in seconds, save drafts at your convenience, and get back to your work without hassle.',
     icon: TicketIcon,
     accentColor: '#F59E0B',
     lightBg: '#FFFBEB',
-    shortTitle: 'Tickets',
-  },
-  {
-    id: 'sla-tracking',
-    title: 'SLA Monitoring',
-    desc: 'Live SLA countdown timers, breach alerts, and escalation workflows ensure every ticket meets service level commitments.',
-    icon: ClockIcon,
-    accentColor: '#EF4444',
-    lightBg: '#FEF2F2',
-    shortTitle: 'SLA',
+    shortTitle: 'Requests',
   },
   {
     id: 'support-channels',
-    title: 'Multi-Channel Support',
-    desc: 'Centralized helpdesk combining email, portal submissions, and internal requests into a single unified queue.',
+    title: '24/7 Instant AI Guidance',
+    desc: 'Get immediate, step-by-step troubleshooting assistance anytime day or night to resolve common equipment questions without waiting in line.',
     icon: HeadphonesIcon,
     accentColor: '#2E85D8',
     lightBg: '#EFF6FF',
-    shortTitle: 'Support',
-  },
-  {
-    id: 'analytics',
-    title: 'Analytics & Reports',
-    desc: 'Comprehensive dashboards with resolution times, CSAT scores, team performance, and trend analysis for data-driven decisions.',
-    icon: BarChartIcon,
-    accentColor: '#8B5CF6',
-    lightBg: '#F5F3FF',
-    shortTitle: 'Analytics',
+    shortTitle: 'Assistance',
   },
   {
     id: 'communication',
-    title: 'Real-Time Messaging',
-    desc: 'Built-in messaging system for seamless communication between customers and support teams with full conversation history.',
+    title: 'Direct Specialist Access',
+    desc: 'Message your assigned field engineer and customer care team directly, share photos or reports, and keep all your answers in one place.',
     icon: MessageSquareIcon,
     accentColor: '#10B981',
     lightBg: '#ECFDF5',
-    shortTitle: 'Messaging',
+    shortTitle: 'Connection',
   },
 ];
 
@@ -875,10 +858,10 @@ export default function LandingPage() {
       <section id="systems" className="lp-slides-section">
         <div className="lp-section-container">
           <div className="lp-section-head">
-            <span className="lp-eyebrow">Enterprise Ecosystem</span>
-            <h2 className="lp-section-title">Enterprise Ticketing System</h2>
+            <span className="lp-eyebrow">Dedicated Customer Care</span>
+            <h2 className="lp-section-title">Dependable Support Built Around You</h2>
             <p className="lp-section-subtitle">
-              Integrated helpdesk and SLA management connecting your support operations with centralized identity authority and single sign-on.
+              Get fast, transparent support for your diagnostic equipment with instant AI guidance, direct specialist communication, and real-time resolution tracking.
             </p>
           </div>
 
@@ -886,10 +869,6 @@ export default function LandingPage() {
             <div className="lp-slide-content" style={{ '--slide-theme': ts.accentColor }}>
               {/* Left Column */}
               <div className="lp-slide-text">
-                <div className="lp-slide-pill" style={{ backgroundColor: ts.lightBg, color: ts.accentColor }}>
-                  <span className="lp-pill-dot" style={{ backgroundColor: ts.accentColor }} />
-                  <span>{ts.acronym} • {ts.category}</span>
-                </div>
                 <h3 className="lp-slide-name">{ts.fullName}</h3>
                 <p className="lp-slide-tagline">{ts.tagline}</p>
                 <p className="lp-slide-desc">{ts.detailedDesc}</p>
@@ -921,7 +900,7 @@ export default function LandingPage() {
                 </div>
               </div>
 
-              {/* Right Column: Mock Window */}
+              {/* Right Column: Screenshot of Real Customer System UI */}
               <div className="lp-slide-visual">
                 <div className="lp-mock-window">
                   <div className="lp-mock-topbar">
@@ -932,61 +911,22 @@ export default function LandingPage() {
                     </div>
                     <div className="lp-mock-address">
                       <LockIcon size={10} />
-                      <span>sbsi.internal/{ts.slug}</span>
+                      <span>portal.sbsi.com.ph/customer-dashboard</span>
                     </div>
                     <div className="lp-mock-badge" style={{ backgroundColor: ts.lightBg, color: ts.accentColor }}>
                       {ts.badgeText}
                     </div>
                   </div>
-                  <div className="lp-mock-canvas">
-                    <div className="lp-mock-stats-row">
-                      <div className="lp-mock-stat-chip">
-                        <span className="lp-m-chip-lbl">Status</span>
-                        <span className="lp-m-chip-val" style={{ color: ts.accentColor }}>Live • Operational</span>
-                      </div>
-                      <div className="lp-mock-stat-chip">
-                        <span className="lp-m-chip-lbl">Audit Coverage</span>
-                        <span className="lp-m-chip-val" style={{ color: '#10b981' }}>100% Verified</span>
-                      </div>
-                    </div>
-                    <div className="lp-mock-chart-container">
-                      <div className="lp-mock-chart-header">
-                        <span className="lp-mock-chart-title">{ts.chartTitle}</span>
-                        <span className="lp-mock-chart-trend" style={{ color: ts.accentColor }}>+18.4% vs last period</span>
-                      </div>
-                      <svg className="lp-mock-chart-svg" viewBox="0 0 380 120" preserveAspectRatio="none">
-                        <defs>
-                          <linearGradient id="grad-ts" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor={ts.accentColor} stopOpacity="0.32" />
-                            <stop offset="100%" stopColor={ts.accentColor} stopOpacity="0.0" />
-                          </linearGradient>
-                        </defs>
-                        <line x1="0" y1="30" x2="380" y2="30" stroke="#f1f5f9" strokeWidth="1" />
-                        <line x1="0" y1="65" x2="380" y2="65" stroke="#f1f5f9" strokeWidth="1" />
-                        <line x1="0" y1="100" x2="380" y2="100" stroke="#f1f5f9" strokeWidth="1" />
-                        <path d={ts.chartPathFill} fill="url(#grad-ts)" />
-                        <path d={ts.chartPathStroke} fill="none" stroke={ts.accentColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-                        <circle cx="95" cy="48" r="4" fill={ts.accentColor} stroke="#fff" strokeWidth="2" />
-                        <circle cx="190" cy="32" r="4" fill={ts.accentColor} stroke="#fff" strokeWidth="2" />
-                        <circle cx="285" cy="52" r="4" fill={ts.accentColor} stroke="#fff" strokeWidth="2" />
-                        <circle cx="370" cy="24" r="5" fill={ts.accentColor} stroke="#fff" strokeWidth="2" />
-                      </svg>
-                    </div>
-                    <div className="lp-mock-feed">
-                      {ts.recentItems.map((item, idx) => (
-                        <div key={idx} className="lp-mock-feed-item">
-                          <div className="lp-mock-feed-left">
-                            <span className="lp-mock-feed-dot" style={{ backgroundColor: ts.accentColor }} />
-                            <span className="lp-mock-feed-title">{item.title}</span>
-                          </div>
-                          <span className={`lp-mock-feed-status ${item.statusClass}`}>{item.status}</span>
-                        </div>
-                      ))}
-                    </div>
+                  <div className="relative overflow-hidden bg-slate-100 border-t border-slate-200">
+                    <img
+                      src={customerSystemUi}
+                      alt="Customer Ticketing System Dashboard"
+                      className="w-full h-auto block object-cover object-top hover:scale-[1.02] transition-transform duration-300"
+                    />
                   </div>
                   <div className="lp-mock-lens-badge" style={{ borderColor: ts.accentColor }}>
                     <SparklesIcon size={12} color={ts.accentColor} />
-                    <span>Real-Time One UI Engine</span>
+                    <span>Real-Time One UI Customer Portal</span>
                   </div>
                 </div>
               </div>
@@ -999,10 +939,10 @@ export default function LandingPage() {
       <section id="features" className="lp-cards-section">
         <div className="lp-section-container">
           <div className="lp-section-head text-center" style={{ textAlign: 'center' }}>
-            <span className="lp-eyebrow">Comprehensive Features</span>
-            <h2 className="lp-section-title">Everything your support team needs</h2>
+            <span className="lp-eyebrow">Customer Benefits</span>
+            <h2 className="lp-section-title">Everything you need for uninterrupted operations</h2>
             <p className="lp-section-subtitle" style={{ margin: '0 auto' }}>
-              Powerful ticketing capabilities designed to streamline your helpdesk operations from end to end.
+              Experience responsive, transparent equipment care designed to save you time and keep your laboratory running at its best.
             </p>
           </div>
 

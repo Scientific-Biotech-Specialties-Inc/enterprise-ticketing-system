@@ -37,7 +37,7 @@ import {
   FileCode,
   Cpu,
   ChevronRight,
-  Eye,
+  SlidersHorizontal,
 } from 'lucide-react';
 
 import { PageHeader } from '@/components/ui/page-header';
@@ -822,7 +822,7 @@ export default function SuperAdminDashboard() {
                     className="shrink-0 h-7 px-2 text-xs text-accent hover:bg-blue-50"
                     title={`Inspect details for ${evt.ticketId}`}
                   >
-                    <Eye className="w-3.5 h-3.5 mr-1" />
+                    <SlidersHorizontal className="w-3.5 h-3.5 mr-1" />
                     Inspect
                   </Button>
                 </div>

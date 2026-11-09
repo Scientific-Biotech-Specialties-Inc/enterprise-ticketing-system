@@ -7,10 +7,11 @@ import {
   ShieldAlert,
   ArrowRight,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Inbox,
   ClipboardList,
   CheckCircle2,
-  Eye,
   Clock,
   Send,
   PauseCircle,
@@ -43,6 +44,7 @@ import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@
 import { DataTableSkeleton } from '@/components/ui/data-table';
 import { Button } from '@/components/ui/button';
 import { formatDisplayDate } from '@/utils/dateUtils';
+import { cn } from '@/lib/utils';
 
 export default function EmployeeDashboard() {
   const { user } = useAuth();
@@ -50,6 +52,8 @@ export default function EmployeeDashboard() {
 
   // Active view toggle: 'all' (Unified), 'assigned' (My Work), 'requestor' (My Requests)
   const [activeSection, setActiveSection] = useState('all');
+  // In 'all' overview, Section I (Assigned Workload) is compact/chevron-collapsible by default
+  const [isAssignedExpanded, setIsAssignedExpanded] = useState(false);
 
   // Assigned Workload state
   const [assignedTickets, setAssignedTickets] = useState([]);
@@ -358,7 +362,7 @@ export default function EmployeeDashboard() {
           className="text-xs gap-1.5"
         >
           <Briefcase className="w-3.5 h-3.5" />
-          <span>My Work (Assigned Workload)</span>
+          <span>My Work</span>
           <Badge variant="secondary" className="ml-1 text-[10px]">{assignedMetrics.totalActive}</Badge>
         </Button>
         <Button
@@ -368,45 +372,135 @@ export default function EmployeeDashboard() {
           className="text-xs gap-1.5"
         >
           <Send className="w-3.5 h-3.5" />
-          <span>My Requests (Requestor Activity)</span>
+          <span>My Request</span>
           <Badge variant="secondary" className="ml-1 text-[10px]">{requestorMetrics.total}</Badge>
         </Button>
       </div>
 
       {/* ═════════════════════════════════════════════════════════════════════ */}
-      {/* SECTION 1: ASSIGNED EMPLOYEE WORKLOAD ("MY WORK")                     */}
+      {/* SECTION 1: MY WORK                                                    */}
       {/* ═════════════════════════════════════════════════════════════════════ */}
       {(activeSection === 'all' || activeSection === 'assigned') && (
-        <div className="rounded-2xl border-2 border-primary/20 bg-card p-6 shadow-xs space-y-6">
-          {/* Section Banner Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
-                <Briefcase className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-base font-bold text-foreground">Section I: Assigned Workload (My Work)</h2>
-                  <Badge variant="outline" className="text-[10px] bg-primary/5 text-primary border-primary/20">
-                    Technician Role
-                  </Badge>
+        activeSection === 'all' && !isAssignedExpanded ? (
+          /* Compact Collapsed Section 1 */
+          <div className="rounded-2xl border border-border bg-card p-4 sm:p-5 shadow-xs transition-all duration-200">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div
+                className="flex items-start sm:items-center gap-3 min-w-0 cursor-pointer select-none flex-1 group"
+                onClick={() => setIsAssignedExpanded(true)}
+                title="Click to expand My Work"
+              >
+                <Badge
+                  variant="outline"
+                  className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 border-primary/30 text-primary bg-primary/5 rounded-full shrink-0 group-hover:bg-primary/10 transition-colors"
+                >
+                  My Work
+                </Badge>
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-sm sm:text-base font-bold text-foreground group-hover:text-primary transition-colors">
+                      My Work
+                    </h2>
+                    {assignedMetrics.totalActive === 0 ? (
+                      <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-2.5 py-0.5 rounded-full">
+                        All clear: no tickets assigned to you
+                      </span>
+                    ) : (
+                      <span className="text-xs font-semibold text-primary bg-primary/10 border border-primary/20 px-2.5 py-0.5 rounded-full">
+                        {assignedMetrics.totalActive} active ticket{assignedMetrics.totalActive === 1 ? '' : 's'} assigned
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <span>Open <strong className="font-semibold text-foreground">{assignedMetrics.open}</strong></span>
+                    <span>·</span>
+                    <span>In progress <strong className="font-semibold text-foreground">{assignedMetrics.inProgress}</strong></span>
+                    <span>·</span>
+                    <span>On hold <strong className="font-semibold text-foreground">{assignedMetrics.onHold}</strong></span>
+                    <span>·</span>
+                    <span>Resolved <strong className="font-semibold text-foreground">{assignedMetrics.resolved}</strong></span>
+                    <span>·</span>
+                    <span className={cn(assignedMetrics.atRisk > 0 && "text-amber-700 font-semibold")}>
+                      SLA at risk <strong className="font-semibold">{assignedMetrics.atRisk}</strong>
+                    </span>
+                    <span>·</span>
+                    <span className={cn(assignedMetrics.breached > 0 && "text-rose-700 font-semibold")}>
+                      SLA breached <strong className="font-semibold">{assignedMetrics.breached}</strong>
+                    </span>
+                  </div>
                 </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Tickets assigned to you for diagnostics, field maintenance, and repair resolution.
-                </p>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => navigate('/employee/assigned')}
+                  className="text-xs text-primary hover:text-primary hover:bg-primary/5 gap-1.5 font-medium"
+                >
+                  <span>Go to work log</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsAssignedExpanded(true)}
+                  className="text-xs gap-1.5 h-8 px-2.5 text-muted-foreground hover:text-foreground border-border hover:bg-muted/50"
+                  aria-label="Expand My Work details"
+                >
+                  <span className="hidden sm:inline">Expand</span>
+                  <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                </Button>
               </div>
             </div>
-
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => navigate('/employee/assigned')}
-              className="text-xs gap-1.5 shrink-0"
-            >
-              <span>Go to Work Log</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </Button>
           </div>
+        ) : (
+          /* Full Expanded Section 1 */
+          <div className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-6">
+            {/* Section Banner Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                  <Briefcase className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold text-foreground">My Work</h2>
+                    <Badge variant="outline" className="text-[10px] bg-primary/5 text-primary border-primary/20">
+                      Technician Role
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Tickets assigned to you for diagnostics, field maintenance, and repair resolution.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate('/employee/assigned')}
+                  className="text-xs gap-1.5 shrink-0"
+                >
+                  <span>Go to Work Log</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Button>
+                {activeSection === 'all' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsAssignedExpanded(false)}
+                    className="text-xs gap-1.5 h-8 px-2.5 text-muted-foreground hover:text-foreground border-border hover:bg-muted/50"
+                    aria-label="Collapse My Work details"
+                  >
+                    <span className="hidden sm:inline">Collapse</span>
+                    <ChevronUp className="w-4 h-4 text-muted-foreground" />
+                  </Button>
+                )}
+              </div>
+            </div>
 
           {/* Assigned Section Partial-Failure State */}
           {assignedError ? (
@@ -561,15 +655,14 @@ export default function EmployeeDashboard() {
                         <TableHead>Customer / Facility</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Priority</TableHead>
-                        <TableHead className="w-[100px] text-right">Action</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {loadingAssigned ? (
-                        <DataTableSkeleton columns={6} rows={3} />
+                        <DataTableSkeleton columns={5} rows={3} />
                       ) : filteredAssigned.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={6} className="py-6 text-center text-xs text-muted-foreground">
+                          <TableCell colSpan={5} className="py-6 text-center text-xs text-muted-foreground">
                             No assigned tickets match the selected filters.
                           </TableCell>
                         </TableRow>
@@ -597,20 +690,6 @@ export default function EmployeeDashboard() {
                                 {t.priority}
                               </Badge>
                             </TableCell>
-                            <TableCell className="text-right">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openContextualTicketModal(t);
-                                }}
-                                className="text-xs text-primary hover:text-primary gap-1"
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                                {!t.accepted ? 'Review & Accept' : 'Update'}
-                              </Button>
-                            </TableCell>
                           </TableRow>
                         ))
                       )}
@@ -621,13 +700,14 @@ export default function EmployeeDashboard() {
             </>
           )}
         </div>
+        )
       )}
 
       {/* ═════════════════════════════════════════════════════════════════════ */}
-      {/* SECTION 2: REQUESTOR ACTIVITY ("MY REQUESTS")                         */}
+      {/* SECTION 2: MY REQUEST                                                 */}
       {/* ═════════════════════════════════════════════════════════════════════ */}
       {(activeSection === 'all' || activeSection === 'requestor') && (
-        <div className="rounded-2xl border-2 border-accent/20 bg-card p-6 shadow-xs space-y-6">
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-6">
           {/* Section Banner Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-4">
             <div className="flex items-center gap-3">
@@ -636,7 +716,7 @@ export default function EmployeeDashboard() {
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h2 className="text-base font-bold text-foreground">Section II: Requestor Activity (My Requests)</h2>
+                  <h2 className="text-base font-bold text-foreground">My Request</h2>
                   <Badge variant="outline" className="text-[10px] bg-accent/5 text-accent border-accent/20">
                     Requestor Role
                   </Badge>
@@ -773,7 +853,7 @@ export default function EmployeeDashboard() {
                     onClick={() => navigate('/employee/my-tickets')}
                     className="text-xs text-primary hover:text-primary gap-1"
                   >
-                    <span>View All ({myRequests.length})</span>
+                    <span>View All</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </Button>
                 </div>
@@ -786,15 +866,14 @@ export default function EmployeeDashboard() {
                         <TableHead>Title</TableHead>
                         <TableHead>Target Equipment</TableHead>
                         <TableHead>Status</TableHead>
-                        <TableHead className="w-[100px] text-right">Action</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {loadingRequests ? (
-                        <DataTableSkeleton columns={5} rows={3} />
+                        <DataTableSkeleton columns={4} rows={3} />
                       ) : myRequests.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={5} className="py-6 text-center text-xs text-muted-foreground">
+                          <TableCell colSpan={4} className="py-6 text-center text-xs text-muted-foreground">
                             You have not submitted any internal tickets yet.
                           </TableCell>
                         </TableRow>
@@ -816,20 +895,6 @@ export default function EmployeeDashboard() {
                             </TableCell>
                             <TableCell>
                               <Badge variant={getStatusBadgeVariant(t.status)}>{t.status}</Badge>
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openRequestorModal(t);
-                                }}
-                                className="text-xs text-primary hover:text-primary gap-1"
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                                View
-                              </Button>
                             </TableCell>
                           </TableRow>
                         ))

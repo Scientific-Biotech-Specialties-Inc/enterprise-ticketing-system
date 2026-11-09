@@ -128,6 +128,19 @@ export default function EmployeeAssigned() {
 
   const pendingCount = totalIncomingCount;
 
+  // Needs Attention counts
+  const escalatedCount = useMemo(() => {
+    return tickets.filter((t) => !t.rejected && !CLOSED_STATUSES.includes(t.status) && (t.status === 'Escalated' || t.escalated)).length;
+  }, [tickets]);
+
+  const reassignmentFailedCount = useMemo(() => {
+    return tickets.filter((t) => !t.rejected && !CLOSED_STATUSES.includes(t.status) && (isReassignmentDenied(t) || t.status === 'Reassignment Failed' || t.status === 'Reassignment Disapproved')).length;
+  }, [tickets]);
+
+  const onHoldCount = useMemo(() => {
+    return tickets.filter((t) => !t.rejected && !CLOSED_STATUSES.includes(t.status) && (t.status === 'On Hold' || t.status === 'On hold')).length;
+  }, [tickets]);
+
   // Modal state — which modal to show
   const [pendingTicket, setPendingTicket] = useState(null);   // not-yet-accepted → TicketDetailModal
   const [infoTicket, setInfoTicket] = useState(null);         // accepted & active → TicketInfoModal
@@ -235,17 +248,23 @@ export default function EmployeeAssigned() {
       if (t.accepted && !t.proofRejected) return false;
 
       // Tab filtering
-      if (incomingTab === 'incoming') {
-        if (hasPendingReassignment(t)) return false;
-      } else if (incomingTab === 'pending_reassignment') {
-        if (!hasPendingReassignment(t)) return false;
+      if (statusFilter === 'All Status') {
+        if (incomingTab === 'incoming') {
+          if (hasPendingReassignment(t)) return false;
+        } else if (incomingTab === 'pending_reassignment') {
+          if (!hasPendingReassignment(t)) return false;
+        }
       }
 
       if (statusFilter !== 'All Status') {
         if (statusFilter === 'Pending Reassignment' || statusFilter === 'Pending Reassign') {
           if (!hasPendingReassignment(t)) return false;
         } else if (statusFilter === 'Reassignment Failed' || statusFilter === 'Reassignment Disapproved') {
-          if (!isReassignmentDenied(t)) return false;
+          if (!isReassignmentDenied(t) && t.status !== 'Reassignment Failed' && t.status !== 'Reassignment Disapproved') return false;
+        } else if (statusFilter === 'Escalated') {
+          if (t.status !== 'Escalated' && !t.escalated) return false;
+        } else if (statusFilter === 'On Hold' || statusFilter === 'On hold') {
+          if (t.status !== 'On Hold' && t.status !== 'On hold') return false;
         } else if (t.status !== statusFilter) {
           return false;
         }
@@ -449,7 +468,10 @@ export default function EmployeeAssigned() {
       <div className="flex border-b border-gray-200 gap-1 sm:gap-2">
         <button
           type="button"
-          onClick={() => setIncomingTab('incoming')}
+          onClick={() => {
+            setIncomingTab('incoming');
+            setStatusFilter('All Status');
+          }}
           className={`pb-3 px-3 sm:px-4 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
             incomingTab === 'incoming'
               ? 'border-brand-primary text-brand-primary'
@@ -465,7 +487,10 @@ export default function EmployeeAssigned() {
         </button>
         <button
           type="button"
-          onClick={() => setIncomingTab('pending_reassignment')}
+          onClick={() => {
+            setIncomingTab('pending_reassignment');
+            setStatusFilter('All Status');
+          }}
           className={`pb-3 px-3 sm:px-4 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
             incomingTab === 'pending_reassignment'
               ? 'border-amber-500 text-amber-700'
@@ -481,7 +506,10 @@ export default function EmployeeAssigned() {
         </button>
         <button
           type="button"
-          onClick={() => setIncomingTab('all')}
+          onClick={() => {
+            setIncomingTab('all');
+            setStatusFilter('All Status');
+          }}
           className={`pb-3 px-3 sm:px-4 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
             incomingTab === 'all'
               ? 'border-brand-primary text-brand-primary'
@@ -497,31 +525,23 @@ export default function EmployeeAssigned() {
         </button>
       </div>
 
-      <div className="w-full space-y-3 shrink-0">
-        <div className="relative w-full">
+      {/* Filter toolbar: Search bar in the same row as dropdown filters */}
+      <div className="flex flex-col md:flex-row items-center gap-2.5 w-full shrink-0">
+        <div className="relative flex-1 w-full min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-slate" />
           <input
             type="search"
             placeholder="Search ID, title, customer..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-xl border border-gray-200 bg-surface pl-9 pr-4 py-2.5 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent placeholder:text-muted-slate/60"
+            className="w-full rounded-xl border border-gray-200 bg-surface pl-9 pr-4 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent placeholder:text-muted-slate/60 h-10"
           />
         </div>
-        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full">
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
-          >
-            {['All Status', 'Open', 'In Progress', 'Pending Reassignment', 'Reassignment Failed', 'Escalated', 'Pending', 'On Hold'].map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
+        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full md:w-auto shrink-0">
           <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
-            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+            className="h-10 flex-1 sm:flex-initial min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
           >
             {[
               'All Category',
@@ -538,13 +558,70 @@ export default function EmployeeAssigned() {
           <select
             value={priorityFilter}
             onChange={(e) => setPriorityFilter(e.target.value)}
-            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+            className="h-10 flex-1 sm:flex-initial min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
           >
             {['All Priority', 'Critical', 'High', 'Medium', 'Low'].map((p) => (
               <option key={p} value={p}>{p}</option>
             ))}
           </select>
         </div>
+      </div>
+
+      {/* Needs Attention Filter Pills */}
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider shrink-0">
+          NEEDS ATTENTION
+        </span>
+        <button
+          type="button"
+          onClick={() => setStatusFilter((prev) => (prev === 'Escalated' ? 'All Status' : 'Escalated'))}
+          className={`inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full text-xs font-semibold border transition-colors cursor-pointer ${
+            statusFilter === 'Escalated'
+              ? 'border-brand-primary bg-brand-primary/10 text-brand-primary shadow-xs'
+              : 'border-gray-200 bg-surface text-dark-slate hover:border-gray-300 hover:bg-page'
+          }`}
+        >
+          <span>Escalated</span>
+          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+            statusFilter === 'Escalated' ? 'bg-brand-primary text-white' : 'bg-gray-100 text-gray-600'
+          }`}>
+            {escalatedCount}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setStatusFilter((prev) => (prev === 'Reassignment Failed' ? 'All Status' : 'Reassignment Failed'))}
+          className={`inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full text-xs font-semibold border transition-colors cursor-pointer ${
+            statusFilter === 'Reassignment Failed'
+              ? 'border-brand-primary bg-brand-primary/10 text-brand-primary shadow-xs'
+              : 'border-gray-200 bg-surface text-dark-slate hover:border-gray-300 hover:bg-page'
+          }`}
+        >
+          <span>Reassignment failed</span>
+          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+            statusFilter === 'Reassignment Failed' ? 'bg-brand-primary text-white' : 'bg-gray-100 text-gray-600'
+          }`}>
+            {reassignmentFailedCount}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setStatusFilter((prev) => (prev === 'On Hold' ? 'All Status' : 'On Hold'))}
+          className={`inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full text-xs font-semibold border transition-colors cursor-pointer ${
+            statusFilter === 'On Hold'
+              ? 'border-brand-primary bg-brand-primary/10 text-brand-primary shadow-xs'
+              : 'border-gray-200 bg-surface text-dark-slate hover:border-gray-300 hover:bg-page'
+          }`}
+        >
+          <span>On hold</span>
+          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+            statusFilter === 'On Hold' ? 'bg-brand-primary text-white' : 'bg-gray-100 text-gray-600'
+          }`}>
+            {onHoldCount}
+          </span>
+        </button>
       </div>
 
       <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-surface shadow-xs">

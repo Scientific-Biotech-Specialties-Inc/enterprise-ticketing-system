@@ -213,6 +213,14 @@ export default function TicketModal({
     if (path.startsWith('/service-manager')) return '/service-manager/my-tickets';
     if (path.startsWith('/it-manager')) return '/it-manager/my-tickets';
     if (path.startsWith('/employee')) return '/employee/my-tickets';
+
+    const role = String(user?.role || user?.role_name || '').toLowerCase();
+    if (role === 'cs_manager') return '/cs-manager/my-tickets';
+    if (role === 'cs') return '/cs/my-tickets';
+    if (role === 'service_manager') return '/service-manager/my-tickets';
+    if (role === 'it_manager') return '/it-manager/my-tickets';
+    if (role === 'employee' || role === 'general_employee' || role === 'staff') return '/employee/my-tickets';
+
     return '/my-tickets';
   };
 

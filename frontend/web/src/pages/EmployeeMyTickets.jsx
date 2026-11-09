@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { Filter, Plus, Search, Eye, Inbox, AlertTriangle, FileText, Edit3, Trash2, AlertCircle } from 'lucide-react';
+import { Filter, Plus, Search, Inbox, AlertTriangle, FileText, Edit3, Trash2, AlertCircle } from 'lucide-react';
 import TicketModal from '@/components/TicketModal';
 import { AssignModal } from '@/components/CSModals';
 import { useAuth } from '@/context/AuthContext';
@@ -157,6 +157,7 @@ export default function EmployeeMyTickets({ roleContext }) {
   const [filters, setFilters] = useState({
     status: '',
     category: '',
+    priority: '',
     dateFrom: '',
     dateTo: '',
     search: '',
@@ -288,12 +289,29 @@ export default function EmployeeMyTickets({ roleContext }) {
       if (isHistory && !HISTORY_STATUSES.includes(ticket.status)) return false;
       if (filters.status && normalizedStatus !== filters.status) return false;
       if (filters.category && ticket.category !== filters.category) return false;
-      if (filters.dateFrom && new Date(ticket.date_created) < new Date(filters.dateFrom)) return false;
-      if (filters.dateTo && new Date(ticket.date_created) > new Date(`${filters.dateTo}T23:59:59`)) return false;
+      if (filters.priority) {
+        const ticketPriority = (typeof ticket.priority === 'object' ? ticket.priority?.priority_name : ticket.priority) || ticket.priority_name || '';
+        if (String(ticketPriority).toLowerCase() !== filters.priority.toLowerCase()) return false;
+      }
+      if (filters.dateFrom) {
+        const ticketDateStr = ticket.date_created || ticket.created_at || ticket.date;
+        if (ticketDateStr) {
+          const d = new Date(ticketDateStr);
+          const start = new Date(`${filters.dateFrom}T00:00:00`);
+          const end = new Date(`${filters.dateFrom}T23:59:59.999`);
+          if (d < start || d > end) return false;
+        }
+      } else if (filters.dateTo) {
+        if (new Date(ticket.date_created) > new Date(`${filters.dateTo}T23:59:59`)) return false;
+      }
 
       const search = filters.search.trim().toLowerCase();
       if (!search) return true;
-      return ticket.id.toLowerCase().includes(search) || ticket.title.toLowerCase().includes(search);
+      return (
+        ticket.id?.toLowerCase().includes(search) ||
+        ticket.title?.toLowerCase().includes(search) ||
+        ticket.description?.toLowerCase().includes(search)
+      );
     });
   }, [filters, isHistory, tickets]);
 
@@ -593,22 +611,23 @@ export default function EmployeeMyTickets({ roleContext }) {
 
       {activeTab !== 'drafts' ? (
         <>
-          <div className="w-full space-y-3 shrink-0">
-            <div className="relative w-full">
+          {/* Filter toolbar: Search bar in the same row as dropdown filters */}
+          <div className="flex flex-col lg:flex-row items-center gap-2.5 w-full shrink-0">
+            <div className="relative flex-1 w-full min-w-[200px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-slate" />
               <input
-                type="text"
-                placeholder="Search ID or title..."
+                type="search"
+                placeholder="Search ID, title, or description..."
                 value={filters.search}
                 onChange={(event) => updateFilter('search', event.target.value)}
-                className="w-full rounded-xl border border-gray-200 bg-surface pl-9 pr-4 py-2.5 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent placeholder:text-muted-slate/60"
+                className="w-full rounded-xl border border-gray-200 bg-surface pl-9 pr-4 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent placeholder:text-muted-slate/60 h-10"
               />
             </div>
-            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full">
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full lg:w-auto shrink-0">
               <select
                 value={filters.status}
                 onChange={(event) => updateFilter('status', event.target.value)}
-                className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+                className="h-10 flex-1 sm:flex-initial min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
               >
                 <option value="">All statuses</option>
                 {(roleContext === 'cs' ? STATUSES.filter(s => s !== 'Pending Assignment') : STATUSES).map((status) => (
@@ -618,22 +637,45 @@ export default function EmployeeMyTickets({ roleContext }) {
               <select
                 value={filters.category}
                 onChange={(event) => updateFilter('category', event.target.value)}
-                className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+                className="h-10 flex-1 sm:flex-initial min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
               >
                 <option value="">All categories</option>
                 {categories.map((category) => (
                   <option key={category} value={category}>{category}</option>
                 ))}
               </select>
-              <input
-                type="date"
-                value={filters.dateFrom}
-                onChange={(event) => {
-                  const v = event.target.value;
-                  setFilters((c) => ({ ...c, dateFrom: v, dateTo: v }));
-                }}
-                className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
-              />
+              <select
+                value={filters.priority}
+                onChange={(event) => updateFilter('priority', event.target.value)}
+                className="h-10 flex-1 sm:flex-initial min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
+              >
+                <option value="">All priorities</option>
+                {['Low', 'Medium', 'High', 'Critical'].map((priority) => (
+                  <option key={priority} value={priority}>{priority}</option>
+                ))}
+              </select>
+              <div className="relative flex-1 sm:flex-initial">
+                <input
+                  type="date"
+                  aria-label="Filter by date"
+                  value={filters.dateFrom}
+                  onChange={(event) => {
+                    const v = event.target.value;
+                    setFilters((c) => ({ ...c, dateFrom: v, dateTo: v }));
+                  }}
+                  className="h-10 w-full sm:w-auto min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
+                />
+                {filters.dateFrom && (
+                  <button
+                    type="button"
+                    onClick={() => setFilters((c) => ({ ...c, dateFrom: '', dateTo: '' }))}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs px-1 font-bold cursor-pointer"
+                    title="Clear date"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
@@ -649,23 +691,26 @@ export default function EmployeeMyTickets({ roleContext }) {
                   <TableHead className="w-[140px]">Status</TableHead>
                   <TableHead className="w-[140px]">Date Created</TableHead>
                   <TableHead className="w-[140px]">Last Updated</TableHead>
-                  <TableHead className="w-[100px] text-center">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {visibleTickets.length === 0 && loading && (
-                  <DataTableSkeleton columns={7} rows={4} />
+                  <DataTableSkeleton columns={6} rows={4} />
                 )}
                 {visibleTickets.length === 0 && !loading && (
                   <DataTableEmptyState
-                    colSpan={7}
+                    colSpan={6}
                     icon={Inbox}
                     title="No tickets found"
                     description="No tickets match the current filters."
                   />
                 )}
                 {visibleTickets.map((ticket) => (
-                  <TableRow key={ticket.id}>
+                  <TableRow
+                    key={ticket.id}
+                    onClick={() => handleViewTicket(ticket)}
+                    className="cursor-pointer hover:bg-muted/50 transition-colors"
+                  >
                     <TableCell className="font-semibold text-brand-primary whitespace-nowrap">
                       {ticket.id}
                     </TableCell>
@@ -701,16 +746,6 @@ export default function EmployeeMyTickets({ roleContext }) {
                     <TableCell className="text-muted-slate text-xs whitespace-nowrap">
                       {formatDate(ticket.last_updated)}
                     </TableCell>
-                    <TableCell className="text-center">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleViewTicket(ticket)}
-                        icon={<Eye className="h-3.5 w-3.5" />}
-                      >
-                        View
-                      </Button>
-                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -734,17 +769,6 @@ export default function EmployeeMyTickets({ roleContext }) {
               }`}>
                 {drafts.length} / 10 Drafts
               </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setEditingDraft(null);
-                  setIsModalOpen(true);
-                }}
-                disabled={drafts.length >= 10}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#252578] hover:bg-[#1f1f66] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition cursor-pointer"
-              >
-                + New Ticket
-              </button>
             </div>
           </div>
 
@@ -791,7 +815,11 @@ export default function EmployeeMyTickets({ roleContext }) {
                   />
                 )}
                 {drafts.map((draft) => (
-                  <TableRow key={draft.id}>
+                  <TableRow
+                    key={draft.id}
+                    onClick={() => handleEditDraft(draft)}
+                    className="cursor-pointer hover:bg-muted/50 transition-colors"
+                  >
                     <TableCell className="max-w-[280px]">
                       <div className="truncate font-semibold text-dark-slate" title={draft.title}>
                         {draft.title || 'Untitled Draft'}

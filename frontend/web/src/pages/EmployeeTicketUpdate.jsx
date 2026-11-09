@@ -1037,7 +1037,7 @@ export default function EmployeeTicketUpdate() {
                               {senderName}
                             </span>
                             {isPriorEmp ? (
-                              <span className="px-2 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 rounded-md border border-amber-300">
+                              <span className="px-2 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-950 rounded-md border border-amber-300">
                                 {senderName} (previous Assigned Employee)
                               </span>
                             ) : (

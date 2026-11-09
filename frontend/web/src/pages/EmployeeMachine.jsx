@@ -175,6 +175,27 @@ export default function EmployeeMachine() {
     return tickets.filter((t) => t.accepted && !CLOSED_STATUSES.includes(t.status)).length;
   }, [tickets]);
 
+  // Needs Attention counts
+  const pendingAttentionCount = useMemo(() => {
+    return tickets.filter((t) => t.accepted && (t.status === 'Pending' || t.status === 'pending')).length;
+  }, [tickets]);
+
+  const pendingReassignmentAttentionCount = useMemo(() => {
+    return tickets.filter((t) => t.accepted && (hasPendingReassignment(t) || t.status === 'Pending Reassignment' || t.status === 'Pending Reassign')).length;
+  }, [tickets]);
+
+  const resolvedAttentionCount = useMemo(() => {
+    return tickets.filter((t) => t.accepted && (t.status === 'Resolved' || t.status === 'resolved')).length;
+  }, [tickets]);
+
+  const closedAttentionCount = useMemo(() => {
+    return tickets.filter((t) => t.accepted && (t.status === 'Closed' || t.status === 'closed')).length;
+  }, [tickets]);
+
+  const reopenedAttentionCount = useMemo(() => {
+    return tickets.filter((t) => t.accepted && (t.status === 'Reopened' || t.status === 'reopened')).length;
+  }, [tickets]);
+
   // Modal states
   const [infoTicket, setInfoTicket] = useState(null);
   const [reassignTicket, setReassignTicket] = useState(null);
@@ -255,22 +276,34 @@ export default function EmployeeMachine() {
     const q = search.trim().toLowerCase();
     let list = tickets.filter((t) => {
       if (!t.accepted) return false;
-      if (CLOSED_STATUSES.includes(t.status)) return false;
 
-      // Tab filtering
-      if (assignedTab === 'in_progress') {
-        if (isPendingEvaluationTicket(t)) return false;
-      } else if (assignedTab === 'pending_evaluation') {
-        if (!isPendingEvaluationTicket(t)) return false;
-      }
-
+      // Status filtering (Needs Attention pills)
       if (statusFilter !== 'All Status') {
         if (statusFilter === 'Pending Reassignment' || statusFilter === 'Pending Reassign') {
-          if (!hasPendingReassignment(t)) return false;
+          if (!hasPendingReassignment(t) && t.status !== 'Pending Reassignment' && t.status !== 'Pending Reassign') return false;
+        } else if (statusFilter === 'Pending') {
+          if (t.status !== 'Pending' && t.status !== 'pending') return false;
+        } else if (statusFilter === 'Resolved') {
+          if (t.status !== 'Resolved' && t.status !== 'resolved') return false;
+        } else if (statusFilter === 'Closed') {
+          if (t.status !== 'Closed' && t.status !== 'closed') return false;
+        } else if (statusFilter === 'Reopened') {
+          if (t.status !== 'Reopened' && t.status !== 'reopened') return false;
         } else if (statusFilter === 'Pending Evaluation') {
           if (!isPendingEvaluationTicket(t)) return false;
         } else if (t.status !== statusFilter) {
           return false;
+        }
+      } else {
+        if (CLOSED_STATUSES.includes(t.status)) return false;
+      }
+
+      // Tab filtering (applied when not overriding with a specific attention status pill)
+      if (statusFilter === 'All Status') {
+        if (assignedTab === 'in_progress') {
+          if (isPendingEvaluationTicket(t)) return false;
+        } else if (assignedTab === 'pending_evaluation') {
+          if (!isPendingEvaluationTicket(t)) return false;
         }
       }
 
@@ -381,7 +414,10 @@ export default function EmployeeMachine() {
       <div className="flex border-b border-border gap-2">
         <button
           type="button"
-          onClick={() => setAssignedTab('in_progress')}
+          onClick={() => {
+            setAssignedTab('in_progress');
+            setStatusFilter('All Status');
+          }}
           className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
             assignedTab === 'in_progress'
               ? 'border-primary text-primary'
@@ -397,7 +433,10 @@ export default function EmployeeMachine() {
         </button>
         <button
           type="button"
-          onClick={() => setAssignedTab('pending_evaluation')}
+          onClick={() => {
+            setAssignedTab('pending_evaluation');
+            setStatusFilter('All Status');
+          }}
           className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
             assignedTab === 'pending_evaluation'
               ? 'border-accent text-accent'
@@ -413,7 +452,10 @@ export default function EmployeeMachine() {
         </button>
         <button
           type="button"
-          onClick={() => setAssignedTab('all')}
+          onClick={() => {
+            setAssignedTab('all');
+            setStatusFilter('All Status');
+          }}
           className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
             assignedTab === 'all'
               ? 'border-primary text-primary'
@@ -429,37 +471,23 @@ export default function EmployeeMachine() {
         </button>
       </div>
 
-      {/* Filter toolbar */}
-      <div className="w-full space-y-3 shrink-0">
-        <div className="relative w-full">
+      {/* Filter toolbar: Search bar in the same row as dropdown filters */}
+      <div className="flex flex-col lg:flex-row items-center gap-2.5 w-full shrink-0">
+        <div className="relative flex-1 w-full min-w-[200px]">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-slate" />
           <input
             type="search"
             placeholder="Search ID, title, customer..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-xl border border-gray-200 bg-surface pl-10 pr-4 py-2.5 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent placeholder:text-muted-slate/60"
+            className="w-full rounded-xl border border-gray-200 bg-surface pl-10 pr-4 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent placeholder:text-muted-slate/60 h-10"
           />
         </div>
-        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full">
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
-          >
-            <option value="All Status">All Status</option>
-            <option value="In Progress">In Progress</option>
-            <option value="Pending">Pending</option>
-            <option value="Pending Evaluation">Pending Evaluation</option>
-            <option value="Pending Reassign">Pending Reassign</option>
-            <option value="Resolved">Resolved</option>
-            <option value="Closed">Closed</option>
-            <option value="Reopened">Reopened</option>
-          </select>
+        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full lg:w-auto shrink-0">
           <select
             value={slaFilter}
             onChange={(e) => setSlaFilter(e.target.value)}
-            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+            className="h-10 flex-1 sm:flex-initial min-w-[110px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
           >
             <option value="All SLA">All SLA</option>
             <option value="Breached">Breached</option>
@@ -470,7 +498,7 @@ export default function EmployeeMachine() {
           <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
-            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+            className="h-10 flex-1 sm:flex-initial min-w-[120px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
           >
             <option value="All Category">All Category</option>
             <option value="MRI">MRI</option>
@@ -478,11 +506,12 @@ export default function EmployeeMachine() {
             <option value="Ultrasound">Ultrasound</option>
             <option value="X-Ray">X-Ray</option>
             <option value="Ventilator">Ventilator</option>
+            <option value="Defibrillator">Defibrillator</option>
           </select>
           <select
             value={priorityFilter}
             onChange={(e) => setPriorityFilter(e.target.value)}
-            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+            className="h-10 flex-1 sm:flex-initial min-w-[110px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
           >
             <option value="All Priority">All Priority</option>
             <option value="Critical">Critical</option>
@@ -491,6 +520,97 @@ export default function EmployeeMachine() {
             <option value="Low">Low</option>
           </select>
         </div>
+      </div>
+
+      {/* Needs Attention Filter Pills */}
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider shrink-0">
+          NEEDS ATTENTION
+        </span>
+        <button
+          type="button"
+          onClick={() => setStatusFilter((prev) => (prev === 'Pending' ? 'All Status' : 'Pending'))}
+          className={`inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full text-xs font-semibold border transition-colors cursor-pointer ${
+            statusFilter === 'Pending'
+              ? 'border-brand-primary bg-brand-primary/10 text-brand-primary shadow-xs'
+              : 'border-gray-200 bg-surface text-dark-slate hover:border-gray-300 hover:bg-page'
+          }`}
+        >
+          <span>Pending</span>
+          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+            statusFilter === 'Pending' ? 'bg-brand-primary text-white' : 'bg-gray-100 text-gray-600'
+          }`}>
+            {pendingAttentionCount}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setStatusFilter((prev) => (prev === 'Pending Reassignment' ? 'All Status' : 'Pending Reassignment'))}
+          className={`inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full text-xs font-semibold border transition-colors cursor-pointer ${
+            statusFilter === 'Pending Reassignment'
+              ? 'border-brand-primary bg-brand-primary/10 text-brand-primary shadow-xs'
+              : 'border-gray-200 bg-surface text-dark-slate hover:border-gray-300 hover:bg-page'
+          }`}
+        >
+          <span>Pending reassignment</span>
+          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+            statusFilter === 'Pending Reassignment' ? 'bg-brand-primary text-white' : 'bg-gray-100 text-gray-600'
+          }`}>
+            {pendingReassignmentAttentionCount}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setStatusFilter((prev) => (prev === 'Resolved' ? 'All Status' : 'Resolved'))}
+          className={`inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full text-xs font-semibold border transition-colors cursor-pointer ${
+            statusFilter === 'Resolved'
+              ? 'border-brand-primary bg-brand-primary/10 text-brand-primary shadow-xs'
+              : 'border-gray-200 bg-surface text-dark-slate hover:border-gray-300 hover:bg-page'
+          }`}
+        >
+          <span>Resolved</span>
+          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+            statusFilter === 'Resolved' ? 'bg-brand-primary text-white' : 'bg-gray-100 text-gray-600'
+          }`}>
+            {resolvedAttentionCount}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setStatusFilter((prev) => (prev === 'Closed' ? 'All Status' : 'Closed'))}
+          className={`inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full text-xs font-semibold border transition-colors cursor-pointer ${
+            statusFilter === 'Closed'
+              ? 'border-brand-primary bg-brand-primary/10 text-brand-primary shadow-xs'
+              : 'border-gray-200 bg-surface text-dark-slate hover:border-gray-300 hover:bg-page'
+          }`}
+        >
+          <span>Closed</span>
+          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+            statusFilter === 'Closed' ? 'bg-brand-primary text-white' : 'bg-gray-100 text-gray-600'
+          }`}>
+            {closedAttentionCount}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setStatusFilter((prev) => (prev === 'Reopened' ? 'All Status' : 'Reopened'))}
+          className={`inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full text-xs font-semibold border transition-colors cursor-pointer ${
+            statusFilter === 'Reopened'
+              ? 'border-brand-primary bg-brand-primary/10 text-brand-primary shadow-xs'
+              : 'border-gray-200 bg-surface text-dark-slate hover:border-gray-300 hover:bg-page'
+          }`}
+        >
+          <span>Reopened</span>
+          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+            statusFilter === 'Reopened' ? 'bg-brand-primary text-white' : 'bg-gray-100 text-gray-600'
+          }`}>
+            {reopenedAttentionCount}
+          </span>
+        </button>
       </div>
 
       {/* Table Card */}
