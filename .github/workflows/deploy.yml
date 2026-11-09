@@ -157,6 +157,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Copy shared ticketing-auth package into build context
+        run: |
+          rm -rf "${{ matrix.context }}/packages/ticketing-auth"
+          mkdir -p "${{ matrix.context }}/packages"
+          cp -r ./packages/ticketing-auth "${{ matrix.context }}/packages/ticketing-auth"
+
       - name: Build and push ${{ matrix.name }}
         uses: docker/build-push-action@v5
         with:

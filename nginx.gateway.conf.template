@@ -1,0 +1,169 @@
+server {
+    listen 80;
+    server_name localhost ticketing-gateway;
+    client_max_body_size 30M;
+
+    resolver 127.0.0.11 valid=30s ipv6=off;
+
+    # Health check endpoint for Azure Container Apps / probes
+    location = /healthz {
+        access_log off;
+        return 200 "healthy\n";
+        add_header Content-Type text/plain;
+    }
+
+    # Employee Service API
+    location ~ ^/api/(?:ticketing/)?employee/(.*)$ {
+        rewrite ^/api/(?:ticketing/)?employee/(.*)$ /api/$1 break;
+        proxy_pass ${EMPLOYEE_SERVICE_URL};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Cookie $http_cookie;
+    }
+
+    # Ticket Service API
+    location ~ ^/api/(?:ticketing/)?ticket/(.*)$ {
+        rewrite ^/api/(?:ticketing/)?ticket/(.*)$ /api/$1 break;
+        proxy_pass ${TICKET_SERVICE_URL};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Cookie $http_cookie;
+    }
+
+    # Attachment Service API
+    location ~ ^/api/(?:ticketing/)?attachment/(.*)$ {
+        rewrite ^/api/(?:ticketing/)?attachment/(.*)$ /api/$1 break;
+        proxy_pass ${ATTACHMENT_SERVICE_URL};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Cookie $http_cookie;
+    }
+
+    # Messaging Service API
+    location ~ ^/api/(?:ticketing/)?messaging/(.*)$ {
+        rewrite ^/api/(?:ticketing/)?messaging/(.*)$ /api/$1 break;
+        proxy_pass ${MESSAGING_SERVICE_URL};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Cookie $http_cookie;
+    }
+
+    # Notification Service API
+    location ~ ^/api/(?:ticketing/)?notification/(.*)$ {
+        rewrite ^/api/(?:ticketing/)?notification/(.*)$ /api/$1 break;
+        proxy_pass ${NOTIFICATION_SERVICE_URL};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Cookie $http_cookie;
+    }
+
+    # Analytics Service API
+    location ~ ^/api/(?:ticketing/)?analytics/(.*)$ {
+        rewrite ^/api/(?:ticketing/)?analytics/(.*)$ /api/$1 break;
+        proxy_pass ${ANALYTICS_SERVICE_URL};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "close";
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Cookie $http_cookie;
+    }
+
+    # AI Service API
+    location ~ ^/api/(?:ticketing/)?ai/(.*)$ {
+        rewrite ^/api/(?:ticketing/)?ai/(.*)$ /api/$1 break;
+        proxy_pass ${AI_SERVICE_URL};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Cookie $http_cookie;
+    }
+
+    # File Storage for Attachments
+    location /storage/ {
+        proxy_pass ${ATTACHMENT_SERVICE_URL};
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Configuration Service API
+    location ~ ^/api/(?:api/)?(?:ticketing/)?configuration/(.*)$ {
+        rewrite ^/api/(?:api/)?(?:ticketing/)?configuration/(.*)$ /api/$1 break;
+        proxy_pass ${CONFIGURATION_SERVICE_URL};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Cookie $http_cookie;
+    }
+
+    # Customer Service API
+    location ~ ^/api/(?:ticketing/)?customer/(.*)$ {
+        rewrite ^/api/(?:ticketing/)?customer/(.*)$ /api/$1 break;
+        proxy_pass ${CUSTOMER_SERVICE_URL};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Cookie $http_cookie;
+    }
+}
+
