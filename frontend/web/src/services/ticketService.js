@@ -1263,13 +1263,8 @@ export const getWorklogs = async (params = {}) => {
 };
 
 export const saveWorkLog = async (payload) => {
-  try {
-    const response = await employeeClient.post('/employee/worklogs', payload);
-    return response.data;
-  } catch (err) {
-    const response = await employeeClient.post('/employee/worklogs', payload);
-    return response.data;
-  }
+  const response = await employeeClient.post('/employee/worklogs', payload);
+  return response.data;
 };
 
 export const getNotifications = async () => {

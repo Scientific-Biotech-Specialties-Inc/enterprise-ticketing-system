@@ -66,6 +66,7 @@ vi.mock('@/data/mockFeedbackData', () => ({
   deleteFeedback: vi.fn(() => Promise.resolve(true)),
   hasFeedbackBeenSubmitted: vi.fn(),
   fetchFeedbackForTicket: vi.fn(() => Promise.resolve(null)),
+  feedbackTicketId: vi.fn((ticket) => ticket?.ticket_ID ?? ticket?.id),
 }));
 
 describe('CS SLA Display and Employee Reminder Tests', () => {

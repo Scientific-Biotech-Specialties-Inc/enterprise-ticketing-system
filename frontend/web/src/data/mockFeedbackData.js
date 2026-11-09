@@ -222,8 +222,31 @@ export function hasFeedbackBeenSubmitted(ticketId) {
   return !!(feedback && feedback.submitted);
 }
 
+/**
+ * The id the backend understands for a ticket. The analytics service looks the ticket up by its
+ * numeric primary key, so the display number (e.g. "TKT-0012") must never be sent to it.
+ */
+export function feedbackTicketId(ticket) {
+  return ticket?.ticket_ID ?? ticket?.ticket_id ?? ticket?.id;
+}
+
+// Throws for an HTTP rejection so callers can show it. A network failure is not an HTTP error,
+// so the caller keeps the local copy for those.
+async function assertFeedbackResponse(res) {
+  if (res.ok) return;
+  let message = `Feedback request failed (${res.status}).`;
+  try {
+    const body = await res.json();
+    message = body?.message || message;
+  } catch {
+    // keep default message
+  }
+  const err = new Error(message);
+  err.isHttpError = true;
+  throw err;
+}
+
 export async function saveFeedback(ticketId, ratings, comments, overallComment, customerId = null, questionAnswers = {}, categoryQuestionsSnapshot = []) {
-  const all = getAllFeedback();
   const feedbackData = {
     ratings,
     comments: comments || {},
@@ -234,23 +257,26 @@ export async function saveFeedback(ticketId, ratings, comments, overallComment, 
     submitted: true,
   };
 
-  all[ticketId] = feedbackData;
-  all[String(ticketId)] = feedbackData;
-  const num = Number(String(ticketId).replace(/\D/g, ''));
-  if (num) {
-    all[num] = feedbackData;
-  }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
-
-  try {
-    window.dispatchEvent(new CustomEvent('customer_feedback_submitted', { detail: { ticketId } }));
-  } catch {
-    // ignore
-  }
+  const persistLocal = () => {
+    const all = getAllFeedback();
+    all[ticketId] = feedbackData;
+    all[String(ticketId)] = feedbackData;
+    const num = Number(String(ticketId).replace(/\D/g, ''));
+    if (num) {
+      all[num] = feedbackData;
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+    try {
+      window.dispatchEvent(new CustomEvent('customer_feedback_submitted', { detail: { ticketId } }));
+    } catch {
+      // ignore
+    }
+    return all[ticketId];
+  };
 
   // Send rating payload to legacy DB via analytics-service backend API
   if (!tokenStore.getToken()) {
-    return all[ticketId];
+    return persistLocal();
   }
 
   try {
@@ -270,18 +296,17 @@ export async function saveFeedback(ticketId, ratings, comments, overallComment, 
         category_questions_snapshot: categoryQuestionsSnapshot || [],
       }),
     });
-    const result = await res.json();
-    console.log('CSAT feedback posted to analytics-service:', result);
+    await assertFeedbackResponse(res);
   } catch (err) {
+    if (err?.isHttpError) throw err;
     console.warn('Analytics service offline. Feedback persisted locally:', err);
   }
 
-  return all[ticketId];
+  return persistLocal();
 }
 
 export async function updateFeedback(ticketId, ratings, comments, overallComment, customerId = null, questionAnswers = {}, categoryQuestionsSnapshot = []) {
-  const all = getAllFeedback();
-  const existing = all[ticketId] || all[String(ticketId)] || {};
+  const existing = getAllFeedback()[ticketId] || getAllFeedback()[String(ticketId)] || {};
   const feedbackData = {
     ...existing,
     ratings,
@@ -294,22 +319,25 @@ export async function updateFeedback(ticketId, ratings, comments, overallComment
     submitted: true,
   };
 
-  all[ticketId] = feedbackData;
-  all[String(ticketId)] = feedbackData;
-  const num = Number(String(ticketId).replace(/\D/g, ''));
-  if (num) {
-    all[num] = feedbackData;
-  }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
-
-  try {
-    window.dispatchEvent(new CustomEvent('customer_feedback_updated', { detail: { ticketId, feedback: feedbackData } }));
-  } catch {
-    // ignore
-  }
+  const persistLocal = () => {
+    const all = getAllFeedback();
+    all[ticketId] = feedbackData;
+    all[String(ticketId)] = feedbackData;
+    const num = Number(String(ticketId).replace(/\D/g, ''));
+    if (num) {
+      all[num] = feedbackData;
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+    try {
+      window.dispatchEvent(new CustomEvent('customer_feedback_updated', { detail: { ticketId, feedback: feedbackData } }));
+    } catch {
+      // ignore
+    }
+    return all[ticketId];
+  };
 
   if (!tokenStore.getToken()) {
-    return all[ticketId];
+    return persistLocal();
   }
 
   try {
@@ -328,13 +356,13 @@ export async function updateFeedback(ticketId, ratings, comments, overallComment
         category_questions_snapshot: categoryQuestionsSnapshot || existing.categoryQuestionsSnapshot || [],
       }),
     });
-    const result = await res.json();
-    console.log('CSAT feedback updated on analytics-service:', result);
+    await assertFeedbackResponse(res);
   } catch (err) {
+    if (err?.isHttpError) throw err;
     console.warn('Analytics service offline. Feedback update persisted locally:', err);
   }
 
-  return all[ticketId];
+  return persistLocal();
 }
 
 export async function deleteFeedback(ticketId) {
