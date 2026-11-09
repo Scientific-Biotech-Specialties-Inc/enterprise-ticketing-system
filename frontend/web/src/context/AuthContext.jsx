@@ -24,6 +24,16 @@ const AuthContext = createContext({
 const LOCKOUT_STORAGE_KEY = 'login_lockout_until';
 const MOCK_AUTH_ENABLED = import.meta.env.VITE_MOCK_AUTH === 'true';
 const MOCK_TOKEN = 'frontend-dev-token';
+const IS_CUSTOMER_SITE = import.meta.env.VITE_APP_MODE === 'customer';
+// Central auth-module route that ends the SSO session (clears the shared access_token cookie).
+const SSO_LOGOUT_URL = import.meta.env.VITE_SSO_LOGOUT_URL || '/logout';
+
+const clearLoggedOutFlags = () => {
+  try {
+    sessionStorage.removeItem('logged_out');
+    sessionStorage.removeItem('is_logged_out');
+  } catch {}
+};
 
 const getMockUser = (email = 'frontend@example.com', mode = 'customer') => {
   if (mode === 'employee') {
@@ -372,14 +382,17 @@ export function AuthProvider({ children }) {
       const stored = readStoredUser();
       const hasStaffSession = isStaffUser(stored);
       if (hasSsoAuth || hasStaffSession) {
-        sessionStorage.removeItem('is_logged_out');
-        sessionStorage.removeItem('logged_out');
+        clearLoggedOutFlags();
       }
     }
 
-    // Skip session revalidation on guest/login pages or if user explicitly logged out
+    // Skip session revalidation on guest/login pages or if user explicitly logged out.
+    // Employee portal: the central SSO cookie is the source of truth, so a stale logged-out flag
+    // from an earlier logout in this tab must not block a fresh central login. Probe /me instead;
+    // the flag is cleared once /me succeeds.
     if (
       typeof window !== 'undefined' &&
+      IS_CUSTOMER_SITE &&
       (sessionStorage.getItem('is_logged_out') === 'true' || sessionStorage.getItem('logged_out') === 'true')
     ) {
       applyUnauthenticated(setUser, setIsAuthenticated);
@@ -455,6 +468,7 @@ export function AuthProvider({ children }) {
         setUser(normalized);
         persistStoredUser(normalized);
       }
+      clearLoggedOutFlags();
       setIsAuthenticated(true);
       setIsFirstLogin(firstLogin);
       if (firstLogin) {
@@ -516,8 +530,10 @@ export function AuthProvider({ children }) {
   // For browser back and next
 
   useEffect(() => {
-    const onPageShow = () => {
-      revalidateSession();
+    // Only re-check on back/forward-cache restores; initAuth above already covers normal loads
+    // (re-running it here fired a second, racing /me request on every page load).
+    const onPageShow = (e) => {
+      if (e.persisted) revalidateSession();
     };
 
     window.addEventListener('pageshow', onPageShow);
@@ -771,7 +787,9 @@ export function AuthProvider({ children }) {
             targetUrl = '/';
           }
         } else {
-          targetUrl = '/';
+          // Staff sessions belong to the central SSO: end it there, otherwise the shared
+          // access_token cookie would silently sign the user straight back in.
+          targetUrl = SSO_LOGOUT_URL;
         }
         window.location.replace(targetUrl);
       }
@@ -855,7 +873,8 @@ export function AuthProvider({ children }) {
 
     const sendHeartbeat = async () => {
       try {
-        await axiosInstance.post('/heartbeat');
+        // Presence ping only: a failure must never tear down the session.
+        await axiosInstance.post('/heartbeat', {}, { skipAuthRedirect: true });
       } catch {
         // Silent failure for heartbeat presence ping
       }

@@ -100,23 +100,64 @@ class VerifyEmployeeJwt
             return base64_decode(strtr($input, '-_', '+/'));
         };
 
-        // 3. Verify RS256 signature using central public key
+        // 3. Verify RS256 signature using central public key or remote verification
         $data = "$headerB64.$payloadB64";
         $signature = $base64UrlDecode($sigB64);
 
+        $publicKey = null;
         $publicKeyPath = storage_path('auth-module-public.key');
-        if (!file_exists($publicKeyPath)) {
-            Log::error('VerifyEmployeeJwt: Public key file not found at ' . $publicKeyPath);
-            return response()->json(['message' => 'Internal server error: Public key missing'], 500);
+        if (file_exists($publicKeyPath)) {
+            $publicKey = file_get_contents($publicKeyPath);
+        } elseif (!empty(env('AUTH_PUBLIC_KEY'))) {
+            $rawKey = env('AUTH_PUBLIC_KEY');
+            if (str_starts_with(trim($rawKey), '-----BEGIN')) {
+                $publicKey = str_replace(['\r\n', '\n'], "\n", $rawKey);
+            } elseif (base64_decode($rawKey, true) !== false && str_contains(base64_decode($rawKey), '-----BEGIN')) {
+                $publicKey = base64_decode($rawKey);
+            } else {
+                $publicKey = $rawKey;
+            }
         }
 
-        $publicKey = file_get_contents($publicKeyPath);
-        $verified = openssl_verify($data, $signature, $publicKey, OPENSSL_ALGO_SHA256);
+        $verified = false;
+        if (!empty($publicKey)) {
+            $res = openssl_verify($data, $signature, $publicKey, OPENSSL_ALGO_SHA256);
+            if ($res === 1) {
+                $verified = true;
+            } else {
+                Log::warning('VerifyEmployeeJwt: Local signature verification status: ' . $res);
+            }
+        }
 
-        if ($verified !== 1) {
+        // If local public key verification was not successful, attempt remote verification via auth-service
+        $remotePayload = null;
+        if (!$verified) {
+            $authUrl = env('AUTH_SERVICE_URL', env('CUSTOMER_SERVICE_URL', 'http://auth-service:8000'));
+            $secret = env('INTERNAL_SERVICE_SECRET', env('INTERNAL_TOKEN', ''));
+            if (!empty($authUrl) && !empty($secret)) {
+                try {
+                    $client = \Illuminate\Support\Facades\Http::timeout(5)
+                        ->withHeaders([
+                            'X-Internal-Secret' => $secret,
+                            'Accept' => 'application/json',
+                        ]);
+                    $resp = $client->post("{$authUrl}/api/internal/verify-token", [
+                        'token' => $token,
+                    ]);
+                    if ($resp->successful() && $resp->json('valid') === true) {
+                        $remotePayload = $resp->json('user');
+                        $verified = true;
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning('VerifyEmployeeJwt: Remote verification failed', ['error' => $e->getMessage()]);
+                }
+            }
+        }
+
+        if (!$verified) {
             $errs = [];
             while ($msg = openssl_error_string()) { $errs[] = $msg; }
-            Log::warning('VerifyEmployeeJwt: Signature verification failed. Verification status: ' . $verified, [
+            Log::warning('VerifyEmployeeJwt: Signature verification failed (local and remote verify exhausted)', [
                 'token_sample' => substr($token, 0, 50) . '...' . substr($token, -30),
                 'payload_decoded' => $base64UrlDecode($payloadB64),
                 'openssl_errors' => $errs,
@@ -127,18 +168,29 @@ class VerifyEmployeeJwt
 
         // 4. Decode payload & verify expiry
         $payload = json_decode($base64UrlDecode($payloadB64), true);
+        if (!$payload && $remotePayload) {
+            $payload = $remotePayload;
+        }
         if (!$payload) {
             Log::info('VerifyEmployeeJwt: Failed to decode token payload JSON');
             return response()->json(['message' => 'Unauthorized: Invalid token payload'], 401);
         }
 
+        if ($remotePayload && is_array($remotePayload)) {
+            $payload = array_merge($remotePayload, $payload);
+        }
+
         if (!isset($payload['exp']) || time() >= $payload['exp']) {
-            Log::info('VerifyEmployeeJwt: Token expired. Expiry: ' . ($payload['exp'] ?? 'unset') . ', Current: ' . time());
-            return response()->json(['message' => 'Unauthorized: Token expired'], 401);
+            if (!isset($payload['exp']) && $remotePayload) {
+                $payload['exp'] = time() + 7200;
+            } else {
+                Log::info('VerifyEmployeeJwt: Token expired. Expiry: ' . ($payload['exp'] ?? 'unset') . ', Current: ' . time());
+                return response()->json(['message' => 'Unauthorized: Token expired'], 401);
+            }
         }
 
         // 5. Verify Redis blacklist status
-        $jti = $payload['jti'] ?? null;
+        $jti = $payload['jti'] ?? ($remotePayload ? 'central-' . ($payload['id'] ?? md5($token)) : null);
         if (!$jti) {
             Log::info('VerifyEmployeeJwt: Missing token ID (jti)');
             return response()->json(['message' => 'Unauthorized: Missing token ID (jti)'], 401);
@@ -218,12 +270,33 @@ class VerifyEmployeeJwt
             ? \App\Models\Employee::where('email', $email)->first()
             : null;
 
-        if (!$existingEmployee && !$isAdminOrSuperAdmin && empty($payloadBranch) && empty($payloadBranchId)) {
-            Log::warning('VerifyEmployeeJwt: Branch required for new operational account', ['email' => $email, 'role' => $mappedRole]);
-            return response()->json([
-                'message' => 'Unprocessable Entity: Branch assignment is required for new operational accounts.',
-                'error_code' => 'BRANCH_REQUIRED_FOR_NEW_ACCOUNT'
-            ], 422);
+        if (empty($payloadBranch) && empty($payloadBranchId)) {
+            if ($existingEmployee && (!empty($existingEmployee->branch) || !empty($existingEmployee->branch_id))) {
+                $payloadBranch = $existingEmployee->branch ?: 'Main Branch';
+                $payloadBranchId = $existingEmployee->branch_id ?: 1;
+            } else {
+                $defaultBranchName = 'Main Branch';
+                $defaultBranchId = 1;
+                if (class_exists('App\Models\Branch')) {
+                    try {
+                        $activeBranch = \App\Models\Branch::where('is_active', true)->orderBy('id')->first();
+                        if ($activeBranch) {
+                            $defaultBranchName = $activeBranch->name ?: 'Main Branch';
+                            $defaultBranchId = (int) $activeBranch->id;
+                        }
+                    } catch (\Throwable $e) {
+                        // ignore and use fallback
+                    }
+                }
+                $payloadBranch = $defaultBranchName;
+                $payloadBranchId = $defaultBranchId;
+                Log::info('VerifyEmployeeJwt: Defaulted branch assignment for operational account', [
+                    'email' => $email,
+                    'role' => $mappedRole,
+                    'branch' => $payloadBranch,
+                    'branch_id' => $payloadBranchId,
+                ]);
+            }
         }
 
         $resolvedFirstName = trim((string) ($payload['first_name'] ?? ''));
@@ -306,11 +379,19 @@ class VerifyEmployeeJwt
                 $employee = \App\Models\Employee::where('email', $email)->first();
                 if ($employee) {
                     $updated = false;
-                    if (!empty($claims['branch']) && $employee->branch !== $claims['branch']) {
+                    if (!empty($claims['role']) && $employee->role !== $claims['role']) {
+                        $employee->role = $claims['role'];
+                        $updated = true;
+                    }
+                    if (!empty($claims['department']) && $employee->department !== $claims['department']) {
+                        $employee->department = $claims['department'];
+                        $updated = true;
+                    }
+                    if (!empty($claims['branch']) && (empty($employee->branch) || $employee->branch !== $claims['branch'])) {
                         $employee->branch = $claims['branch'];
                         $updated = true;
                     }
-                    if (!empty($claims['branch_id']) && (int)$employee->branch_id !== (int)$claims['branch_id']) {
+                    if (!empty($claims['branch_id']) && (empty($employee->branch_id) || (int)$employee->branch_id !== (int)$claims['branch_id'])) {
                         $employee->branch_id = (int)$claims['branch_id'];
                         $updated = true;
                     }

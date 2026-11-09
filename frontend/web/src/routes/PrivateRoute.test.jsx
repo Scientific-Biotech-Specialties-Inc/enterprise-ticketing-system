@@ -46,6 +46,39 @@ describe('PrivateRoute authorization guard (AC-1, AC-8, AC-12, AC-15, AC-20)', (
     expect(skeletons.length).toBeGreaterThan(0);
   });
 
+  it('does not bounce an SSO user to the portal on the initial pageshow while the session is still loading', () => {
+    authContextModule.useAuth.mockReturnValue({
+      isLoading: true,
+      isAuthenticated: false,
+      user: null,
+    });
+    const replaceSpy = vi.fn();
+    const originalLocation = window.location;
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...originalLocation, replace: replaceSpy, reload: vi.fn() },
+    });
+
+    try {
+      render(
+        <MemoryRouter initialEntries={['/employee/dashboard']}>
+          <PrivateRoute>
+            <div data-testid="dashboard-content">Dashboard</div>
+          </PrivateRoute>
+        </MemoryRouter>
+      );
+
+      // A normal page load fires pageshow with persisted=false and no in-memory token yet.
+      const evt = new Event('pageshow');
+      Object.defineProperty(evt, 'persisted', { value: false });
+      window.dispatchEvent(evt);
+
+      expect(replaceSpy).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
+    }
+  });
+
   it('redirects unauthenticated users away from restricted routes (covers: AC-1, AC-15)', () => {
     authContextModule.useAuth.mockReturnValue({
       isLoading: false,
