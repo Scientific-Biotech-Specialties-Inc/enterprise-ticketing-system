@@ -42,5 +42,6 @@ RUN mkdir -p /usr/share/nginx/html${VITE_BASE_PATH} && \
 COPY nginx.template.conf /etc/nginx/templates/default.conf.template
 ENV NGINX_PORT=5005
 ENV GATEWAY_HOST=ticketing-gateway
+ENV GATEWAY_URL=http://ticketing-gateway:80
 EXPOSE 5005
 CMD ["nginx", "-g", "daemon off;"]
