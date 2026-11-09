@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Inbox, Clock, CheckCircle2, Archive, Bot, Eye, ArrowRight, MessageCircle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Inbox, Clock, CheckCircle2, Archive, Bot, ArrowRight, MessageCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import TicketModal from '@/components/TicketModal';
 import CustomerTicketDetailModal from '@/components/CustomerTicketDetailModal';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
@@ -456,11 +456,10 @@ export default function CustomerDashboard() {
                 <TableHead className="w-32">Ticket ID</TableHead>
                 <TableHead>Title & Equipment</TableHead>
                 <TableHead className="w-36">Status</TableHead>
-                <TableHead className="w-20 text-center">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              <DataTableSkeleton columns={4} rows={4} />
+              <DataTableSkeleton columns={3} rows={4} />
             </TableBody>
           </Table>
         ) : recentTickets.length === 0 ? (
@@ -475,12 +474,15 @@ export default function CustomerDashboard() {
                   <TableHead className="w-32">Ticket ID</TableHead>
                   <TableHead>Title & Equipment</TableHead>
                   <TableHead className="w-36">Status</TableHead>
-                  <TableHead className="w-20 text-center">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {paginatedTickets.map((t) => (
-                  <TableRow key={t.id || t.ticket_ID}>
+                  <TableRow
+                    key={t.id || t.ticket_ID}
+                    onClick={() => handleViewTicket(t)}
+                    className="cursor-pointer hover:bg-slate-50/80 transition-colors duration-150"
+                  >
                     <TableCell className="font-semibold text-primary text-xs">
                       {t.id || t.ticket_ID}
                     </TableCell>
@@ -498,19 +500,6 @@ export default function CustomerDashboard() {
                       <Badge variant={getStatusBadgeVariant(t.status)}>
                         {t.status}
                       </Badge>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <div className="inline-flex items-center justify-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => handleViewTicket(t)}
-                          aria-label={`View ticket ${t.id}`}
-                          title="View ticket details"
-                          className="p-1.5 rounded-lg text-muted-slate hover:text-accent hover:bg-slate-100 transition-colors cursor-pointer"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </button>
-                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

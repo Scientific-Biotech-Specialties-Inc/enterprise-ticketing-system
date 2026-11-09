@@ -14,18 +14,13 @@ export default function CustomerLayout() {
 
   useEffect(() => {
     const handlePageShow = (e) => {
-      const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('is_logged_out') === 'true';
-      if (e.persisted || !tokenStore.getToken() || !isAuthenticated || isLoggedOut) {
-        if (!tokenStore.getToken() || !isAuthenticated || isLoggedOut) {
-          const isCustomerSite = import.meta.env.VITE_APP_MODE === 'customer';
-          const landingUrl = isCustomerSite ? (import.meta.env.BASE_URL || '/') : '/';
-          window.location.replace(landingUrl);
-        }
+      if (e.persisted) {
+        window.location.reload();
       }
     };
     window.addEventListener('pageshow', handlePageShow);
     return () => window.removeEventListener('pageshow', handlePageShow);
-  }, [isAuthenticated]);
+  }, []);
 
   const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('is_logged_out') === 'true';
   if ((!isLoading && !isAuthenticated) || isLoggedOut) {

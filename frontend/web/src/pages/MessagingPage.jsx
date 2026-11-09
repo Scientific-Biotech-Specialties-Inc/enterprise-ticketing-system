@@ -1147,11 +1147,11 @@ export default function MessagingPage() {
 
               {/* Archive Banner Notice */}
               {selectedContact.isArchived && (
-                <div className="bg-amber-50/90 border-b border-amber-200 px-6 py-3 flex items-center justify-between gap-4 select-none animate-in fade-in duration-200">
-                  <div className="flex items-center gap-2 text-xs text-amber-900 font-medium">
-                    <Archive size={16} className="text-amber-600 shrink-0" />
+                <div className="bg-amber-50 border-b border-amber-300 px-6 py-3 flex items-center justify-between gap-4 select-none animate-in fade-in duration-200">
+                  <div className="flex items-center gap-2 text-xs text-amber-950 font-semibold">
+                    <Archive size={16} className="text-amber-800 shrink-0" />
                     <span>
-                      <strong>Archived Conversation:</strong> This ticket is Closed. The message thread is locked and read-only.
+                      <strong className="text-amber-950 font-bold">Archived Conversation:</strong> This ticket is Closed. The message thread is locked and read-only.
                     </span>
                   </div>
                 </div>
@@ -1491,16 +1491,16 @@ export default function MessagingPage() {
 
               {/* Input / Closed & Archived Banner */}
               {selectedContact.isArchived ? (
-                <div className="flex items-center justify-center gap-2 px-6 py-5 border-t border-gray-100 bg-amber-50/50 flex-shrink-0">
-                  <AlertCircle className="text-amber-600 shrink-0" size={18} />
-                  <p className="text-xs text-amber-900 font-medium">
+                <div className="flex items-center justify-center gap-2 px-6 py-4 border-t border-amber-300 bg-amber-50 flex-shrink-0">
+                  <AlertCircle className="text-amber-800 shrink-0" size={18} />
+                  <p className="text-xs text-amber-950 font-semibold">
                     This conversation is archived because the ticket is Closed. The message thread is locked and read-only.
                   </p>
                 </div>
               ) : isCS && !selectedContact.is_internal && selectedContact.type !== 'internal' && Number(selectedContact.requested_by) === Number(user?.emp_id ?? user?.id) ? (
-                <div className="flex items-center justify-center gap-2 px-6 py-5 border-t border-gray-100 bg-amber-50/50 flex-shrink-0">
-                  <AlertCircle className="text-amber-600" size={18} />
-                  <p className="text-xs text-amber-800 font-medium">
+                <div className="flex items-center justify-center gap-2 px-6 py-4 border-t border-amber-300 bg-amber-50 flex-shrink-0">
+                  <AlertCircle className="text-amber-800 shrink-0" size={18} />
+                  <p className="text-xs text-amber-950 font-semibold">
                     You cannot send messages on an external ticket you created.
                   </p>
                 </div>
@@ -1693,12 +1693,12 @@ export default function MessagingPage() {
                       </div>
 
                       {selectedContact.isArchived && (
-                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex flex-col gap-2">
-                          <div className="flex items-center gap-1.5 text-xs text-amber-900 font-bold">
-                            <Archive size={14} className="text-amber-700" />
+                        <div className="bg-amber-50 border border-amber-300 rounded-xl p-3 flex flex-col gap-2">
+                          <div className="flex items-center gap-1.5 text-xs text-amber-950 font-bold">
+                            <Archive size={14} className="text-amber-800" />
                             <span>Archived Conversation</span>
                           </div>
-                          <p className="text-[11px] text-amber-800 leading-normal">
+                          <p className="text-[11px] text-amber-900 font-semibold leading-normal">
                             This conversation is stored in Archive because the ticket is Closed. The message thread is locked and read-only.
                           </p>
                         </div>

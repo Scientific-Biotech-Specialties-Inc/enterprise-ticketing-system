@@ -498,8 +498,9 @@ export default function CSManagerTickets() {
                 filteredTickets.map((t) => (
                   <TableRow
                     key={t.id || t.ticket_ID}
+                    onClick={() => setDetailModalTicket(t)}
                     className={cn(
-                      'hover:bg-muted/40 transition-colors',
+                      'cursor-pointer hover:bg-slate-50/80 transition-colors duration-150',
                       t.isBreached && 'bg-rose-50/20 hover:bg-rose-50/40'
                     )}
                   >
@@ -559,20 +560,14 @@ export default function CSManagerTickets() {
                       <div className="flex items-center justify-end gap-1.5">
                         <Button
                           size="sm"
-                          onClick={() => setAssignModalTicket(t)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAssignModalTicket(t);
+                          }}
                           className="text-xs h-7 px-2.5 bg-[#252578] hover:bg-[#1d1d60] text-white font-medium gap-1 cursor-pointer"
                         >
                           {t.isUnassigned ? <UserPlus className="w-3 h-3" /> : <UserCheck className="w-3 h-3" />}
                           <span>{t.isUnassigned ? 'Assign' : 'Reassign'}</span>
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setDetailModalTicket(t)}
-                          className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground cursor-pointer"
-                          title="View Details"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
                         </Button>
                       </div>
                     </TableCell>

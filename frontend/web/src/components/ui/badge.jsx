@@ -18,7 +18,7 @@ const badgeVariants = cva(
 
         // Medium-emphasis (pastel with 1px border - standard for table rows)
         "medium-success": "bg-emerald-50 text-emerald-700 border border-emerald-300",
-        "medium-warning": "bg-amber-50 text-amber-800 border border-amber-300",
+        "medium-warning": "bg-amber-50 text-amber-900 border border-amber-300",
         "medium-destructive": "bg-red-50 text-red-700 border border-red-300",
         "medium-info": "bg-sky-50 text-sky-700 border border-sky-300",
         "medium-violet": "bg-indigo-50 text-indigo-700 border border-indigo-200",
@@ -26,7 +26,7 @@ const badgeVariants = cva(
 
         // Low-emphasis (borderless soft tinted wash)
         "low-success": "bg-emerald-50 text-emerald-700",
-        "low-warning": "bg-amber-50 text-amber-800",
+        "low-warning": "bg-amber-50 text-amber-900",
         "low-destructive": "bg-red-50 text-red-700",
         "low-info": "bg-sky-50 text-sky-700",
         "low-violet": "bg-indigo-50 text-indigo-700",

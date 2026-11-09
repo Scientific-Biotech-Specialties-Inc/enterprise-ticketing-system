@@ -26,6 +26,7 @@ export default function EmployeeProgress() {
   const [statusFilter, setStatusFilter] = useState('All Status');
   const [categoryFilter, setCategoryFilter] = useState('All Category');
   const [priorityFilter, setPriorityFilter] = useState('All Priority');
+  const [dateFilter, setDateFilter] = useState('');
 
   const loadHistory = useCallback(async ({ forceRefresh = false } = {}) => {
     const email = user?.email || 'frontend@example.com';
@@ -66,6 +67,20 @@ export default function EmployeeProgress() {
       if (statusFilter !== 'All Status' && displayStatus !== statusFilter) return false;
       if (categoryFilter !== 'All Category' && t.category !== categoryFilter) return false;
       if (priorityFilter !== 'All Priority' && t.priority !== priorityFilter) return false;
+      if (dateFilter) {
+        const rawDate = t.resolved_at || t.closed_at || t.updated_at || t.lastUpdate || t.date || t.created_at;
+        if (!rawDate) return false;
+        try {
+          const d = new Date(rawDate);
+          if (!isNaN(d.getTime())) {
+            const iso = d.toISOString().split('T')[0];
+            const local = d.toLocaleDateString('en-CA');
+            if (iso !== dateFilter && local !== dateFilter) return false;
+          }
+        } catch {
+          return false;
+        }
+      }
       if (q) {
         const blob =
           `${t.id} ${t.title} ${t.customer} ${t.facility ?? ''}`.toLowerCase();
@@ -73,7 +88,7 @@ export default function EmployeeProgress() {
       }
       return true;
     });
-  }, [tickets, search, statusFilter, categoryFilter, priorityFilter]);
+  }, [tickets, search, statusFilter, categoryFilter, priorityFilter, dateFilter]);
 
   const openDetail = (t) => {
     navigate(`/employee/history/${t.id}`, { state: { ticket: t, backPath: '/employee/progress' } });
@@ -92,23 +107,23 @@ export default function EmployeeProgress() {
         </div>
       )}
 
-      {/* Filter toolbar */}
-      <div className="w-full space-y-3 shrink-0">
-        <div className="relative w-full">
+      {/* Filter toolbar: Search bar in the same row as dropdown filters & date */}
+      <div className="flex flex-col lg:flex-row items-center gap-2.5 w-full shrink-0">
+        <div className="relative flex-1 w-full min-w-[200px]">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-slate" />
           <input
             type="search"
             placeholder="Search ID, title, customer..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-xl border border-gray-200 bg-surface pl-10 pr-4 py-2.5 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent placeholder:text-muted-slate/60"
+            className="w-full rounded-xl border border-gray-200 bg-surface pl-10 pr-4 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent placeholder:text-muted-slate/60 h-10"
           />
         </div>
-        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full">
+        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full lg:w-auto shrink-0">
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+            className="h-10 flex-1 sm:flex-initial min-w-[120px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
           >
             {['All Status', 'Closed', 'Resolved'].map((s) => (
               <option key={s} value={s}>{s}</option>
@@ -117,7 +132,7 @@ export default function EmployeeProgress() {
           <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
-            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+            className="h-10 flex-1 sm:flex-initial min-w-[120px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
           >
             {[
               'All Category',
@@ -134,12 +149,31 @@ export default function EmployeeProgress() {
           <select
             value={priorityFilter}
             onChange={(e) => setPriorityFilter(e.target.value)}
-            className="flex-1 min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+            className="h-10 flex-1 sm:flex-initial min-w-[110px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
           >
             {['All Priority', 'Critical', 'High', 'Medium', 'Low'].map((p) => (
               <option key={p} value={p}>{p}</option>
             ))}
           </select>
+          <div className="relative flex-1 sm:flex-initial">
+            <input
+              type="date"
+              aria-label="Filter by date"
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value)}
+              className="h-10 w-full sm:w-auto min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
+            />
+            {dateFilter && (
+              <button
+                type="button"
+                onClick={() => setDateFilter('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs px-1 font-bold cursor-pointer"
+                title="Clear date"
+              >
+                ✕
+              </button>
+            )}
+          </div>
         </div>
       </div>
 

@@ -523,7 +523,11 @@ export default function ITManagerTickets() {
                 </TableRow>
               ) : (
                 paginatedTickets.map((t) => (
-                  <TableRow key={t.id || t.ticket_ID} className="hover:bg-muted/40 transition-colors">
+                  <TableRow
+                    key={t.id || t.ticket_ID}
+                    onClick={() => setSelectedDetailTicket(t)}
+                    className="cursor-pointer hover:bg-slate-50/80 transition-colors duration-150"
+                  >
                     {/* Ticket ID */}
                     <TableCell className="font-mono text-xs font-bold text-primary">
                       {t.ticket_ID || `TKT-${t.id}`}
@@ -588,7 +592,10 @@ export default function ITManagerTickets() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => handleOpenAssignModal(t)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenAssignModal(t);
+                          }}
                           className={cn(
                             'text-[11px] h-7 px-2.5 font-semibold cursor-pointer',
                             t.isUnassigned
@@ -598,16 +605,6 @@ export default function ITManagerTickets() {
                         >
                           <UserCheck className="w-3 h-3 mr-1" />
                           <span>{t.isUnassigned ? 'Assign' : 'Reassign'}</span>
-                        </Button>
-
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setSelectedDetailTicket(t)}
-                          className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground cursor-pointer"
-                          title="View Details"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
                         </Button>
                       </div>
                     </TableCell>

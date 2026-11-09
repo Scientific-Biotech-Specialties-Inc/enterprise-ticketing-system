@@ -417,6 +417,17 @@ export default function MyTickets({ mode = 'all' }) {
         return false;
       }
 
+      // Category filter
+      if (filters.category && ticket.category && ticket.category.toLowerCase() !== filters.category.toLowerCase()) {
+        return false;
+      }
+
+      // Priority filter
+      if (filters.priority) {
+        const ticketPriority = (typeof ticket.priority === 'object' ? ticket.priority?.priority_name : ticket.priority) || ticket.priority_name || '';
+        if (String(ticketPriority).toLowerCase() !== filters.priority.toLowerCase()) return false;
+      }
+
       // Machine filter
       if (filters.machine) {
         const machineFilter = filters.machine.trim().toLowerCase();
@@ -1061,122 +1072,90 @@ export default function MyTickets({ mode = 'all' }) {
 
       {activeTab !== 'drafts' ? (
         <>
-          {/* ─── Search & Filter Bar ─── */}
-          <div className="rounded-2xl border border-gray-150 bg-white p-4 shadow-sm space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-12 gap-3">
-              {/* 1. Extended Keywords Search */}
-              <div className="relative sm:col-span-2 md:col-span-3 lg:col-span-6">
-                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Search</label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    aria-label="Search tickets"
-                    placeholder="Search by keywords, ID, title, category, priority, or employee..."
-                    value={filters.keywords}
-                    onChange={(e) => updateFilter('keywords', e.target.value)}
-                    className="w-full rounded-xl border border-gray-200 pl-8 pr-7 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition bg-white"
-                  />
-                  <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                  {filters.keywords && (
-                    <button
-                      type="button"
-                      aria-label="Clear search filter"
-                      onClick={() => clearFilter('keywords')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded cursor-pointer"
-                    >
-                      <X size={13} />
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* 2. Machine Dropdown */}
-              <div className="relative lg:col-span-2">
-                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Machine</label>
-                <div className="relative">
-                  <select
-                    aria-label="Filter by machine"
-                    value={filters.machine}
-                    onChange={(e) => updateFilter('machine', e.target.value)}
-                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition bg-white appearance-none pr-7"
+          {/* ─── Search & Filter Bar: Single row, no background container, no "SEARCH" title ─── */}
+          <div className="flex flex-col lg:flex-row items-center gap-2.5 w-full shrink-0">
+            <div className="relative flex-1 w-full min-w-[200px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-slate" />
+              <input
+                type="search"
+                aria-label="Search tickets"
+                placeholder="Search ID, title, or description..."
+                value={filters.keywords}
+                onChange={(e) => updateFilter('keywords', e.target.value)}
+                className="w-full rounded-xl border border-gray-200 bg-surface pl-9 pr-8 py-2 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent placeholder:text-muted-slate/60 h-10"
+              />
+              {filters.keywords && (
+                <button
+                  type="button"
+                  aria-label="Clear search filter"
+                  onClick={() => clearFilter('keywords')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs px-1 font-bold cursor-pointer"
+                  title="Clear search"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full lg:w-auto shrink-0">
+              <select
+                aria-label="Filter by status"
+                value={filters.status}
+                onChange={(e) => updateFilter('status', e.target.value)}
+                className="h-10 flex-1 sm:flex-initial min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
+              >
+                <option value="">All statuses</option>
+                {availableStatuses.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              <select
+                aria-label="Filter by category"
+                value={filters.category}
+                onChange={(e) => updateFilter('category', e.target.value)}
+                className="h-10 flex-1 sm:flex-initial min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
+              >
+                <option value="">All categories</option>
+                {availableCategories.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              <select
+                aria-label="Filter by priority"
+                value={filters.priority}
+                onChange={(e) => updateFilter('priority', e.target.value)}
+                className="h-10 flex-1 sm:flex-initial min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
+              >
+                <option value="">All priorities</option>
+                {availablePriorities.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+              <div className="relative flex-1 sm:flex-initial">
+                <input
+                  type="date"
+                  aria-label="Filter by date"
+                  value={filters.date}
+                  onChange={(e) => updateFilter('date', e.target.value)}
+                  className="h-10 w-full sm:w-auto min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
+                />
+                {filters.date && (
+                  <button
+                    type="button"
+                    aria-label="Clear date filter"
+                    onClick={() => clearFilter('date')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs px-1 font-bold cursor-pointer"
+                    title="Clear date"
                   >
-                    <option value="">All Machines</option>
-                    {availableMachines.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-                  {filters.machine ? (
-                    <button
-                      type="button"
-                      aria-label="Clear machine filter"
-                      onClick={() => clearFilter('machine')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded cursor-pointer"
-                    >
-                      <X size={13} />
-                    </button>
-                  ) : (
-                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none text-[10px]">▼</span>
-                  )}
-                </div>
-              </div>
-
-              {/* 3. Status Dropdown */}
-              <div className="relative lg:col-span-2">
-                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Status</label>
-                <div className="relative">
-                  <select
-                    aria-label="Filter by status"
-                    value={filters.status}
-                    onChange={(e) => updateFilter('status', e.target.value)}
-                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition bg-white appearance-none pr-7"
-                  >
-                    <option value="">All Statuses</option>
-                    {availableStatuses.map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>
-                  {filters.status ? (
-                    <button
-                      type="button"
-                      aria-label="Clear status filter"
-                      onClick={() => clearFilter('status')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded cursor-pointer"
-                    >
-                      <X size={13} />
-                    </button>
-                  ) : (
-                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none text-[10px]">▼</span>
-                  )}
-                </div>
-              </div>
-
-              {/* 4. Date Picker */}
-              <div className="relative lg:col-span-2">
-                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Date</label>
-                <div className="relative">
-                  <input
-                    type="date"
-                    aria-label="Filter by date"
-                    value={filters.date}
-                    onChange={(e) => updateFilter('date', e.target.value)}
-                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition bg-white"
-                  />
-                  {filters.date && (
-                    <button
-                      type="button"
-                      aria-label="Clear date filter"
-                      onClick={() => clearFilter('date')}
-                      className="absolute right-7 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded cursor-pointer"
-                    >
-                      <X size={13} />
-                    </button>
-                  )}
-                </div>
+                    ✕
+                  </button>
+                )}
               </div>
             </div>
+          </div>
 
-            {/* Active Filter Badges + Reset Actions */}
-            <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-gray-100 text-xs">
+          {/* Active Filter Badges + Reset Actions */}
+          {activeFilterList.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="flex flex-wrap items-center gap-1.5 flex-1 min-w-[240px]">
                 {activeFilterList.map((item) => (
                   <span
@@ -1194,27 +1173,16 @@ export default function MyTickets({ mode = 'all' }) {
                     </button>
                   </span>
                 ))}
-                {activeFilterList.length === 0 && (
-                  <span className="text-gray-400 text-xs">No active filters</span>
-                )}
               </div>
-
-              <div className="flex items-center gap-2 ml-auto shrink-0">
-                <span className="text-gray-400 text-[11px]">
-                  Showing <strong className="text-gray-700">{visibleTickets.length}</strong> of {tickets.length}
-                </span>
-                {activeFilterList.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={resetFilters}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition cursor-pointer"
-                  >
-                    <RotateCcw size={12} /> Reset all filters
-                  </button>
-                )}
-              </div>
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition cursor-pointer"
+              >
+                <RotateCcw size={12} /> Reset all filters
+              </button>
             </div>
-          </div>
+          )}
 
           {error && (
             <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm font-semibold flex items-center justify-between">

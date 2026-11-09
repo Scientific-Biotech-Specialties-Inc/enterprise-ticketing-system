@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Search, SlidersHorizontal, Loader2, Filter, RotateCcw, X, AlertTriangle, Clock, CheckCircle2, PauseCircle, HelpCircle, ArrowUpDown, Bell } from 'lucide-react';
+import { Search, Loader2, Filter, RotateCcw, X, AlertTriangle, Clock, CheckCircle2, PauseCircle, HelpCircle, ArrowUpDown, Bell } from 'lucide-react';
 import Pagination from '@/components/Pagination';
 import { useAuth } from '@/context/AuthContext';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
@@ -802,15 +802,14 @@ export default function CSAssigned() {
               </TableHead>
               <TableHead className="min-w-[180px]">Assignees</TableHead>
               <TableHead className="w-[150px]">Last Update</TableHead>
-              <TableHead className="w-[80px] text-center">Action</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
-              <DataTableSkeleton columns={10} rows={6} />
+              <DataTableSkeleton columns={9} rows={6} />
             ) : filtered.length === 0 ? (
               <DataTableEmptyState
-                colSpan={10}
+                colSpan={9}
                 message="No tickets found in this assigned queue."
               />
             ) : (
@@ -955,20 +954,6 @@ export default function CSAssigned() {
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                       {formatDisplayDate(t.updated_at || t.last_update || t.lastUpdate || t.date || t.created_at)}
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRowAction(t);
-                        }}
-                        className="h-8 w-8 text-muted-foreground hover:text-primary"
-                        aria-label="Manage ticket"
-                      >
-                        <SlidersHorizontal className="h-4 w-4" />
-                      </Button>
                     </TableCell>
                   </TableRow>
                 );

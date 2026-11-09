@@ -9,7 +9,6 @@ import {
   Users,
   RefreshCw,
   UserCheck,
-  ExternalLink,
   Layers,
   Inbox,
   ArrowRight,
@@ -502,7 +501,11 @@ export default function ManagerSlaDashboard({
                       </TableRow>
                     ) : (
                       breachedQueue.map((row) => (
-                        <TableRow key={row.ticket_ID} className="hover:bg-rose-50/20 transition-colors">
+                        <TableRow
+                          key={row.ticket_ID}
+                          onClick={() => setDetailModalTicket(toTicket(row))}
+                          className="cursor-pointer hover:bg-slate-50/80 transition-colors duration-150"
+                        >
                           <TableCell className="font-mono text-xs font-bold text-rose-700">{row.ticket_number}</TableCell>
 
                           <TableCell>
@@ -566,20 +569,14 @@ export default function ManagerSlaDashboard({
                             <div className="flex items-center justify-end gap-2">
                               <Button
                                 size="sm"
-                                onClick={() => setAssignModalTicket(toTicket(row))}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setAssignModalTicket(toTicket(row));
+                                }}
                                 className="text-xs h-8 px-2 bg-[#252578] hover:bg-[#1d1d60] text-white font-medium gap-1 cursor-pointer"
                               >
                                 <UserCheck className="w-3 h-3" />
                                 <span>{row.assignee_id ? 'Reassign' : 'Assign'}</span>
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setDetailModalTicket(toTicket(row))}
-                                className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground cursor-pointer"
-                                title="View Details"
-                              >
-                                <ExternalLink className="w-3.5 h-3.5" />
                               </Button>
                             </div>
                           </TableCell>

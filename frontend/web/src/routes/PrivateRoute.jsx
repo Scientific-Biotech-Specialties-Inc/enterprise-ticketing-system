@@ -120,21 +120,16 @@ export default function PrivateRoute({ children, role }) {
         window.location.reload();
         return;
       }
-      const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('is_logged_out') === 'true';
-      const token = tokenStore.getToken();
-      if (e.persisted || !token || !isAuthenticated || isLoggedOut) {
-        if (!token || !isAuthenticated || isLoggedOut) {
-          if (isCustomerSite) {
-            window.location.replace(import.meta.env.BASE_URL || '/');
-          } else {
-            window.location.replace('/');
-          }
+      if (isCustomerSite) {
+        const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('is_logged_out') === 'true';
+        if (isLoggedOut) {
+          window.location.replace(import.meta.env.BASE_URL || '/');
         }
       }
     };
     window.addEventListener('pageshow', handlePageShow);
     return () => window.removeEventListener('pageshow', handlePageShow);
-  }, [isLoading, isAuthenticated]);
+  }, [isLoading, isAuthenticated, isCustomerSite]);
 
   useEffect(() => {
     if (isLoading || !isAuthenticated) return undefined;

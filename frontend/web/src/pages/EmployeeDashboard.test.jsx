@@ -114,8 +114,8 @@ describe('EmployeeDashboard dual panel workspace (AC-13, AC-14, AC-15, AC-20)', 
     expect(screen.getByText(/Manage your assigned technician work/)).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByText('Section I: Assigned Workload (My Work)')).toBeInTheDocument();
-      expect(screen.getByText('Section II: Requestor Activity (My Requests)')).toBeInTheDocument();
+      expect(screen.getAllByText('My Work').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('My Request').length).toBeGreaterThan(0);
     });
   });
 
@@ -147,15 +147,15 @@ describe('EmployeeDashboard dual panel workspace (AC-13, AC-14, AC-15, AC-20)', 
     );
 
     await waitFor(() => {
-      expect(screen.getByText('Section I: Assigned Workload (My Work)')).toBeInTheDocument();
+      expect(screen.getAllByText('My Work').length).toBeGreaterThan(0);
     });
 
-    const requestsPill = screen.getByRole('button', { name: /my requests/i });
+    const requestsPill = screen.getByRole('button', { name: /my request/i });
     fireEvent.click(requestsPill);
 
     await waitFor(() => {
-      expect(screen.queryByText('Section I: Assigned Workload (My Work)')).toBeNull();
-      expect(screen.getByText('Section II: Requestor Activity (My Requests)')).toBeInTheDocument();
+      expect(screen.queryByText('My Work')).toBeNull();
+      expect(screen.getAllByText('My Request').length).toBeGreaterThan(0);
     });
   });
 
@@ -196,7 +196,7 @@ describe('EmployeeDashboard dual panel workspace (AC-13, AC-14, AC-15, AC-20)', 
       expect(screen.getByText('Unable to load assigned workload tickets.')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('Section II: Requestor Activity (My Requests)')).toBeInTheDocument();
+    expect(screen.getAllByText('My Request').length).toBeGreaterThan(0);
   });
 
   describe('contextual ticket modals (covers: AC-3)', () => {

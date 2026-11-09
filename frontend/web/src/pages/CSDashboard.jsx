@@ -6,7 +6,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   ArrowRight,
-  Eye,
+  SlidersHorizontal,
   Loader2,
   ShieldAlert,
   PauseCircle,
@@ -386,11 +386,10 @@ export default function CSDashboard() {
                   <TableHead>Issue / Subject</TableHead>
                   <TableHead>Attention Reason</TableHead>
                   <TableHead>Current SLA</TableHead>
-                  <TableHead className="w-[120px] text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                <DataTableSkeleton columns={5} rows={3} />
+                <DataTableSkeleton columns={4} rows={3} />
               </TableBody>
             </Table>
           </div>
@@ -409,7 +408,6 @@ export default function CSDashboard() {
                   <TableHead>Issue / Subject</TableHead>
                   <TableHead>Attention Reason</TableHead>
                   <TableHead>Current SLA</TableHead>
-                  <TableHead className="w-[120px] text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -446,21 +444,6 @@ export default function CSDashboard() {
                     </TableCell>
                     <TableCell>
                       <SlaStatusBadge ticket={t} />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleViewTicket(t);
-                        }}
-                        className="text-xs text-primary hover:text-primary gap-1"
-                        title="Triage this ticket"
-                      >
-                        <span>Triage</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -533,7 +516,7 @@ export default function CSDashboard() {
                     <Badge variant={t.priority === 'Critical' ? 'destructive' : t.priority === 'High' ? 'warning' : 'secondary'}>
                       {t.priority}
                     </Badge>
-                    <Eye className="w-4 h-4 text-muted-foreground" />
+                    <SlidersHorizontal className="w-4 h-4 text-muted-foreground" />
                   </div>
                 </div>
               ))}
