@@ -3,7 +3,6 @@ import { downloadAttachment } from '@/utils/attachmentFiles';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { MessageCircle, Send, Users, User, AlertCircle, MoreVertical, Edit2, Trash2, Archive, RotateCcw, X, Info, History, Sparkles, Bot, Clock, Paperclip, FileText, Download, ShieldAlert, Loader2 } from 'lucide-react';
-import { PageHeader } from '@/components/ui/page-header';
 import {
   getTicketMessages,
   sendTicketMessage,
@@ -296,6 +295,12 @@ export default function MessagingPage() {
             });
             if (found) {
               const selectedId = found.ticket_ID || found.id;
+              const statusNormalized = String(found.status || found.status_name || '').trim().toLowerCase();
+              if (statusNormalized === 'closed' || Number(found.ticket_status_ID || found.status_id) === 4) {
+                setConversationTab('archived');
+              } else {
+                setConversationTab('active');
+              }
               setSelectedContactId(selectedId);
               // Clear location state so it doesn't keep resetting selection on refresh
               window.history.replaceState({}, document.title);
@@ -304,6 +309,12 @@ export default function MessagingPage() {
                 const singleTicket = await getTicketDetails(numericId).catch(() => null);
                 if (singleTicket && active) {
                   const sId = singleTicket.ticket_ID || singleTicket.id;
+                  const statusNormalized = String(singleTicket.status || singleTicket.status_name || '').trim().toLowerCase();
+                  if (statusNormalized === 'closed' || Number(singleTicket.ticket_status_ID || singleTicket.status_id) === 4) {
+                    setConversationTab('archived');
+                  } else {
+                    setConversationTab('active');
+                  }
                   setTickets(prev => [singleTicket, ...prev.filter(t => (t.ticket_ID || t.id) !== sId)]);
                   setSelectedContactId(sId);
                   window.history.replaceState({}, document.title);
@@ -352,8 +363,16 @@ export default function MessagingPage() {
           type = 'internal';
         }
       } else {
-        contactName = 'Customer Support';
-        contactRole = 'Representative';
+        const rawAssigned =
+          (typeof t.assigned_employee === 'string' && t.assigned_employee) ||
+          (t.assigned_employee?.first_name ? `${t.assigned_employee.first_name} ${t.assigned_employee.last_name || ''}`.trim() : t.assigned_employee?.name) ||
+          t.assigned_employee_name ||
+          t.assigned_to_name ||
+          (Array.isArray(t.assigned_employees) && t.assigned_employees[0]?.name ? t.assigned_employees[0].name : null) ||
+          (typeof t.assigned_to === 'string' && t.assigned_to.trim().toLowerCase() !== 'unassigned' ? t.assigned_to.trim() : null);
+        const assignedEmp = rawAssigned && String(rawAssigned).trim().toLowerCase() !== 'unassigned' ? String(rawAssigned).trim() : null;
+        contactName = assignedEmp ? `${assignedEmp} • Customer Support` : 'Customer Support';
+        contactRole = assignedEmp ? 'Assigned Specialist & CS' : 'Representative';
         type = 'external';
       }
 
@@ -975,15 +994,7 @@ export default function MessagingPage() {
   }, [reopening]);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-9rem)]">
-      <div className="mb-4 shrink-0">
-        <PageHeader
-          pattern="B"
-          title="Messages"
-          subtitle="Live customer support and staff collaboration threads"
-        />
-      </div>
-
+    <div className="flex flex-col h-[calc(100vh-8rem)] w-full min-h-[500px]">
       <div className="flex flex-1 bg-card rounded-xl shadow-xs border border-border overflow-hidden min-h-0">
         {/* ── Left Panel ── */}
         <div className="w-[360px] lg:w-[380px] border-r border-border flex flex-col shrink-0">

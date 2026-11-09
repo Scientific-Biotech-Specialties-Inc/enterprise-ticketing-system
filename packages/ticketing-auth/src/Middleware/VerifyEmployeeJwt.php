@@ -114,7 +114,14 @@ class VerifyEmployeeJwt
         $verified = openssl_verify($data, $signature, $publicKey, OPENSSL_ALGO_SHA256);
 
         if ($verified !== 1) {
-            Log::warning('VerifyEmployeeJwt: Signature verification failed. Verification status: ' . $verified);
+            $errs = [];
+            while ($msg = openssl_error_string()) { $errs[] = $msg; }
+            Log::warning('VerifyEmployeeJwt: Signature verification failed. Verification status: ' . $verified, [
+                'token_sample' => substr($token, 0, 50) . '...' . substr($token, -30),
+                'payload_decoded' => $base64UrlDecode($payloadB64),
+                'openssl_errors' => $errs,
+                'public_key_path' => $publicKeyPath,
+            ]);
             return response()->json(['message' => 'Unauthorized: Invalid signature'], 401);
         }
 

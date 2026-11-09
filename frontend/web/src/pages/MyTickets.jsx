@@ -41,6 +41,7 @@ import { parseUTCDate } from '@/utils/dateUtils';
 import TitleCasingModal from '@/components/TitleCasingModal';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import { hasFeedbackBeenSubmitted, fetchFeedbackForTicket } from '@/data/mockFeedbackData';
+import tokenStore from '@/auth/tokenStore';
 
 const ACTIVE_STATUSES = ['Open', 'Pending Assignment', 'In Progress', 'Pending', 'On Hold', 'Closed'];
 const HISTORY_STATUSES = ['Resolved', 'Closed', 'Discarded by Customer', 'Discarded'];
@@ -70,14 +71,24 @@ const statusClass = (s) => statusColors[s] ?? (s?.includes('Discarded') ? 'bg-re
 
 export default function MyTickets({ mode = 'all' }) {
   const isHistory = mode === 'history';
-  const { user } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   const effectiveUser = user || getStoredUser();
-  const customerId = effectiveUser?.id || 1;
+  const customerId = effectiveUser?.id || null;
   const location = useLocation();
   const navigate = useNavigate();
   const params = useParams();
   const [searchParams] = useSearchParams();
   const urlTicketId = params?.ticketId || searchParams.get('ticketId');
+
+  const isLoggedOut =
+    sessionStorage.getItem('logged_out') === 'true' ||
+    sessionStorage.getItem('is_logged_out') === 'true';
+
+  useEffect(() => {
+    if (!effectiveUser || !isAuthenticated || isLoggedOut) {
+      navigate('/login', { replace: true });
+    }
+  }, [effectiveUser, isAuthenticated, isLoggedOut, navigate]);
 
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -122,16 +133,19 @@ export default function MyTickets({ mode = 'all' }) {
   });
 
   const loadDrafts = useCallback(async () => {
+    if (!customerId || !isAuthenticated) return;
     setLoadingDrafts(true);
     try {
       const list = await getTicketDrafts({ client_id: customerId });
       setDrafts(list || []);
     } catch (err) {
-      console.warn('Failed to load ticket drafts:', err);
+      if (err?.response?.status !== 401) {
+        console.warn('Failed to load ticket drafts:', err);
+      }
     } finally {
       setLoadingDrafts(false);
     }
-  }, [customerId]);
+  }, [customerId, isAuthenticated]);
 
   useEffect(() => {
     const targetTab = location.state?.tab || searchParams.get('tab');
@@ -178,6 +192,7 @@ export default function MyTickets({ mode = 'all' }) {
   }, [urlTicketId]);
 
   const loadFilterOptions = useCallback(async () => {
+    if (!customerId || !isAuthenticated) return;
     try {
       const opts = await getCustomerFilterOptions(customerId);
       if (opts) {
@@ -191,11 +206,17 @@ export default function MyTickets({ mode = 'all' }) {
         }));
       }
     } catch (err) {
-      console.warn('Failed to load customer filter options:', err);
+      if (err?.response?.status !== 401) {
+        console.warn('Failed to load customer filter options:', err);
+      }
     }
-  }, [customerId]);
+  }, [customerId, isAuthenticated]);
 
   const loadTickets = useCallback(async ({ forceRefresh = false, source = 'manual' } = {}) => {
+    if (!customerId || !isAuthenticated) {
+      setLoading(false);
+      return;
+    }
     // Realtime ticks (websocket/poll) refresh silently instead of flashing the skeleton.
     if (source !== 'websocket' && source !== 'poll') setLoading(true);
     setError('');
@@ -210,21 +231,24 @@ export default function MyTickets({ mode = 'all' }) {
       });
       setTickets(uniqueTickets);
 
-      // Prefetch feedback for completed tickets so feedback status is immediately known
-      uniqueTickets.forEach((t) => {
-        if (t.status === 'Closed' || t.status === 'Resolved') {
+      // Prefetch feedback for completed tickets if authenticated
+      if (tokenStore.getToken()) {
+        const completed = uniqueTickets.filter((t) => t.status === 'Closed' || t.status === 'Resolved').slice(0, 5);
+        completed.forEach((t) => {
           const tId = t.id || t.ticket_ID;
           if (tId && typeof fetchFeedbackForTicket === 'function') {
             fetchFeedbackForTicket(tId).catch(() => {});
           }
-        }
-      });
+        });
+      }
     } catch (err) {
-      setError(err?.response?.data?.message || 'Failed to load tickets.');
+      if (err?.response?.status !== 401) {
+        setError(err?.response?.data?.message || 'Failed to load tickets.');
+      }
     } finally {
       setLoading(false);
     }
-  }, [customerId]);
+  }, [customerId, isAuthenticated]);
 
   useEffect(() => {
     try {
@@ -334,12 +358,9 @@ export default function MyTickets({ mode = 'all' }) {
 
   const activeFilterList = useMemo(() => {
     const list = [];
-    if (filters.keywords) list.push({ key: 'keywords', label: `Keywords: "${filters.keywords}"` });
+    if (filters.keywords) list.push({ key: 'keywords', label: `Search: "${filters.keywords}"` });
     if (filters.machine) list.push({ key: 'machine', label: `Machine: ${filters.machine}` });
     if (filters.status) list.push({ key: 'status', label: `Status: ${filters.status}` });
-    if (filters.category) list.push({ key: 'category', label: `Category: ${filters.category}` });
-    if (filters.priority) list.push({ key: 'priority', label: `Priority: ${filters.priority}` });
-    if (filters.employee) list.push({ key: 'employee', label: `Employee: ${filters.employee}` });
     if (filters.date) list.push({ key: 'date', label: `Date: ${filters.date}` });
     return list;
   }, [filters]);
@@ -369,12 +390,14 @@ export default function MyTickets({ mode = 'all' }) {
         }
       }
 
-      // Keywords filter (matching Ticket ID, Title, Description, Machine/Equipment, Category)
+      // Keywords filter (matching Ticket ID, Title, Description, Machine/Equipment, Category, Assigned Employee, Priority)
       if (filters.keywords) {
         const kw = filters.keywords.trim().toLowerCase();
         const tid = String(ticket.id || '').toLowerCase();
         const numId = String(ticket.ticket_ID || ticket.id || '').replace(/\D/g, '');
         const cleanKw = kw.replace(/\D/g, '');
+        const empName = getTicketAssignedEmployee(ticket).toLowerCase();
+        const priority = String(ticket.priority || '').toLowerCase();
         const matches = (
           tid.includes(kw) ||
           (cleanKw && numId.includes(cleanKw)) ||
@@ -382,7 +405,9 @@ export default function MyTickets({ mode = 'all' }) {
           (ticket.description && ticket.description.toLowerCase().includes(kw)) ||
           (ticket.equipment && ticket.equipment.toLowerCase().includes(kw)) ||
           (ticket.machine_name && ticket.machine_name.toLowerCase().includes(kw)) ||
-          (ticket.category && ticket.category.toLowerCase().includes(kw))
+          (ticket.category && ticket.category.toLowerCase().includes(kw)) ||
+          empName.includes(kw) ||
+          priority.includes(kw)
         );
         if (!matches) return false;
       }
@@ -392,37 +417,12 @@ export default function MyTickets({ mode = 'all' }) {
         return false;
       }
 
-      // Category filter
-      if (filters.category && (ticket.category || '').trim().toLowerCase() !== filters.category.trim().toLowerCase()) {
-        return false;
-      }
-
       // Machine filter
       if (filters.machine) {
         const machineFilter = filters.machine.trim().toLowerCase();
         const ticketMachine = (ticket.equipment || ticket.machine_name || '').trim().toLowerCase();
         if (!ticketMachine.includes(machineFilter)) {
           return false;
-        }
-      }
-
-      // Priority filter
-      if (filters.priority && (ticket.priority || 'Medium').trim().toLowerCase() !== filters.priority.trim().toLowerCase()) {
-        return false;
-      }
-
-      // Employee filter
-      if (filters.employee) {
-        const empFilter = filters.employee.trim().toLowerCase();
-        const empName = getTicketAssignedEmployee(ticket).toLowerCase();
-        if (empFilter === 'unassigned') {
-          if (empName !== 'unassigned' && empName !== '' && empName !== 'null') {
-            return false;
-          }
-        } else {
-          if (!empName.includes(empFilter)) {
-            return false;
-          }
         }
       }
 
@@ -1063,24 +1063,24 @@ export default function MyTickets({ mode = 'all' }) {
         <>
           {/* ─── Search & Filter Bar ─── */}
           <div className="rounded-2xl border border-gray-150 bg-white p-4 shadow-sm space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
-              {/* 1. Keywords Search */}
-              <div className="relative">
-                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Keywords</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-12 gap-3">
+              {/* 1. Extended Keywords Search */}
+              <div className="relative sm:col-span-2 md:col-span-3 lg:col-span-6">
+                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Search</label>
                 <div className="relative">
                   <input
                     type="text"
-                    aria-label="Search by keywords"
-                    placeholder="Search keywords, ID, title..."
+                    aria-label="Search tickets"
+                    placeholder="Search by keywords, ID, title, category, priority, or employee..."
                     value={filters.keywords}
                     onChange={(e) => updateFilter('keywords', e.target.value)}
-                    className="w-full rounded-xl border border-gray-200 pl-8 pr-7 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition"
+                    className="w-full rounded-xl border border-gray-200 pl-8 pr-7 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition bg-white"
                   />
                   <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                   {filters.keywords && (
                     <button
                       type="button"
-                      aria-label="Clear keywords filter"
+                      aria-label="Clear search filter"
                       onClick={() => clearFilter('keywords')}
                       className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded cursor-pointer"
                     >
@@ -1091,7 +1091,7 @@ export default function MyTickets({ mode = 'all' }) {
               </div>
 
               {/* 2. Machine Dropdown */}
-              <div className="relative">
+              <div className="relative lg:col-span-2">
                 <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Machine</label>
                 <div className="relative">
                   <select
@@ -1121,7 +1121,7 @@ export default function MyTickets({ mode = 'all' }) {
               </div>
 
               {/* 3. Status Dropdown */}
-              <div className="relative">
+              <div className="relative lg:col-span-2">
                 <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Status</label>
                 <div className="relative">
                   <select
@@ -1150,99 +1150,8 @@ export default function MyTickets({ mode = 'all' }) {
                 </div>
               </div>
 
-              {/* 4. Category Dropdown */}
-              <div className="relative">
-                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Category</label>
-                <div className="relative">
-                  <select
-                    aria-label="Filter by category"
-                    value={filters.category}
-                    onChange={(e) => updateFilter('category', e.target.value)}
-                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition bg-white appearance-none pr-7"
-                  >
-                    <option value="">All Categories</option>
-                    {availableCategories.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                  {filters.category ? (
-                    <button
-                      type="button"
-                      aria-label="Clear category filter"
-                      onClick={() => clearFilter('category')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded cursor-pointer"
-                    >
-                      <X size={13} />
-                    </button>
-                  ) : (
-                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none text-[10px]">▼</span>
-                  )}
-                </div>
-              </div>
-
-              {/* 5. Priority Dropdown */}
-              <div className="relative">
-                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Priority</label>
-                <div className="relative">
-                  <select
-                    aria-label="Filter by priority"
-                    value={filters.priority}
-                    onChange={(e) => updateFilter('priority', e.target.value)}
-                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition bg-white appearance-none pr-7"
-                  >
-                    <option value="">All Priorities</option>
-                    {availablePriorities.map((p) => (
-                      <option key={p} value={p}>{p}</option>
-                    ))}
-                  </select>
-                  {filters.priority ? (
-                    <button
-                      type="button"
-                      aria-label="Clear priority filter"
-                      onClick={() => clearFilter('priority')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded cursor-pointer"
-                    >
-                      <X size={13} />
-                    </button>
-                  ) : (
-                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none text-[10px]">▼</span>
-                  )}
-                </div>
-              </div>
-
-              {/* 6. Employee Dropdown */}
-              <div className="relative">
-                <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Employee</label>
-                <div className="relative">
-                  <select
-                    aria-label="Filter by employee"
-                    value={filters.employee}
-                    onChange={(e) => updateFilter('employee', e.target.value)}
-                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-[#252578] focus:border-transparent transition bg-white appearance-none pr-7"
-                  >
-                    <option value="">All Employees</option>
-                    <option value="Unassigned">Unassigned</option>
-                    {availableEmployees.map((emp) => (
-                      <option key={emp} value={emp}>{emp}</option>
-                    ))}
-                  </select>
-                  {filters.employee ? (
-                    <button
-                      type="button"
-                      aria-label="Clear employee filter"
-                      onClick={() => clearFilter('employee')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded cursor-pointer"
-                    >
-                      <X size={13} />
-                    </button>
-                  ) : (
-                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none text-[10px]">▼</span>
-                  )}
-                </div>
-              </div>
-
-              {/* 7. Date Picker */}
-              <div className="relative">
+              {/* 4. Date Picker */}
+              <div className="relative lg:col-span-2">
                 <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">Date</label>
                 <div className="relative">
                   <input
@@ -1324,24 +1233,22 @@ export default function MyTickets({ mode = 'all' }) {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[110px]">Ticket ID</TableHead>
+                  {isHistory && <TableHead className="w-[110px]">Ticket ID</TableHead>}
                   <TableHead className="min-w-[220px]">Title & Summary</TableHead>
                   <TableHead className="min-w-[140px]">Equipment</TableHead>
-                  <TableHead className="w-[100px]">Priority</TableHead>
                   <TableHead className="w-[170px] min-w-[155px]">Status</TableHead>
                   <TableHead className="min-w-[140px]">Assigned Employee</TableHead>
                   <TableHead className="w-[130px]">Date Created</TableHead>
-                  <TableHead className="w-[130px]">Last Updated</TableHead>
                   <TableHead className="w-[70px] text-center">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {visibleTickets.length === 0 && loading && (
-                  <DataTableSkeleton columns={9} rows={5} />
+                  <DataTableSkeleton columns={isHistory ? 7 : 6} rows={5} />
                 )}
                 {visibleTickets.length === 0 && !loading && (
                   <DataTableEmptyState
-                    colSpan={9}
+                    colSpan={isHistory ? 7 : 6}
                     title="No tickets match your criteria"
                     description="Try adjusting your search keywords or clearing active filters."
                     action={
@@ -1362,20 +1269,17 @@ export default function MyTickets({ mode = 'all' }) {
                       className="cursor-pointer"
                       onClick={() => handleViewTicket(ticket)}
                     >
-                      <TableCell className="font-semibold text-brand-primary whitespace-nowrap">
-                        {ticket.id}
-                      </TableCell>
+                      {isHistory && (
+                        <TableCell className="font-semibold text-brand-primary whitespace-nowrap">
+                          {ticket.id}
+                        </TableCell>
+                      )}
                       <TableCell className="max-w-[260px]">
                         <div className="truncate font-medium text-dark-slate" title={ticket.title}>{ticket.title}</div>
                         <div className="truncate max-w-[240px] text-xs text-muted-slate md:hidden" title={ticket.description}>{ticket.description}</div>
                       </TableCell>
                       <TableCell className="text-muted-slate max-w-[160px] truncate" title={ticket.equipment || ticket.category}>
                         {ticket.equipment || ticket.category || '—'}
-                      </TableCell>
-                      <TableCell>
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${priorityColors[ticket.priority] ?? 'bg-gray-100 text-gray-700'}`}>
-                          {ticket.priority || 'Low'}
-                        </span>
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-col items-start gap-1">
@@ -1395,7 +1299,7 @@ export default function MyTickets({ mode = 'all' }) {
                             <User size={13} className="text-muted-slate shrink-0" />
                             <span className="truncate">{assignedEmpDisplay}</span>
                           </div>
-                          {assignedEmpDisplay !== 'Unassigned' && (
+                          {!isHistory && assignedEmpDisplay !== 'Unassigned' && (
                             <button
                               type="button"
                               onClick={(e) => {
@@ -1413,9 +1317,6 @@ export default function MyTickets({ mode = 'all' }) {
                       </TableCell>
                       <TableCell className="text-muted-slate text-xs whitespace-nowrap">
                         {formatDisplayDate(ticket.date_created)}
-                      </TableCell>
-                      <TableCell className="text-muted-slate text-xs whitespace-nowrap">
-                        {formatDisplayDate(ticket.last_updated)}
                       </TableCell>
                       <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
                         <DropdownMenu>
@@ -1487,14 +1388,6 @@ export default function MyTickets({ mode = 'all' }) {
               }`}>
                 {drafts.length} / 10 Drafts
               </span>
-              <button
-                type="button"
-                onClick={() => navigate('/create-ticket')}
-                disabled={drafts.length >= 10}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#252578] hover:bg-[#1f1f66] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition cursor-pointer"
-              >
-                + New Ticket
-              </button>
             </div>
           </div>
 

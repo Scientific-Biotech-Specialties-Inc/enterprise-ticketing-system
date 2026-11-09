@@ -8,6 +8,7 @@ import NotificationDropdown from '@/components/notifications/NotificationDropdow
 import CustomerTicketDetailModal from '@/components/CustomerTicketDetailModal';
 import { TicketSummary } from '@/components/CSModals';
 import { getSystemStatus } from '@/services/configurationService';
+import tokenStore from '@/auth/tokenStore';
 
 export default function Header({ sidebarHovered }) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -51,14 +52,16 @@ export default function Header({ sidebarHovered }) {
                 : '';
 
   const fetchNotifications = useCallback(async () => {
-    if (!user) return;
+    if (!user || !tokenStore.getToken()) return;
     setNotificationLoading(true);
     try {
       const data = await getNotifications();
       setNotifications(data.notifications || []);
       setNotificationCount(data.unread_count || 0);
     } catch (err) {
-      console.warn('Failed to fetch notifications:', err);
+      if (err?.response?.status !== 401) {
+        console.warn('Failed to fetch notifications:', err);
+      }
     } finally {
       setNotificationLoading(false);
     }

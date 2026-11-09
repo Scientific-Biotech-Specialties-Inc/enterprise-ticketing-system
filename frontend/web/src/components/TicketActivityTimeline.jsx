@@ -84,10 +84,13 @@ export default function TicketActivityTimeline({
   ticket,
   ticketId: ticketIdProp = null,
   pageSize = 8,
+  collapsible = false,
+  defaultCollapsed = false,
 }) {
   // Always the real database id. A display id such as "TKTS-00015" is not the same number.
   const ticketId = ticketIdProp ?? ticket?.ticket_ID ?? null;
 
+  const [isCollapsed, setIsCollapsed] = useState(() => Boolean(collapsible && defaultCollapsed));
   const [sortOrder, setSortOrder] = useState('asc'); // asc = oldest first
   const [selectedFilter, setSelectedFilter] = useState('all');
   const [entries, setEntries] = useState([]);
@@ -179,22 +182,59 @@ export default function TicketActivityTimeline({
   }
 
   return (
-    <div className="rounded-xl border border-border bg-card p-6 shadow-xs space-y-5">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <Clock className="w-4 h-4 text-primary" />
-            <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">
-              Activity Timeline &amp; History ({pagination.total})
-            </h3>
-            <Badge variant="outline" className="text-[10px]">Read-Only Audit</Badge>
+    <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
+      <div
+        className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+          !collapsible || !isCollapsed ? 'border-b border-border pb-3.5 mb-4' : ''
+        }`}
+      >
+        <div
+          role={collapsible ? 'button' : undefined}
+          tabIndex={collapsible ? 0 : undefined}
+          aria-expanded={collapsible ? !isCollapsed : undefined}
+          onClick={collapsible ? () => setIsCollapsed((prev) => !prev) : undefined}
+          onKeyDown={
+            collapsible
+              ? (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setIsCollapsed((prev) => !prev);
+                  }
+                }
+              : undefined
+          }
+          className={`flex items-center justify-between gap-3 flex-1 ${
+            collapsible ? 'cursor-pointer select-none group' : ''
+          }`}
+        >
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Clock className="w-4 h-4 text-primary shrink-0" />
+              <h3 className="text-xs font-bold text-slate-dark uppercase tracking-wider">
+                Activity Timeline &amp; History ({pagination.total})
+              </h3>
+              <Badge variant="outline" className="text-[11px]">Read-Only Audit</Badge>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Chronological record of every recorded action on this ticket.
+            </p>
           </div>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Chronological record of every recorded action on this ticket.
-          </p>
+
+          {collapsible && (
+            <span
+              className="inline-flex items-center justify-center w-7 h-7 rounded-lg border border-border bg-page text-slate-600 group-hover:bg-slate-100 group-hover:text-slate-900 transition-colors shrink-0"
+              title={isCollapsed ? 'Expand activity timeline' : 'Collapse activity timeline'}
+            >
+              <ChevronDown
+                className={`w-4 h-4 transition-transform duration-200 ${
+                  isCollapsed ? '' : 'rotate-180'
+                }`}
+              />
+            </span>
+          )}
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className={`${collapsible && isCollapsed ? 'hidden' : 'flex'} items-center gap-2 flex-wrap`}>
           <select
             aria-label="Filter activity"
             value={selectedFilter}
@@ -219,117 +259,119 @@ export default function TicketActivityTimeline({
         </div>
       </div>
 
-      {error && (
-        <div role="alert" className="flex items-center justify-between gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-          <span>{error} Showing the entries loaded so far.</span>
-          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => fetchPage(Math.max(1, pagination.current_page + 1), { append: pagination.current_page > 0 })}>
-            Retry
-          </Button>
-        </div>
-      )}
+      <div className={collapsible && isCollapsed ? 'hidden' : 'space-y-4'}>
+        {error && (
+          <div role="alert" className="flex items-center justify-between gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+            <span>{error} Showing the entries loaded so far.</span>
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => fetchPage(Math.max(1, pagination.current_page + 1), { append: pagination.current_page > 0 })}>
+              Retry
+            </Button>
+          </div>
+        )}
 
-      {loading ? (
-        <div className="space-y-3" aria-busy="true" aria-label="Loading ticket history">
-          {[0, 1, 2].map((i) => (
-            <div key={i} className="h-16 rounded-xl bg-muted/50 animate-pulse" />
-          ))}
-        </div>
-      ) : visibleEvents.length === 0 ? (
-        <div className="py-8 text-center text-xs text-muted-foreground italic">
-          {events.length === 0
-            ? 'No activity has been recorded for this ticket yet.'
-            : 'No loaded activity matches the selected category. Load more to look further back.'}
-        </div>
-      ) : (
-        <div className="relative pl-6 space-y-4 border-l-2 border-border ml-3 py-1">
-          {visibleEvents.map((evt) => {
-            const dotColor = evt.isSystem
-              ? 'bg-slate-700 ring-2 ring-slate-200'
-              : evt.category === 'notes'
-              ? 'bg-amber-500 ring-2 ring-amber-100'
-              : evt.category === 'assign'
-              ? 'bg-accent ring-2 ring-blue-100'
-              : 'bg-primary ring-2 ring-indigo-100';
+        {loading ? (
+          <div className="space-y-3" aria-busy="true" aria-label="Loading ticket history">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="h-16 rounded-xl bg-muted/50 animate-pulse" />
+            ))}
+          </div>
+        ) : visibleEvents.length === 0 ? (
+          <div className="py-6 text-center text-xs text-muted-foreground italic">
+            {events.length === 0
+              ? 'No activity has been recorded for this ticket yet.'
+              : 'No loaded activity matches the selected category. Load more to look further back.'}
+          </div>
+        ) : (
+          <div className={`relative pl-6 space-y-3.5 border-l-2 border-border ml-3 py-1 ${collapsible ? 'max-h-72 overflow-y-auto pr-1' : ''}`}>
+            {visibleEvents.map((evt) => {
+              const dotColor = evt.isSystem
+                ? 'bg-slate-700 ring-2 ring-slate-200'
+                : evt.category === 'notes'
+                ? 'bg-amber-500 ring-2 ring-amber-100'
+                : evt.category === 'assign'
+                ? 'bg-accent ring-2 ring-blue-100'
+                : 'bg-primary ring-2 ring-indigo-100';
 
-            return (
-              <div key={evt.id} className="relative text-xs group">
-                <div className={`absolute -left-[31px] top-1.5 w-3 h-3 rounded-full border-2 border-card shadow-xs ${dotColor}`} />
+              return (
+                <div key={evt.id} className="relative text-xs group">
+                  <div className={`absolute -left-[31px] top-1.5 w-3 h-3 rounded-full border-2 border-card shadow-xs ${dotColor}`} />
 
-                <div className="flex flex-wrap items-center justify-between gap-1 mb-1.5 text-muted-foreground">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {evt.isSystem ? (
-                      <Badge variant="outline" className="bg-slate-100 text-slate-800 border-slate-300 text-[10px] gap-1 py-0">
-                        <Bot className="w-2.5 h-2.5" />
-                        <span>System-Initiated</span>
-                      </Badge>
-                    ) : (
-                      <Badge variant="secondary" className="text-[10px] gap-1 py-0 font-medium">
-                        <User className="w-2.5 h-2.5 text-primary" />
-                        <span>{evt.actorName}</span>
-                        <span className="text-muted-foreground">• {evt.actorRole}</span>
-                      </Badge>
-                    )}
-                    <span className="text-[10px] uppercase font-semibold text-muted-foreground">{evt.label}</span>
-                    {evt.isInternal && (
-                      <Badge variant="outline" className="text-[10px] py-0">Internal</Badge>
+                  <div className="flex flex-wrap items-center justify-between gap-1.5 mb-1.5 text-muted-foreground">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {evt.isSystem ? (
+                        <Badge variant="outline" className="bg-slate-100 text-slate-800 border-slate-300 text-[11px] gap-1 py-0.5">
+                          <Bot className="w-3 h-3" />
+                          <span>System-Initiated</span>
+                        </Badge>
+                      ) : (
+                        <Badge variant="secondary" className="text-[11px] gap-1 py-0.5 font-medium">
+                          <User className="w-3 h-3 text-primary" />
+                          <span>{evt.actorName}</span>
+                          <span className="text-muted-foreground">• {evt.actorRole}</span>
+                        </Badge>
+                      )}
+                      <span className="text-[11px] uppercase font-semibold text-muted-foreground">{evt.label}</span>
+                      {evt.isInternal && (
+                        <Badge variant="outline" className="text-[11px] py-0.5">Internal</Badge>
+                      )}
+                    </div>
+                    <span className="text-xs text-muted-foreground">{formatDisplayDate(evt.timestamp)}</span>
+                  </div>
+
+                  <div className={`p-3 rounded-xl border leading-relaxed break-words whitespace-pre-wrap ${
+                    evt.isSystem
+                      ? 'bg-slate-50/80 border-slate-200 text-slate-900'
+                      : evt.category === 'notes'
+                      ? 'bg-amber-50/70 border-amber-200 text-amber-950 font-medium'
+                      : 'bg-muted/30 border-border text-foreground font-normal'
+                  }`}>
+                    <p className="text-xs leading-relaxed">{evt.text}</p>
+
+                    {evt.beforeAfter && (
+                      <div className="mt-2 pt-2 border-t border-border/60 flex items-center gap-2 text-xs flex-wrap">
+                        <Tag className="w-3 h-3 text-muted-foreground shrink-0" />
+                        <span className="text-muted-foreground font-medium">{evt.beforeAfter.field}:</span>
+                        {evt.beforeAfter.before && (
+                          <>
+                            <span className="line-through text-muted-foreground/80 px-1.5 py-0.5 rounded bg-muted/50 border border-border/40">
+                              {evt.beforeAfter.before}
+                            </span>
+                            <ArrowRight className="w-3 h-3 text-muted-foreground" />
+                          </>
+                        )}
+                        <span className="font-bold text-primary px-1.5 py-0.5 rounded bg-primary/10 border border-primary/20">
+                          {evt.beforeAfter.after}
+                        </span>
+                      </div>
                     )}
                   </div>
-                  <span className="text-[11px] text-muted-foreground">{formatDisplayDate(evt.timestamp)}</span>
                 </div>
+              );
+            })}
+          </div>
+        )}
 
-                <div className={`p-3 rounded-xl border leading-relaxed break-words whitespace-pre-wrap ${
-                  evt.isSystem
-                    ? 'bg-slate-50/80 border-slate-200 text-slate-900'
-                    : evt.category === 'notes'
-                    ? 'bg-amber-50/70 border-amber-200 text-amber-950 font-medium'
-                    : 'bg-muted/30 border-border text-foreground font-normal'
-                }`}>
-                  <p className="text-xs">{evt.text}</p>
-
-                  {evt.beforeAfter && (
-                    <div className="mt-2 pt-2 border-t border-border/60 flex items-center gap-2 text-[11px] flex-wrap">
-                      <Tag className="w-3 h-3 text-muted-foreground shrink-0" />
-                      <span className="text-muted-foreground font-medium">{evt.beforeAfter.field}:</span>
-                      {evt.beforeAfter.before && (
-                        <>
-                          <span className="line-through text-muted-foreground/80 px-1.5 py-0.5 rounded bg-muted/50 border border-border/40">
-                            {evt.beforeAfter.before}
-                          </span>
-                          <ArrowRight className="w-3 h-3 text-muted-foreground" />
-                        </>
-                      )}
-                      <span className="font-bold text-primary px-1.5 py-0.5 rounded bg-primary/10 border border-primary/20">
-                        {evt.beforeAfter.after}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {!loading && pagination.total > 0 && (
-        <div className="pt-2 border-t border-border flex items-center justify-between text-xs text-muted-foreground">
-          <span>
-            Loaded <strong>{entries.length}</strong> of <strong>{pagination.total}</strong> activity events
-          </span>
-          {hasMore && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={loadingMore}
-              onClick={() => fetchPage(pagination.current_page + 1, { append: true })}
-              className="h-7 text-xs"
-            >
-              {loadingMore ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : null}
-              <span>Load More Activities</span>
-              {!loadingMore && <ChevronDown className="w-3 h-3 ml-1" />}
-            </Button>
-          )}
-        </div>
-      )}
+        {!loading && pagination.total > 0 && (
+          <div className="pt-2 border-t border-border flex items-center justify-between text-xs text-muted-foreground">
+            <span>
+              Loaded <strong>{entries.length}</strong> of <strong>{pagination.total}</strong> activity events
+            </span>
+            {hasMore && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={loadingMore}
+                onClick={() => fetchPage(pagination.current_page + 1, { append: true })}
+                className="h-7 text-xs"
+              >
+                {loadingMore ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : null}
+                <span>Load More Activities</span>
+                {!loadingMore && <ChevronDown className="w-3 h-3 ml-1" />}
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
