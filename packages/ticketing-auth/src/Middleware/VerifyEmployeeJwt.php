@@ -263,12 +263,33 @@ class VerifyEmployeeJwt
             ? \App\Models\Employee::where('email', $email)->first()
             : null;
 
-        if (!$existingEmployee && !$isAdminOrSuperAdmin && empty($payloadBranch) && empty($payloadBranchId)) {
-            Log::warning('VerifyEmployeeJwt: Branch required for new operational account', ['email' => $email, 'role' => $mappedRole]);
-            return response()->json([
-                'message' => 'Unprocessable Entity: Branch assignment is required for new operational accounts.',
-                'error_code' => 'BRANCH_REQUIRED_FOR_NEW_ACCOUNT'
-            ], 422);
+        if (empty($payloadBranch) && empty($payloadBranchId)) {
+            if ($existingEmployee && (!empty($existingEmployee->branch) || !empty($existingEmployee->branch_id))) {
+                $payloadBranch = $existingEmployee->branch ?: 'Main Branch';
+                $payloadBranchId = $existingEmployee->branch_id ?: 1;
+            } else {
+                $defaultBranchName = 'Main Branch';
+                $defaultBranchId = 1;
+                if (class_exists('App\Models\Branch')) {
+                    try {
+                        $activeBranch = \App\Models\Branch::where('is_active', true)->orderBy('id')->first();
+                        if ($activeBranch) {
+                            $defaultBranchName = $activeBranch->name ?: 'Main Branch';
+                            $defaultBranchId = (int) $activeBranch->id;
+                        }
+                    } catch (\Throwable $e) {
+                        // ignore and use fallback
+                    }
+                }
+                $payloadBranch = $defaultBranchName;
+                $payloadBranchId = $defaultBranchId;
+                Log::info('VerifyEmployeeJwt: Defaulted branch assignment for operational account', [
+                    'email' => $email,
+                    'role' => $mappedRole,
+                    'branch' => $payloadBranch,
+                    'branch_id' => $payloadBranchId,
+                ]);
+            }
         }
 
         $resolvedFirstName = trim((string) ($payload['first_name'] ?? ''));
@@ -351,11 +372,19 @@ class VerifyEmployeeJwt
                 $employee = \App\Models\Employee::where('email', $email)->first();
                 if ($employee) {
                     $updated = false;
-                    if (!empty($claims['branch']) && $employee->branch !== $claims['branch']) {
+                    if (!empty($claims['role']) && $employee->role !== $claims['role']) {
+                        $employee->role = $claims['role'];
+                        $updated = true;
+                    }
+                    if (!empty($claims['department']) && $employee->department !== $claims['department']) {
+                        $employee->department = $claims['department'];
+                        $updated = true;
+                    }
+                    if (!empty($claims['branch']) && (empty($employee->branch) || $employee->branch !== $claims['branch'])) {
                         $employee->branch = $claims['branch'];
                         $updated = true;
                     }
-                    if (!empty($claims['branch_id']) && (int)$employee->branch_id !== (int)$claims['branch_id']) {
+                    if (!empty($claims['branch_id']) && (empty($employee->branch_id) || (int)$employee->branch_id !== (int)$claims['branch_id'])) {
                         $employee->branch_id = (int)$claims['branch_id'];
                         $updated = true;
                     }
