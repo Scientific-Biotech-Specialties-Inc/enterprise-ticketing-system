@@ -89,7 +89,8 @@ axiosInstance.interceptors.response.use(
       error.response?.status === 401 &&
       !isAuthEndpoint(requestUrl) &&
       originalRequest &&
-      !originalRequest._retry
+      !originalRequest._retry &&
+      !originalRequest.skipAuthRedirect
     ) {
 
       // Retry original request

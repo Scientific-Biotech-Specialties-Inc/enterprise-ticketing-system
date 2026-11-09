@@ -1,15 +1,18 @@
 import Echo from 'laravel-echo';
 import Pusher from 'pusher-js';
 import tokenStore from '@/auth/tokenStore';
+import { createNoopEcho, isLocalHost, shouldEnableRealtime } from '@/services/realtimeClient';
 
 window.Pusher = Pusher;
 
-const appKey = 'messaging-local-key';
+const appKey = import.meta.env.VITE_MESSAGING_REVERB_APP_KEY || 'messaging-local-key';
 
-// WebSocket connects directly to the messaging-reverb container
-// which is exposed on port 6002 via docker-compose.
-const wsHost = window.location.hostname;
-const wsPort = 6002;
+// Local dev: WebSocket connects directly to the messaging-reverb container exposed on port 6002
+// via docker-compose. Cloud: only enabled when VITE_MESSAGING_REVERB_HOST is configured.
+const configuredHost = import.meta.env.VITE_MESSAGING_REVERB_HOST || '';
+const wsHost =
+  configuredHost || (isLocalHost(window.location.hostname) ? window.location.hostname : '');
+const wsPort = Number(import.meta.env.VITE_MESSAGING_REVERB_PORT) || 6002;
 const isHttps = window.location.protocol === 'https:';
 
 let echoInstance = null;
@@ -20,11 +23,17 @@ export const getMessagingEcho = () => {
     return echoInstance;
   }
 
+  if (!shouldEnableRealtime(wsHost)) {
+    echoInstance = createNoopEcho();
+    return echoInstance;
+  }
+
   echoInstance = new Echo({
     broadcaster: 'pusher',
     key: appKey,
     wsHost,
     wsPort,
+    wssPort: wsPort,
     forceTLS: isHttps,
     disableStats: true,
     enabledTransports: ['ws', 'wss'],
