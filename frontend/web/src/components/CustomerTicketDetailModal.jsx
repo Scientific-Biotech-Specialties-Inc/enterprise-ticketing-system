@@ -38,6 +38,7 @@ import { getFeedbackFormStatus, getWindowConfiguration, getCachedWindowConfigura
 import { getTicketTimeline, getTicketDetails } from '@/services/ticketService';
 import { getTicketMessages, sendTicketMessage } from '@/services/messagingService';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
+import useLiveTicket from '@/hooks/useLiveTicket';
 
 // ─── Formatting Helpers for Customer-Facing PHT & Relative Times ──────────────
 const formatPHT = (dateStr, { includeTime = true } = {}) => {
@@ -179,7 +180,10 @@ export default function CustomerTicketDetailModal({
     setReopenSuccessNotice('');
   }, [ticket]);
 
-  const effectiveTicket = currentTicket || ticket;
+  // Follow the backend while the modal is open so assignment/status changes (e.g. CS assigns the
+  // ticket) update the stepper circle and assignee row without closing and reopening the modal.
+  const { ticket: liveTicket, refresh: refreshLiveTicket } = useLiveTicket(currentTicket || ticket);
+  const effectiveTicket = liveTicket;
 
   // Role detection to differentiate customer vs staff
   const isCS = useMemo(() => {
@@ -358,6 +362,7 @@ export default function CustomerTicketDetailModal({
       setReopenReason('');
       setReopenSuccessNotice('Ticket successfully reopened.');
       setCurrentTicket((prev) => ({ ...prev, status: 'Reopened' }));
+      refreshLiveTicket();
       loadTimeline();
     } catch (err) {
       setReopenError(err?.response?.data?.message || err?.message || 'Failed to reopen ticket.');
@@ -397,7 +402,10 @@ export default function CustomerTicketDetailModal({
   const formattedSlaTarget = slaTargetDate ? formatPHT(slaTargetDate) : 'today';
 
   // Stepper Current Index
-  const currentStepIndex = getStepIndex(effectiveTicket?.status, isTicketAssigned);
+  const hasAssignment =
+    isTicketAssigned ||
+    (Array.isArray(effectiveTicket?.assigned) && effectiveTicket.assigned.length > 0);
+  const currentStepIndex = getStepIndex(effectiveTicket?.status, hasAssignment);
 
   // Baseline events when audit timeline is empty
   const displayEvents = useMemo(() => {
@@ -500,12 +508,6 @@ export default function CustomerTicketDetailModal({
               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#F5F6FA] text-[#5A6178] border border-[#D5D9E4]">
                 Filed {formatPHT(effectiveTicket.date_created || effectiveTicket.created_at || effectiveTicket.date)}
               </span>
-
-              {/* Legacy data-testid hidden anchors for existing test suite compatibility */}
-              <span className="sr-only">
-                {isSlaBreached ? 'SLA Breached' : 'SLA Target Resolution'}
-                {effectiveTicket.last_reminder_sent_at ? 'Last Reminder Sent' : ''}
-              </span>
             </div>
           </div>
 
@@ -522,7 +524,12 @@ export default function CustomerTicketDetailModal({
 
                   return (
                     <React.Fragment key={step.id}>
-                      <div className="flex flex-col items-center shrink-0">
+                      <div
+                        className="flex flex-col items-center shrink-0"
+                        data-step={step.id}
+                        data-state={isCompleted ? 'complete' : 'pending'}
+                        aria-current={isCurrent ? 'step' : undefined}
+                      >
                         {/* Step Circle Indicator */}
                         <div
                           className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${

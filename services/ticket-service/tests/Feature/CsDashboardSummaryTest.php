@@ -18,7 +18,7 @@ class CsDashboardSummaryTest extends TestCase
 
     private const BRANCH = 921;
     private const OTHER_BRANCH = 922;
-    private const NUMBERS = ['TCK-CSD-Q', 'TCK-CSD-OWN', 'TCK-CSD-DEL', 'TCK-CSD-OTHER', 'TCK-CSD-BR', 'TCK-CSD-DONE'];
+    private const NUMBERS = ['TCK-CSD-Q', 'TCK-CSD-OWN', 'TCK-CSD-DEL', 'TCK-CSD-OTHER', 'TCK-CSD-BR', 'TCK-CSD-DONE', 'TCK-CSD-NULL'];
     private const EMAILS = ['csd.agent@example.com', 'csd.other@example.com', 'csd.tech@example.com', 'csd.customer.role@example.com'];
 
     protected Employee $agentA;
@@ -166,6 +166,30 @@ class CsDashboardSummaryTest extends TestCase
         $this->assertNotContains('TCK-CSD-DONE', $titles, 'finished tickets stay out');
     }
 
+    public function test_main_branch_agent_still_sees_tickets_saved_without_a_branch(): void
+    {
+        // Regression: the dashboard showed 0 because `branch_id = 1` never matches a NULL branch_id,
+        // while every other dashboard treats the main branch as owning unbranched tickets.
+        DB::table('branches')->updateOrInsert(['id' => 1], [
+            'slug' => 'main', 'name' => 'Main Branch', 'code' => 'MAIN',
+            'region' => 'Test', 'is_active' => 1, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->agentA->update(['branch_id' => 1, 'branch' => 'main']);
+        DB::table('tickets')->insert([
+            'ticket_number' => 'TCK-CSD-NULL', 'title' => 'TCK-CSD-NULL', 'description' => 'x', 'created_by' => 9401,
+            'assigned_to' => null, 'branch_id' => null, 'problem_category_ID' => 1,
+            'ticket_type_ID' => 1, 'ticket_status_ID' => 1, 'priority_ID' => 1,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+
+        // Call the service with a large limit: the shared test database holds many older unbranched tickets.
+        $summary = app(CsDashboardSummaryService::class)->getSummary($this->agentA, 5000);
+        $titles = array_column($summary['queued_tickets']['items'], 'title');
+
+        $this->assertContains('TCK-CSD-NULL', $titles);
+        $this->assertNotContains('TCK-CSD-BR', $titles, 'a different branch is still excluded');
+    }
+
     public function test_non_cs_roles_are_rejected(): void
     {
         $this->actingAs($this->nonCs, 'api')->getJson('/api/cs-dashboard-summary')->assertStatus(403);
@@ -175,7 +199,7 @@ class CsDashboardSummaryTest extends TestCase
     {
         $service = new class(app(\App\Services\SLAService::class)) extends CsDashboardSummaryService {
             // Simulate the reassignment query failing.
-            protected function pendingReassignments(?int $branchId): array
+            protected function pendingReassignments(?object $branch): array
             {
                 throw new \RuntimeException('boom');
             }

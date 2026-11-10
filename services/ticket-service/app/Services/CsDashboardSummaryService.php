@@ -19,10 +19,10 @@ use Illuminate\Support\Facades\Log;
 class CsDashboardSummaryService
 {
     /** Resolved, Closed and Discarded tickets no longer need triage. */
-    private const FINISHED_STATUS_IDS = [3, 4, 9];
+    private const FINISHED_STATUS_IDS = \App\Support\TicketStatusBuckets::FINISHED_IDS;
 
     /** Resolved tickets are still tracked until the customer closes them, so only Closed and Discarded drop out. */
-    private const CLOSED_STATUS_IDS = [4, 9];
+    private const CLOSED_STATUS_IDS = \App\Support\TicketStatusBuckets::CLOSED_IDS;
     private const RESOLVED_STATUS_ID = 3;
 
     public function __construct(protected SLAService $slaService)
@@ -33,15 +33,18 @@ class CsDashboardSummaryService
     {
         $agentId = (int) ($user->emp_id ?? $user->id ?? 0);
         $branchId = isset($user->branch_id) && $user->branch_id !== null ? (int) $user->branch_id : null;
+        // Same branch rules as every other dashboard: the main branch also owns tickets saved with no
+        // branch (NULL, '' or a legacy 'main'), which a plain `branch_id = 1` comparison would hide.
+        $branch = $branchId !== null ? app(TicketDashboardService::class)->resolveBranchScope($user) : null;
 
         $partialErrors = [];
-        $queued = $this->section('queued_tickets', $partialErrors, fn () => $this->queued($branchId, $limit));
+        $queued = $this->section('queued_tickets', $partialErrors, fn () => $this->queued($branch, $limit));
         $monitoredRows = null;
-        $assigned = $this->section('assigned_monitored', $partialErrors, function () use ($agentId, $branchId, &$monitoredRows) {
-            $monitoredRows = $this->monitoredTickets($agentId, $branchId);
+        $assigned = $this->section('assigned_monitored', $partialErrors, function () use ($agentId, $branch, &$monitoredRows) {
+            $monitoredRows = $this->monitoredTickets($agentId, $branch);
             return $this->monitoredSummary($monitoredRows);
         });
-        $pending = $this->section('pending_reassignments', $partialErrors, fn () => $this->pendingReassignments($branchId));
+        $pending = $this->section('pending_reassignments', $partialErrors, fn () => $this->pendingReassignments($branch));
 
         $workload = null;
         if ($monitoredRows !== null) {
@@ -79,7 +82,7 @@ class CsDashboardSummaryService
         }
     }
 
-    private function ticketBase(?int $branchId, array $excludedStatusIds = self::FINISHED_STATUS_IDS)
+    private function ticketBase(?object $branch, array $excludedStatusIds = self::FINISHED_STATUS_IDS)
     {
         $q = DB::table('tickets as t')
             ->join('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
@@ -95,16 +98,16 @@ class CsDashboardSummaryService
                 DB::raw("TRIM(CONCAT(COALESCE(req.first_name, ''), ' ', COALESCE(req.last_name, ''))) as requester_name")
             );
 
-        if ($branchId !== null) {
-            $q->where('t.branch_id', $branchId);
+        if ($branch !== null) {
+            app(TicketDashboardService::class)->applyBranchTicketFilter($q, $branch);
         }
 
         return $q;
     }
 
-    private function queued(?int $branchId, int $limit): array
+    private function queued(?object $branch, int $limit): array
     {
-        $base = $this->ticketBase($branchId)->whereNull('t.assigned_to');
+        $base = $this->ticketBase($branch)->whereNull('t.assigned_to');
         $count = (clone $base)->count();
         $items = (clone $base)->orderBy('t.created_at')->limit($limit)->get()
             ->map(fn ($row) => $this->ticketItem($row))->values()->all();
@@ -113,11 +116,11 @@ class CsDashboardSummaryService
     }
 
     /** Unfinished tickets this agent is assigned to, owns in progress, or delegated to an employee. */
-    private function monitoredTickets(int $agentId, ?int $branchId)
+    private function monitoredTickets(int $agentId, ?object $branch)
     {
         $delegated = DB::table('ticket_assignments')->where('assigned_by', $agentId)->select('ticket_ID');
 
-        return $this->ticketBase($branchId, self::CLOSED_STATUS_IDS)
+        return $this->ticketBase($branch, self::CLOSED_STATUS_IDS)
             ->where(function ($q) use ($agentId, $delegated) {
                 $q->where('t.assigned_to', $agentId)
                     ->orWhere('t.in_progress_owner', $agentId)
@@ -138,7 +141,7 @@ class CsDashboardSummaryService
         return ['count' => $rows->count(), 'by_status' => $byStatus];
     }
 
-    protected function pendingReassignments(?int $branchId): array
+    protected function pendingReassignments(?object $branch): array
     {
         $q = DB::table('reassignment_requests as rr')
             ->join('tickets as t', 't.ticket_ID', '=', 'rr.ticket_id')
@@ -149,8 +152,8 @@ class CsDashboardSummaryService
                 't.ticket_number', 't.title',
                 DB::raw("TRIM(CONCAT(COALESCE(e.first_name, ''), ' ', COALESCE(e.last_name, ''))) as requested_by_name")
             );
-        if ($branchId !== null) {
-            $q->where('t.branch_id', $branchId);
+        if ($branch !== null) {
+            app(TicketDashboardService::class)->applyBranchTicketFilter($q, $branch);
         }
 
         $rows = $q->orderBy('rr.requested_at')->get();

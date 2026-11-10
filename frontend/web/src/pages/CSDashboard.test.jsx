@@ -141,7 +141,7 @@ describe('CSDashboard operational workspace (AC-12, AC-20)', () => {
     expect(screen.getAllByRole('button', { name: /retry/i }).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('opens the ticket detail modal from a triage action', async () => {
+  it('opens the ticket detail modal when a ticket row is clicked', async () => {
     ticketService.getCSDashboardSummary.mockResolvedValue(summary());
     ticketService.getTicketDetails.mockResolvedValue({
       ticket_ID: 301,
@@ -152,7 +152,8 @@ describe('CSDashboard operational workspace (AC-12, AC-20)', () => {
     render(<MemoryRouter><CSDashboard /></MemoryRouter>);
 
     await waitFor(() => expect(screen.getByText(/Radiology Workstation Setup/)).toBeInTheDocument());
-    fireEvent.click(screen.getAllByRole('button', { name: /triage/i })[0]);
+    // Row action buttons were removed (0a2dbd0); the whole row opens the ticket now.
+    fireEvent.click(screen.getAllByText(/Radiology Workstation Setup/)[0]);
 
     await waitFor(() => expect(ticketService.getTicketDetails).toHaveBeenCalledWith(301));
   });

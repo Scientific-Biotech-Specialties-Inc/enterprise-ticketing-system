@@ -53,6 +53,7 @@ import InternalNotesSection, { NoteList } from './InternalNotesSection';
 import TicketFeedbackSection from './feedback/TicketFeedbackSection';
 import { hasFeedbackBeenSubmitted } from '@/data/mockFeedbackData';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
+import useLiveTicket from '@/hooks/useLiveTicket';
 import { priorityColors } from '@/constants/employeeTickets';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -649,7 +650,10 @@ export function SendReminderDialog({ isOpen, onClose, onConfirm, ticket, assigne
 /* ─────────────────────────────────────────────
    TICKET SUMMARY VIEW (post-save / already assigned)
 ───────────────────────────────────────────── */
-export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpdate, readOnly = false }) {
+export function TicketSummary({ ticket: ticketProp, employees, onClose, onEdit, onStatusUpdate, readOnly = false }) {
+  // Follow the backend while the summary is open so assignee/status changes made elsewhere
+  // (another CS agent, the employee accepting) show up without closing and reopening it.
+  const { ticket } = useLiveTicket(ticketProp);
   useLockBodyScroll(!!ticket);
   const navigate = useNavigate();
   const [showRejectInput, setShowRejectInput] = useState(false);
@@ -806,7 +810,15 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
         console.warn('Failed to load internal notes from DB:', err);
       });
     }
-  }, [ticket]);
+    // Keyed on the incoming prop, not the live-merged `ticket`, so a background refresh does not
+    // reset in-progress local state or refetch notes. Live status is synced by the effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ticketProp]);
+
+  // Reflect server-side status changes (e.g. the assigned employee accepts the ticket).
+  useEffect(() => {
+    if (ticket?.status) setCurrentStatus(ticket.status);
+  }, [ticket?.status]);
 
   // Load available category and priority options dynamically
   useEffect(() => {
@@ -1693,6 +1705,7 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                       {currentStatus !== 'Closed' && currentStatus !== 'Resolved' && (
                         <button
                           type="button"
+                          aria-label="Edit priority"
                           onClick={() => setShowReclassifyEdit(true)}
                           className="text-[11px] font-semibold text-primary hover:text-accent underline cursor-pointer px-1 py-0.5 transition-colors"
                         >
@@ -1708,6 +1721,7 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
                       {currentStatus !== 'Closed' && currentStatus !== 'Resolved' && (
                         <button
                           type="button"
+                          aria-label="Edit category"
                           onClick={() => setShowReclassifyEdit(true)}
                           className="text-[11px] font-semibold text-primary hover:text-accent underline cursor-pointer px-1 py-0.5 transition-colors"
                         >
@@ -2357,7 +2371,6 @@ export function TicketSummary({ ticket, employees, onClose, onEdit, onStatusUpda
    ASSIGN MODAL
 ───────────────────────────────────────────── */
 export function AssignModal({ ticket, employees, departments, priorityOptions, onClose, onSave, onCloseTicket }) {
-  const navigate = useNavigate();
   // Close without assigning is offered only when the superadmin Transition Matrix
   // allows the ticket's current state to move to Closed (backend sends allowed_transitions).
   const canCloseWithoutAssigning = typeof onCloseTicket === 'function'
@@ -2377,22 +2390,6 @@ export function AssignModal({ ticket, employees, departments, priorityOptions, o
   const [previewFile, setPreviewFile] = useState(null);
   const [validationError, setValidationError] = useState('');
   const [saveError, setSaveError] = useState('');
-
-  const handleOpenMessages = () => {
-    onClose();
-    const tId = ticket?.ticket_ID || ticket?.id;
-    let path = '/cs/messages';
-    if (window.location.pathname.startsWith('/cs-manager')) {
-      path = '/cs-manager/messages';
-    } else if (window.location.pathname.startsWith('/service-manager')) {
-      path = '/service-manager/messages';
-    } else if (window.location.pathname.startsWith('/it-manager')) {
-      path = '/it-manager/messages';
-    } else if (window.location.pathname.startsWith('/employee')) {
-      path = '/employee/messages';
-    }
-    navigate(path, { state: { selectedTicketId: tId } });
-  };
 
   // Eligibility evaluation state
   const [eligibilityData, setEligibilityData] = useState(null);
@@ -2912,16 +2909,22 @@ export function AssignModal({ ticket, employees, departments, priorityOptions, o
                                 </div>
                               </div>
                             </div>
-                            <Badge
-                              variant={isAvailable ? 'emerald' : 'secondary'}
-                              className={`text-[10px] shrink-0 font-bold ${
-                                isAvailable
-                                  ? 'bg-emerald-100 text-emerald-700 border border-emerald-300'
-                                  : 'bg-slate-100 text-slate-600 border border-slate-300'
-                              }`}
-                            >
-                              {isAvailable ? 'Available' : 'Unavailable'}
-                            </Badge>
+                            {/* Spec 0035 AC-4: Online/Offline badge; offline staff stay selectable with a warning. */}
+                            <div className="flex flex-col items-end gap-1 shrink-0">
+                              <Badge
+                                variant={isAvailable ? 'emerald' : 'secondary'}
+                                className={`text-[10px] font-bold ${
+                                  isAvailable
+                                    ? 'bg-emerald-100 text-emerald-700 border border-emerald-300'
+                                    : 'bg-slate-100 text-slate-600 border border-slate-300'
+                                }`}
+                              >
+                                {isAvailable ? 'Online' : 'Offline'}
+                              </Badge>
+                              {!isAvailable && (
+                                <span className="text-[10px] text-slate-muted text-right">Offline, may not see this right away.</span>
+                              )}
+                            </div>
                           </label>
                         );
                       })}

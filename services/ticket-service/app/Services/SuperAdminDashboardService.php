@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\TicketStatusBuckets;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -117,14 +118,14 @@ class SuperAdminDashboardService
 
         // Active tickets (open, in progress, on hold)
         $activeTickets = DB::table('tickets')
-            ->whereNotIn('ticket_status_ID', [3, 4, 10, 12]) // resolved, closed, cancelled, discarded
+            ->whereNotIn('ticket_status_ID', TicketStatusBuckets::FINISHED_IDS)
             ->whereNull('resolved_at')
             ->count();
 
         // Escalated tickets
         $escalatedTickets = DB::table('tickets')
             ->whereNotNull('escalation_reason')
-            ->whereNotIn('ticket_status_ID', [4, 10, 12])
+            ->whereNotIn('ticket_status_ID', TicketStatusBuckets::CLOSED_IDS)
             ->count();
 
         // SLA breaches in range
@@ -313,12 +314,12 @@ class SuperAdminDashboardService
 
             // Active tickets
             $bActive = $bTickets->filter(function ($t) {
-                return !in_array((int) ($t->ticket_status_ID ?? 0), [3, 4, 10, 12], true) && empty($t->resolved_at);
+                return TicketStatusBuckets::isActive((int) ($t->ticket_status_ID ?? 0)) && empty($t->resolved_at);
             })->count();
 
             // Escalated tickets
             $bEscalated = $bTickets->filter(function ($t) {
-                return (!empty($t->is_escalated) || !empty($t->escalation_reason)) && !in_array((int) ($t->ticket_status_ID ?? 0), [4, 10, 12], true);
+                return (!empty($t->is_escalated) || !empty($t->escalation_reason)) && !in_array((int) ($t->ticket_status_ID ?? 0), TicketStatusBuckets::CLOSED_IDS, true);
             })->count();
 
             // SLA breaches

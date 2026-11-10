@@ -1754,6 +1754,27 @@ export const triggerEtlSync = async (payload = {}) => {
   return response.data;
 };
 
+/**
+ * Ask the AI service to pick a problem category from the supplied list.
+ * Resolves to `{ category_id: null }` on any failure so the customer simply chooses manually
+ * (no local fallback model).
+ */
+export const suggestProblemCategory = async (title, description, categories) => {
+  const none = { category_id: null, confidence: 0, reasoning: '', source: 'none' };
+  if (!description || !Array.isArray(categories) || categories.length === 0) return none;
+  try {
+    const response = await axiosInstance.post(`${AI_API_URL || '/api/ticketing/ai'}/classify-category`, {
+      title,
+      description,
+      categories: categories.map((c) => ({ id: c.problem_category_ID, name: c.category_name })),
+    });
+    return response.data?.data || none;
+  } catch (err) {
+    console.warn('AI category suggestion unavailable; category left for manual selection:', err);
+    return none;
+  }
+};
+
 export const classifyDepartment = async (title, description) => {
   try {
     const response = await axiosInstance.post(`${AI_API_URL || '/api/ticketing/ai'}/classify-department`, {
