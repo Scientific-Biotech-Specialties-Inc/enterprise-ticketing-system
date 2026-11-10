@@ -203,45 +203,55 @@ export default function StaffTimelineView({
       </div>
 
       {/* Events List */}
-      <div className="relative pl-4 space-y-3.5 border-l-2 border-[#1E2A78] ml-2 pt-1 max-h-72 overflow-y-auto pr-1">
+      <div className="max-h-72 overflow-y-auto pr-1 pt-1 ml-1 space-y-0">
         {filteredEvents.map((evt, idx) => {
           const isReminder = evt.type === 'reminder' || evt.type === 'reminder_sent';
           const isBreach = evt.type === 'sla_breach';
           const isReassign = evt.type === 'reassign';
+          const isLast = idx === filteredEvents.length - 1;
 
           return (
-            <div key={evt.id || idx} className="relative text-xs">
-              <div
-                className={`absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full ${
-                  isBreach
-                    ? 'bg-[#B42318]'
-                    : isReminder
-                    ? 'bg-indigo-600'
-                    : isReassign
-                    ? 'bg-amber-500'
-                    : 'bg-[#1E2A78]'
-                }`}
-              />
-
-              <div className="flex items-baseline justify-between gap-2 flex-wrap">
-                <p className="font-bold text-[#1B2033] text-xs">
-                  {evt.title}
-                  {evt.visibility === 'internal' && (
-                    <span className="ml-2 text-[10px] font-semibold text-[#5A6178] bg-slate-100 px-1.5 py-0.2 rounded">
-                      Staff only
-                    </span>
-                  )}
-                </p>
-                <span className="text-[11px] text-[#5A6178]">
-                  {formatPHT(evt.created_at)}
-                </span>
+            <div key={evt.id || idx} className="flex items-start gap-3 text-xs">
+              {/* Timeline Track: Centered Dot + Vertical Line */}
+              <div className="flex flex-col items-center self-stretch shrink-0 w-3">
+                <div
+                  className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1 ${
+                    isBreach
+                      ? 'bg-[#B42318]'
+                      : isReminder
+                      ? 'bg-indigo-600'
+                      : isReassign
+                      ? 'bg-amber-500'
+                      : 'bg-[#1E2A78]'
+                  }`}
+                />
+                {!isLast && (
+                  <div className="w-[2px] bg-[#1E2A78] flex-1 my-0.5" />
+                )}
               </div>
 
-              {evt.description && (
-                <p className="text-slate-600 mt-0.5 leading-relaxed break-words">
-                  {evt.description}
-                </p>
-              )}
+              {/* Event Content */}
+              <div className={`flex-1 min-w-0 ${!isLast ? 'pb-3.5' : 'pb-1'}`}>
+                <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                  <p className="font-bold text-[#1B2033] text-xs">
+                    {evt.title}
+                    {evt.visibility === 'internal' && (
+                      <span className="ml-2 text-[10px] font-semibold text-[#5A6178] bg-slate-100 px-1.5 py-0.5 rounded">
+                        Staff only
+                      </span>
+                    )}
+                  </p>
+                  <span className="text-[11px] text-[#5A6178] shrink-0">
+                    {formatPHT(evt.created_at)}
+                  </span>
+                </div>
+
+                {evt.description && (
+                  <p className="text-slate-600 mt-0.5 leading-relaxed break-words">
+                    {evt.description}
+                  </p>
+                )}
+              </div>
             </div>
           );
         })}

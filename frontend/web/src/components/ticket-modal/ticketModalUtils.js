@@ -69,8 +69,11 @@ export const getFileUrl = (file) => {
   if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('blob:') || raw.startsWith('data:')) {
     return safeUrl(raw);
   }
-  const clean = raw.replace(/^\/+/, '');
-  if (clean.startsWith('storage/')) return safeUrl(`/api/ticketing/attachment/${clean}`);
+  let clean = raw.replace(/^\/+/, '');
+  while (clean.startsWith('storage/')) {
+    clean = clean.substring('storage/'.length).replace(/^\/+/, '');
+  }
+  if (clean.startsWith('api/ticketing/attachment/storage/')) return safeUrl(`/${clean}`);
   if (clean.startsWith('api/ticketing/attachment/')) return safeUrl(`/${clean}`);
   if (clean.startsWith('api/storage/')) return safeUrl(`/api/ticketing/attachment/${clean.substring(4)}`);
   if (clean.startsWith('api/')) return safeUrl(`/${clean}`);
@@ -178,4 +181,127 @@ export const getAssigneeInfo = (ticket, employees = []) => {
     department,
   };
 };
+
+/**
+ * Auto-generate chronological timeline events for Technician View
+ * Never empty; sorted most recent first.
+ */
+export const buildTechnicianTimeline = (ticket) => {
+  if (!ticket) return [];
+  const events = [];
+
+  // Check for declined reassignment
+  const isDeclined = Boolean(
+    ticket.reassignmentDenied ||
+    ticket.reassignmentDisapproved ||
+    ticket.reassignmentFailed ||
+    ticket.deniedReassignment ||
+    ticket.reassignmentDenyReason ||
+    ticket.disapprovalReason ||
+    ticket.reassignment_reject_reason ||
+    String(ticket.reassignmentStatus || '').toLowerCase() === 'denied' ||
+    String(ticket.reassignmentStatus || '').toLowerCase() === 'rejected' ||
+    String(ticket.reassignmentStatus || '').toLowerCase() === 'disapproved'
+  );
+
+  const declineReason =
+    ticket.reassignmentDenyReason ||
+    ticket.disapprovalReason ||
+    ticket.reassignmentDisapprovalReason ||
+    ticket.reassignmentDenialReason ||
+    ticket.reassignment_reject_reason ||
+    ticket.denialReason ||
+    '';
+
+  if (isDeclined) {
+    events.push({
+      id: 'evt-declined',
+      title: 'Reassignment request declined',
+      description: declineReason ? `Reason: "${declineReason}"` : 'No reason given',
+      timestamp: ticket.reassignmentDeniedAt || ticket.disapprovedAt || ticket.updated_at || ticket.lastUpdate || ticket.date,
+      variant: 'warning',
+    });
+  }
+
+  // Check for reassignment requested
+  const isRequested = Boolean(
+    ticket.reassignmentRequested ||
+    ticket.reassignmentReason ||
+    ticket.reassignment_reason ||
+    String(ticket.reassignmentStatus || '').toLowerCase() === 'pending' ||
+    ticket.status === 'Pending Reassignment' ||
+    isDeclined
+  );
+
+  if (isRequested) {
+    const reqReason = ticket.reassignmentReason || ticket.reassignment_reason || '';
+    events.push({
+      id: 'evt-requested',
+      title: 'You requested reassignment',
+      description: reqReason ? `Reason: "${reqReason}"` : null,
+      timestamp: ticket.reassignmentRequestedAt || ticket.updated_at || ticket.date,
+      variant: 'info',
+    });
+  }
+
+  // Assigned to technician (always present in assigned view)
+  events.push({
+    id: 'evt-assigned',
+    title: 'Assigned to you',
+    description: null,
+    timestamp: ticket.assigned_at || ticket.date || ticket.created_at,
+    variant: 'primary',
+  });
+
+  // Ticket submitted
+  if (ticket.date || ticket.created_at) {
+    events.push({
+      id: 'evt-submitted',
+      title: 'Submitted',
+      description: ticket.customer ? `Filed by ${ticket.customer}` : null,
+      timestamp: ticket.created_at || ticket.date,
+      variant: 'neutral',
+    });
+  }
+
+  // Merge any explicit ticket.timeline events if present
+  if (Array.isArray(ticket.timeline) && ticket.timeline.length > 0) {
+    ticket.timeline.forEach((item, idx) => {
+      const isReminder = item.type === 'reminder' || item.action_type === 'reminder_sent' || item.event_type === 'reminder_sent';
+      const text = String(item.text || item.title || item.description || (isReminder ? 'CS Reminder' : ''));
+      const title = isReminder ? 'CS Reminder' : text;
+      const desc = isReminder ? (item.text || item.title || item.description || null) : (item.details || null);
+      if (title && !events.some((e) => e.title.toLowerCase() === title.toLowerCase())) {
+        events.push({
+          id: item.id || `raw-${idx}`,
+          title: title,
+          description: desc,
+          timestamp: item.timestamp || item.date || item.created_at || ticket.date,
+          variant: isReminder ? 'info' : 'neutral',
+        });
+      }
+    });
+  }
+
+  // If reminder timestamp is present on ticket and not yet in events
+  if (ticket.last_reminder_sent_at && !events.some((e) => e.title === 'CS Reminder')) {
+    events.push({
+      id: 'evt-reminder',
+      title: 'CS Reminder',
+      description: 'Customer Service dispatched a reminder prompt regarding this ticket',
+      timestamp: ticket.last_reminder_sent_at,
+      variant: 'info',
+    });
+  }
+
+  // Sort most recent first
+  events.sort((a, b) => {
+    const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+    const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+    return timeB - timeA;
+  });
+
+  return events;
+};
+
 

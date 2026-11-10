@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   X,
   RotateCcw,
-  Plus,
+  MessageSquare,
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
@@ -32,6 +32,7 @@ import { isFeedbackFormEnabled } from '@/data/mockFeedbackData';
 import { getWindowConfiguration, getCachedWindowConfiguration } from '@/services/configurationService';
 import { getTicketTimeline } from '@/services/ticketService';
 import { getTicketMessages } from '@/services/messagingService';
+import { useAuth } from '@/context/AuthContext';
 
 export default function CustomerTicketDetailModal({
   ticket,
@@ -48,6 +49,34 @@ export default function CustomerTicketDetailModal({
   readOnly = false,
 }) {
   const navigate = useNavigate();
+  const { user } = useAuth();
+
+  const isCSSide = useMemo(() => {
+    const role = String(user?.role || '').toLowerCase();
+    if (
+      role === 'cs' ||
+      role === 'cs_manager' ||
+      role === 'service_manager' ||
+      role === 'it_manager' ||
+      role === 'admin' ||
+      role === 'super_admin' ||
+      role === 'employee' ||
+      role === 'service'
+    ) {
+      return true;
+    }
+    if (typeof window !== 'undefined') {
+      const p = window.location.pathname;
+      return (
+        p.startsWith('/cs') ||
+        p.startsWith('/it-manager') ||
+        p.startsWith('/service-manager') ||
+        p.startsWith('/employee')
+      );
+    }
+    return false;
+  }, [user?.role]);
+
   const [currentTicket, setCurrentTicket] = useState(ticket);
   const [activeTab, setActiveTab] = useState('details'); // 'details' | 'updates' | 'files'
   const [descExpanded, setDescExpanded] = useState(false);
@@ -279,12 +308,39 @@ export default function CustomerTicketDetailModal({
         header={
           <ModalHeader
             ticketId={ticketFormattedId}
-            isStaffView={false}
             onClose={onClose}
           />
         }
         footer={
           <ModalFooter
+            leftContent={
+              isCSSide ? (
+                <button
+                  type="button"
+                  onClick={handleRedirectToMessages}
+                  disabled={!assignee.isAssigned}
+                  className="min-h-[44px] px-4 rounded-lg border border-[#D5D9E4] hover:bg-[#F5F6FA] text-xs sm:text-sm font-semibold text-[#1B2033] transition-colors cursor-pointer inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title={
+                    assignee.isAssigned
+                      ? `Connect with ${assignee.name || 'the assigned employee'} regarding this ticket`
+                      : 'No employee assigned to this ticket yet'
+                  }
+                >
+                  <MessageSquare className="w-4 h-4 text-[#1E2A78]" />
+                  <span>Message the assigned employee</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleRedirectToMessages}
+                  className="min-h-[44px] px-4 rounded-lg border border-[#D5D9E4] hover:bg-[#F5F6FA] text-xs sm:text-sm font-semibold text-[#1B2033] transition-colors cursor-pointer inline-flex items-center gap-2"
+                  title="Connect with Customer Support regarding this ticket"
+                >
+                  <MessageSquare className="w-4 h-4 text-[#1E2A78]" />
+                  <span>Message Customer Support</span>
+                </button>
+              )
+            }
             primaryAction={
               allowReopen &&
               (effectiveTicket.status === 'Closed' || effectiveTicket.status === 'Resolved') &&
@@ -297,16 +353,7 @@ export default function CustomerTicketDetailModal({
                   <RotateCcw className="w-3.5 h-3.5" />
                   <span>Reopen ticket</span>
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleRedirectToMessages}
-                  className="min-h-[44px] px-4 rounded-lg border border-[#D5D9E4] hover:bg-[#F5F6FA] text-xs sm:text-sm font-semibold text-[#1B2033] transition-colors cursor-pointer inline-flex items-center gap-1.5"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add info / upload file</span>
-                </button>
-              )
+              ) : null
             }
           />
         }
@@ -326,6 +373,7 @@ export default function CustomerTicketDetailModal({
           title={effectiveTicket.title}
           priority={effectiveTicket.priority}
           dateFiled={effectiveTicket.date_created || effectiveTicket.created_at || effectiveTicket.date}
+          hideDateBadge={true}
           customBadges={
             <span className="sr-only">
               {isSlaBreached && <span>SLA Breached</span>}
@@ -414,19 +462,25 @@ export default function CustomerTicketDetailModal({
               <p className="text-[11px] font-bold uppercase tracking-wider text-[#5A6178] mb-2">
                 LATEST UPDATES
               </p>
-              <div className="relative pl-4 space-y-3 border-l-2 border-[#1E2A78] ml-2">
-                {displayEvents.slice(0, 3).map((evt, idx) => {
+              <div className="space-y-0 ml-1">
+                {displayEvents.slice(0, 3).map((evt, idx, arr) => {
                   const isReminder = evt.type === 'reminder' || evt.action_type === 'reminder_sent' || evt.event_type === 'reminder_sent';
                   const title = isReminder ? 'CS Reminder' : (evt.title || evt.description || evt.details || 'Status update logged');
+                  const isLast = idx === arr.length - 1;
                   return (
-                    <div key={evt.id || evt.log_id || idx} className="relative text-xs">
-                      <div className="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-[#1E2A78]" />
-                      <p className="font-bold text-[#1B2033]">
-                        {title}
-                      </p>
-                      <span className="text-[11px] text-[#5A6178]">
-                        {formatPHT(evt.created_at || evt.timestamp)}
-                      </span>
+                    <div key={evt.id || evt.log_id || idx} className="flex items-start gap-3 text-xs">
+                      <div className="flex flex-col items-center self-stretch shrink-0 w-3">
+                        <div className="w-2.5 h-2.5 rounded-full shrink-0 mt-1 bg-[#1E2A78]" />
+                        {!isLast && <div className="w-[2px] bg-[#1E2A78] flex-1 my-0.5" />}
+                      </div>
+                      <div className={`flex-1 min-w-0 ${!isLast ? 'pb-3' : 'pb-0.5'}`}>
+                        <p className="font-bold text-[#1B2033]">
+                          {title}
+                        </p>
+                        <span className="text-[11px] text-[#5A6178]">
+                          {formatPHT(evt.created_at || evt.timestamp)}
+                        </span>
+                      </div>
                     </div>
                   );
                 })}

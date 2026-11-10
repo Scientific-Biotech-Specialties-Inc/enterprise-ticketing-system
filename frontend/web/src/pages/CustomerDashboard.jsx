@@ -31,6 +31,7 @@ import { DataTableSkeleton } from '@/components/ui/data-table';
 import { ConfirmationModal } from '@/components/ui/confirmation-modal';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/context/ToastContext';
+import Pagination from '@/components/Pagination';
 
 const getStoredUser = () => {
   try {
@@ -195,6 +196,17 @@ export default function CustomerDashboard() {
   };
 
   const handleViewTicket = async (t) => {
+    if (t.status === 'Resolved' || t.status === 'Closed') {
+      const ticketId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
+      navigate(`/history/${ticketId}`, {
+        state: {
+          ticket: t,
+          backPath: '/customer-dashboard',
+        },
+      });
+      return;
+    }
+
     const isMock = !!t.isMock;
     if (isMock) {
       setSelectedTicket({
@@ -514,42 +526,12 @@ export default function CustomerDashboard() {
                   <strong>{Math.min(currentPage * pageSize, recentTickets.length)}</strong> of{' '}
                   <strong>{recentTickets.length}</strong> tickets
                 </span>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    disabled={currentPage === 1}
-                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 text-dark-slate hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition font-medium cursor-pointer"
-                  >
-                    <ChevronLeft className="h-3.5 w-3.5" />
-                    <span>Previous</span>
-                  </button>
-                  <div className="flex items-center gap-1">
-                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
-                      <button
-                        key={pageNum}
-                        type="button"
-                        onClick={() => setCurrentPage(pageNum)}
-                        className={`w-7 h-7 rounded-lg text-xs font-semibold transition cursor-pointer ${
-                          pageNum === currentPage
-                            ? 'bg-[#252578] text-white shadow-xs'
-                            : 'text-dark-slate hover:bg-slate-100 border border-transparent'
-                        }`}
-                      >
-                        {pageNum}
-                      </button>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    disabled={currentPage === totalPages}
-                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 text-dark-slate hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition font-medium cursor-pointer"
-                  >
-                    <span>Next</span>
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
+                <Pagination
+                  totalItems={recentTickets.length}
+                  itemsPerPage={pageSize}
+                  currentPage={currentPage}
+                  onPageChange={setCurrentPage}
+                />
               </div>
             )}
           </>

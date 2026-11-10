@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
-import { Bot, Send, Paperclip, ChevronDown, ChevronUp, X, CheckCircle, AlertTriangle, Plus, MessageSquare, Trash2, ArrowLeft, Clock } from 'lucide-react';
+import { Bot, Send, Paperclip, ChevronDown, ChevronUp, X, CheckCircle, CheckCircle2, AlertTriangle, Plus, MessageSquare, Trash2, ArrowLeft, Clock } from 'lucide-react';
 import axiosInstance from '@/api/axiosInstance';
 import { AI_API_URL } from '@/config/api.config';
 import { getTicketFormOptions, createTicket, getCustomerTickets, saveTicketDraft } from '@/services/ticketService';

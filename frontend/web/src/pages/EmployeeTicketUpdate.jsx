@@ -491,7 +491,7 @@ export default function EmployeeTicketUpdate() {
   };
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
+    <div className="space-y-6 w-full min-w-0 max-w-full">
       {/* Back button */}
       <div>
         <Button
@@ -1230,21 +1230,29 @@ export default function EmployeeTicketUpdate() {
                   {timelineSortOrder === 'asc' ? 'Oldest First' : 'Newest First'}
                 </Button>
               </div>
-              <div className="relative pl-6 space-y-4 border-l border-border ml-3 py-1.5">
-                {sortedTimelineEvents.map((evt, idx) => (
-                  <div key={evt.id || idx} className="relative text-sm">
-                    <div className="absolute -left-[31px] top-1.5 w-2.5 h-2.5 rounded-full border-2 border-card bg-primary" />
-                    <div className="flex justify-between items-center text-xs text-muted-foreground mb-1">
-                      <span className="font-bold text-primary uppercase text-[10px] tracking-wider">
-                        {evt.type === 'system' ? 'System' : evt.type || 'Update'}
-                      </span>
-                      <span>{formatDisplayDate(evt.timestamp)}</span>
+              <div className="space-y-0 ml-1 py-1.5">
+                {sortedTimelineEvents.map((evt, idx) => {
+                  const isLast = idx === sortedTimelineEvents.length - 1;
+                  return (
+                    <div key={evt.id || idx} className="flex items-start gap-3.5 text-sm">
+                      <div className="flex flex-col items-center self-stretch shrink-0 w-3.5">
+                        <div className="w-2.5 h-2.5 rounded-full shrink-0 mt-1 border-2 border-card bg-primary" />
+                        {!isLast && <div className="w-[2px] bg-border flex-1 my-0.5" />}
+                      </div>
+                      <div className={`flex-1 min-w-0 ${!isLast ? 'pb-4' : 'pb-1'}`}>
+                        <div className="flex justify-between items-center text-xs text-muted-foreground mb-1">
+                          <span className="font-bold text-primary uppercase text-[10px] tracking-wider">
+                            {evt.type === 'system' ? 'System' : evt.type || 'Update'}
+                          </span>
+                          <span>{formatDisplayDate(evt.timestamp)}</span>
+                        </div>
+                        <p className="text-foreground leading-relaxed font-normal bg-muted/30 p-2.5 rounded-lg border border-border break-words whitespace-pre-wrap">
+                          {evt.text}
+                        </p>
+                      </div>
                     </div>
-                    <p className="text-foreground leading-relaxed font-normal bg-muted/30 p-2.5 rounded-lg border border-border break-words whitespace-pre-wrap">
-                      {evt.text}
-                    </p>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 

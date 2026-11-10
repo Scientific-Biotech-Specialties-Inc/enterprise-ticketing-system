@@ -1748,23 +1748,31 @@ export default function MessagingPage() {
                           No history events recorded for this ticket.
                         </div>
                       ) : (
-                        <div className="relative pl-4 space-y-4 before:absolute before:left-1.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-gray-200">
-                          {ticketHistory.map((evt, idx) => (
-                            <div key={evt.id || idx} className="relative text-left">
-                              <span className="absolute -left-[19px] top-1 w-2.5 h-2.5 rounded-full bg-[#252578] ring-4 ring-white" />
-                              <p className="text-xs font-semibold text-gray-800 leading-snug">
-                                {evt.text || evt.details || evt.action || 'Ticket updated'}
-                              </p>
-                              {evt.author && (
-                                <p className="text-[11px] text-gray-500 mt-0.5 font-medium">
-                                  By: {evt.author}
-                                </p>
-                              )}
-                              <p className="text-[10px] text-gray-400 mt-0.5">
-                                {formatDisplayDate(evt.timestamp || evt.created_at)}
-                              </p>
-                            </div>
-                          ))}
+                        <div className="space-y-0 ml-1">
+                          {ticketHistory.map((evt, idx) => {
+                            const isLast = idx === ticketHistory.length - 1;
+                            return (
+                              <div key={evt.id || idx} className="flex items-start gap-3 text-left text-xs">
+                                <div className="flex flex-col items-center self-stretch shrink-0 w-3">
+                                  <span className="w-2.5 h-2.5 rounded-full shrink-0 mt-1 bg-[#252578] ring-4 ring-white" />
+                                  {!isLast && <div className="w-[2px] bg-gray-200 flex-1 my-0.5" />}
+                                </div>
+                                <div className={`flex-1 min-w-0 ${!isLast ? 'pb-4' : 'pb-1'}`}>
+                                  <p className="text-xs font-semibold text-gray-800 leading-snug">
+                                    {evt.text || evt.details || evt.action || 'Ticket updated'}
+                                  </p>
+                                  {evt.author && (
+                                    <p className="text-[11px] text-gray-500 mt-0.5 font-medium">
+                                      By: {evt.author}
+                                    </p>
+                                  )}
+                                  <p className="text-[10px] text-gray-400 mt-0.5">
+                                    {formatDisplayDate(evt.timestamp || evt.created_at)}
+                                  </p>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>

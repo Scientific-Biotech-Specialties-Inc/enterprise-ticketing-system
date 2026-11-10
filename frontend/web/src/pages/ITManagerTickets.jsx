@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
 import { DataTableSkeleton, DataTableEmptyState } from '@/components/ui/data-table';
+import Pagination from '@/components/Pagination';
 import { useAuth } from '@/context/AuthContext';
 import { useBranch } from '@/context/BranchContext';
 import SlaStatusBadge, { getTicketSlaDueDate, getTicketSlaStatus } from '@/components/sla/SlaStatusBadge';
@@ -623,29 +624,12 @@ export default function ITManagerTickets() {
               <strong>{Math.min(page * itemsPerPage, filteredTickets.length)}</strong> of{' '}
               <strong>{filteredTickets.length}</strong> tickets
             </div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="h-8 text-xs cursor-pointer"
-              >
-                Previous
-              </Button>
-              <span className="font-semibold text-foreground px-2">
-                Page {page} of {totalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page >= totalPages}
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                className="h-8 text-xs cursor-pointer"
-              >
-                Next
-              </Button>
-            </div>
+            <Pagination
+              totalItems={filteredTickets.length}
+              itemsPerPage={itemsPerPage}
+              currentPage={page}
+              onPageChange={setPage}
+            />
           </div>
         )}
       </div>

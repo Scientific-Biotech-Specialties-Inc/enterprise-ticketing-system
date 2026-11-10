@@ -16,6 +16,10 @@ export default function TicketTitleBlock({
   description,
   pendingReassignment = false,
   customBadges = null,
+  statusPill = null,
+  subtitle = null,
+  hideStatusBadge = false,
+  hideDateBadge = false,
 }) {
   const [descExpanded, setDescExpanded] = useState(false);
 
@@ -49,6 +53,14 @@ export default function TicketTitleBlock({
           </span>
         )}
 
+        {statusPill && (
+          typeof statusPill === 'string' ? (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#EDF2FE] text-[#335CFF]">
+              {statusPill}
+            </span>
+          ) : statusPill
+        )}
+
         {pendingReassignment && (
           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300">
             Pending reassignment
@@ -69,13 +81,13 @@ export default function TicketTitleBlock({
           </span>
         )}
 
-        {status && !pendingReassignment && (
+        {status && !pendingReassignment && !hideStatusBadge && (
           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
             {status}
           </span>
         )}
 
-        {dateFiled && (
+        {dateFiled && !hideDateBadge && (
           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#F5F6FA] text-[#5A6178] border border-[#D5D9E4]">
             Filed {formatPHT(dateFiled)}
           </span>
@@ -83,6 +95,13 @@ export default function TicketTitleBlock({
 
         {customBadges}
       </div>
+
+      {/* One-line Subtitle (Equipment Name · Equipment ID · Issue Summary) */}
+      {subtitle && (
+        <p className="text-xs text-[#5A6178] font-medium leading-relaxed break-words pt-0.5">
+          {subtitle}
+        </p>
+      )}
 
       {/* Short description (13px) */}
       {description && (

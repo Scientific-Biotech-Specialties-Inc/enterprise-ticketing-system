@@ -99,8 +99,6 @@ export default function CSDashboard() {
 
   // Active view toggle: 'all' (Overview), 'attention' (Immediate Attention), 'queued' (Incoming Queue), 'assigned' (Assigned & Monitored)
   const [activeSection, setActiveSection] = useState('all');
-  // In 'all' overview, Section I (Immediate Attention) is compact/chevron-collapsible
-  const [isAttentionExpanded, setIsAttentionExpanded] = useState(false);
 
   // ─── SLA helper ───────────────────────────────────────────────────────────
   // ─── Load the signed in agent's own summary ─────────────────────────────────
@@ -260,7 +258,51 @@ export default function CSDashboard() {
         badgeVariant="emerald"
       />
 
-      {/* Visual Navigation Pill Switcher (Preventing Information Overload) */}
+      {/* ═════════════════════════════════════════════════════════════════════ */}
+      {/* CONSOLIDATED HERO KPI ROW (4 MACRO OPERATIONAL CARDS)                 */}
+      {/* ═════════════════════════════════════════════════════════════════════ */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <MetricCard
+          title="Queued Tickets"
+          value={workloadMetrics.queuedCount}
+          subtitle="Awaiting CS review"
+          icon={<Inbox className="w-4 h-4 text-accent" />}
+          loading={loadingQueued}
+          onClick={() => navigate('/cs/incoming')}
+          className="cursor-pointer hover:shadow-md transition-shadow"
+        />
+        <MetricCard
+          title="Assigned Workload"
+          value={workloadMetrics.assignedCount}
+          subtitle="Technicians actively assigned"
+          icon={<UserCheck className="w-4 h-4 text-primary" />}
+          loading={loadingWorkload}
+          onClick={() => navigate('/cs/assigned')}
+          className="cursor-pointer hover:shadow-md transition-shadow"
+        />
+        <MetricCard
+          title="Approaching SLA"
+          value={workloadMetrics.atRiskCount}
+          subtitle="Near threshold (warning)"
+          icon={<Clock className="w-4 h-4 text-amber-600" />}
+          variant="amber"
+          loading={loadingWorkload}
+          onClick={() => navigate('/cs/incoming?sla=At+Risk')}
+          className="cursor-pointer hover:shadow-md transition-shadow"
+        />
+        <MetricCard
+          title="SLA Breached"
+          value={workloadMetrics.breachedCount}
+          subtitle="Resolution overdue"
+          icon={<AlertTriangle className="w-4 h-4 text-rose-600" />}
+          variant="crimson"
+          loading={loadingWorkload}
+          onClick={() => navigate('/cs/incoming?sla=Breached')}
+          className="cursor-pointer hover:shadow-md transition-shadow"
+        />
+      </div>
+
+      {/* Visual Navigation Pill Switcher */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-1 bg-muted/40 p-1.5 rounded-xl border border-border w-fit flex-wrap">
           <Button
@@ -317,168 +359,37 @@ export default function CSDashboard() {
         </div>
       )}
 
-      {/* ═════════════════════════════════════════════════════════════════════ */}
-      {/* SECTION 1: TICKETS NEEDING IMMEDIATE ATTENTION                       */}
-      {/* ═════════════════════════════════════════════════════════════════════ */}
+      {/* SECTION 1: TICKETS NEEDING IMMEDIATE ATTENTION */}
       {(activeSection === 'all' || activeSection === 'attention') && (
-        activeSection === 'all' && !isAttentionExpanded ? (
-          /* Compact Collapsed Section 1: Immediate Attention */
-          <div className="rounded-2xl border border-border bg-card p-4 sm:p-5 shadow-xs transition-all duration-200">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div
-                className="flex items-start sm:items-center gap-3 min-w-0 cursor-pointer select-none flex-1 group"
-                onClick={() => setIsAttentionExpanded(true)}
-                title="Click to expand Immediate Attention"
-              >
-                <Badge
-                  variant="outline"
-                  className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 border-rose-300 text-rose-700 bg-rose-50 rounded-full shrink-0 group-hover:bg-rose-100 transition-colors"
-                >
-                  Immediate Attention
-                </Badge>
-
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h2 className="text-sm sm:text-base font-bold text-foreground group-hover:text-primary transition-colors">
-                      Section I: Immediate Attention
-                    </h2>
-                    {attentionTickets.length === 0 ? (
-                      <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-2.5 py-0.5 rounded-full">
-                        All clear: no urgent tickets pending
-                      </span>
-                    ) : (
-                      <span className="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-0.5 rounded-full">
-                        {attentionTickets.length} urgent ticket{attentionTickets.length === 1 ? '' : 's'} requiring action
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                    <span className={cn(workloadMetrics.breachedCount > 0 && "text-rose-700 font-semibold")}>
-                      SLA breached <strong className="font-semibold">{workloadMetrics.breachedCount}</strong>
-                    </span>
-                    <span>·</span>
-                    <span className={cn(workloadMetrics.atRiskCount > 0 && "text-amber-700 font-semibold")}>
-                      Approaching SLA <strong className="font-semibold">{workloadMetrics.atRiskCount}</strong>
-                    </span>
-                    <span>·</span>
-                    <span className={cn(workloadMetrics.pendingReassignCount > 0 && "text-amber-700 font-semibold")}>
-                      Pending reassign <strong className="font-semibold">{workloadMetrics.pendingReassignCount}</strong>
-                    </span>
-                    <span>·</span>
-                    <span>Critical priority <strong className="font-semibold text-foreground">{workloadMetrics.escalatedCount}</strong></span>
-                  </div>
-                </div>
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
               </div>
-
-              <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => navigate('/cs/incoming?sla=Breached')}
-                  className="text-xs text-rose-700 hover:text-rose-800 hover:bg-rose-50 gap-1.5 font-medium"
-                >
-                  <span>Open queue</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setIsAttentionExpanded(true)}
-                  className="text-xs gap-1.5 h-8 px-2.5 text-muted-foreground hover:text-foreground border-border hover:bg-muted/50"
-                  aria-label="Expand Immediate Attention details"
-                >
-                  <span className="hidden sm:inline">Expand</span>
-                  <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                </Button>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-foreground">Section I: Immediate Attention</h2>
+                  {attentionTickets.length > 0 ? (
+                    <Badge variant="destructive" className="text-[10px]">{attentionTickets.length} Urgent</Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">All Clear</Badge>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  SLA breached, approaching breach, and pending technician reassignment tickets requiring prompt CS traffic handling.
+                </p>
               </div>
             </div>
-          </div>
-        ) : (
-          /* Full Expanded Section 1 */
-          <div className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-6">
-            {/* Section Banner Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center shrink-0">
-                  <AlertTriangle className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-base font-bold text-foreground">Section I: Immediate Attention</h2>
-                    <Badge variant="destructive" className="text-[10px]">Action Required</Badge>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    SLA breached, approaching breach, and pending technician reassignment tickets requiring prompt CS traffic handling.
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => navigate('/cs/incoming?sla=Breached')}
-                  className="text-xs gap-1.5 shrink-0"
-                >
-                  <span>Open Incoming Queue</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </Button>
-                {activeSection === 'all' && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setIsAttentionExpanded(false)}
-                    className="text-xs gap-1.5 h-8 px-2.5 text-muted-foreground hover:text-foreground border-border hover:bg-muted/50"
-                    aria-label="Collapse Immediate Attention details"
-                  >
-                    <span className="hidden sm:inline">Collapse</span>
-                    <ChevronUp className="w-4 h-4 text-muted-foreground" />
-                  </Button>
-                )}
-              </div>
-            </div>
-
-          {/* Attention Metric Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <MetricCard
-              title="SLA Breached"
-              value={workloadMetrics.breachedCount}
-              subtitle="Resolution overdue"
-              icon={<AlertTriangle className="w-4 h-4 text-rose-600" />}
-              variant="crimson"
-              loading={loadingWorkload}
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => navigate('/cs/incoming?sla=Breached')}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-            />
-            <MetricCard
-              title="Approaching SLA"
-              value={workloadMetrics.atRiskCount}
-              subtitle="Near threshold"
-              icon={<Clock className="w-4 h-4 text-amber-600" />}
-              variant="amber"
-              loading={loadingWorkload}
-              onClick={() => navigate('/cs/incoming?sla=At+Risk')}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-            />
-            <MetricCard
-              title="Pending Reassign"
-              value={workloadMetrics.pendingReassignCount}
-              subtitle="Technician requests"
-              icon={<ShieldAlert className="w-4 h-4 text-amber-600" />}
-              variant="amber"
-              loading={loadingWorkload}
-              onClick={() => navigate('/cs/incoming?status=Pending+Reassignment')}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-            />
-            <MetricCard
-              title="Critical Priority"
-              value={workloadMetrics.escalatedCount}
-              subtitle="Urgent triage"
-              icon={<AlertTriangle className="w-4 h-4 text-rose-600" />}
-              variant="crimson"
-              loading={loadingWorkload}
-              onClick={() => navigate('/cs/incoming?priority=Critical')}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-            />
+              className="text-xs gap-1.5 shrink-0"
+            >
+              <span>Open Incoming Queue</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Button>
           </div>
 
           {attentionError ? (
@@ -497,10 +408,11 @@ export default function CSDashboard() {
                     <TableHead>Issue / Subject</TableHead>
                     <TableHead>Attention Reason</TableHead>
                     <TableHead>Current SLA</TableHead>
+                    <TableHead className="w-[100px] text-right">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  <DataTableSkeleton columns={4} rows={3} />
+                  <DataTableSkeleton columns={5} rows={3} />
                 </TableBody>
               </Table>
             </div>
@@ -519,6 +431,7 @@ export default function CSDashboard() {
                     <TableHead>Issue / Subject</TableHead>
                     <TableHead>Attention Reason</TableHead>
                     <TableHead>Current SLA</TableHead>
+                    <TableHead className="w-[100px] text-right">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -556,6 +469,19 @@ export default function CSDashboard() {
                       <TableCell>
                         <SlaStatusBadge ticket={t} />
                       </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleViewTicket(t);
+                          }}
+                          className="h-7 text-xs px-2.5"
+                        >
+                          Triage
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -563,15 +489,11 @@ export default function CSDashboard() {
             </div>
           )}
         </div>
-        )
       )}
 
-      {/* ═════════════════════════════════════════════════════════════════════ */}
-      {/* SECTION 2: INCOMING QUEUED TICKETS                                   */}
-      {/* ═════════════════════════════════════════════════════════════════════ */}
+      {/* SECTION 2: INCOMING QUEUED TICKETS */}
       {(activeSection === 'all' || activeSection === 'queued') && (
-        <div className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-6">
-          {/* Section Banner Header */}
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-accent/10 border border-accent/20 text-accent flex items-center justify-center shrink-0">
@@ -600,141 +522,121 @@ export default function CSDashboard() {
             </Button>
           </div>
 
-            {/* Queued Metric Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <MetricCard
-                title="Queued Tickets"
-                value={workloadMetrics.queuedCount}
-                subtitle="Awaiting CS review"
-                icon={<Inbox className="w-4 h-4 text-accent" />}
-                loading={loadingQueued}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
+                Queued Tickets Awaiting Triage ({queuedTickets.length})
+              </h3>
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => navigate('/cs/incoming')}
-                className="cursor-pointer hover:shadow-md transition-shadow"
-              />
-              <MetricCard
-                title="Open / Unassigned"
-                value={workloadMetrics.queuedCount}
-                subtitle="Initial triage"
-                icon={<Clock className="w-4 h-4 text-amber-600" />}
-                loading={loadingQueued}
-                onClick={() => navigate('/cs/incoming?status=Open')}
-                className="cursor-pointer hover:shadow-md transition-shadow"
-              />
-              <MetricCard
-                title="Pending Assignment"
-                value={workloadMetrics.pendingReassignCount}
-                subtitle="Ready for dispatch"
-                icon={<UserCheck className="w-4 h-4 text-primary" />}
-                loading={loadingQueued}
-                onClick={() => navigate('/cs/incoming?status=Pending+Assignment')}
-                className="cursor-pointer hover:shadow-md transition-shadow"
-              />
+                className="text-xs text-primary hover:text-primary gap-1"
+              >
+                <span>View All</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </Button>
             </div>
 
-            {/* Queued Tickets Table */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
-                  Queued Tickets Awaiting Triage ({queuedTickets.length})
-                </h3>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => navigate('/cs/incoming')}
-                  className="text-xs text-primary hover:text-primary gap-1"
-                >
-                  <span>View All</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
+            {queuedError ? (
+              <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive flex items-center justify-between">
+                <span>{queuedError}</span>
+                <Button variant="outline" size="sm" onClick={() => loadDashboardData()} className="h-7 text-xs">
+                  <RefreshCw className="w-3.5 h-3.5 mr-1" /> Retry
                 </Button>
               </div>
-
-              {queuedError ? (
-                <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive flex items-center justify-between">
-                  <span>{queuedError}</span>
-                  <Button variant="outline" size="sm" onClick={() => loadDashboardData()} className="h-7 text-xs">
-                    Retry
-                  </Button>
-                </div>
-              ) : loadingQueued ? (
-                <div className="overflow-hidden rounded-lg border border-border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-[130px]">Ticket ID</TableHead>
-                        <TableHead>Title / Subject</TableHead>
-                        <TableHead>Customer</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Priority</TableHead>
-                        <TableHead className="w-[130px]">Received</TableHead>
+            ) : loadingQueued ? (
+              <div className="overflow-hidden rounded-lg border border-border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[130px]">Ticket ID</TableHead>
+                      <TableHead>Title / Subject</TableHead>
+                      <TableHead>Customer</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Priority</TableHead>
+                      <TableHead className="w-[130px]">Received</TableHead>
+                      <TableHead className="w-[100px] text-right">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    <DataTableSkeleton columns={7} rows={3} />
+                  </TableBody>
+                </Table>
+              </div>
+            ) : queuedTickets.length === 0 ? (
+              <div className="rounded-lg border border-border/60 bg-muted/20 py-8 text-center text-xs text-muted-foreground">
+                <Inbox className="w-8 h-8 text-muted-foreground/60 mx-auto mb-2" />
+                <p className="font-semibold text-foreground">Queue is clear</p>
+                <p className="mt-0.5">No unassigned incoming tickets currently awaiting triage.</p>
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-lg border border-border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[130px]">Ticket ID</TableHead>
+                      <TableHead>Title / Subject</TableHead>
+                      <TableHead>Customer</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Priority</TableHead>
+                      <TableHead className="w-[130px]">Received</TableHead>
+                      <TableHead className="w-[100px] text-right">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {queuedTickets.map((t) => (
+                      <TableRow
+                        key={t.id}
+                        onClick={() => handleViewTicket(t)}
+                        className="hover:bg-muted/40 transition-colors cursor-pointer"
+                      >
+                        <TableCell className="font-semibold text-primary text-xs whitespace-nowrap">
+                          {t.id}
+                        </TableCell>
+                        <TableCell>
+                          <div className="font-medium text-foreground text-xs truncate max-w-xs">{t.title}</div>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground text-xs truncate">
+                          {t.customer || 'Customer'}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={getStatusBadgeVariant(t.status)}>{t.status}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={t.priority === 'Critical' ? 'destructive' : t.priority === 'High' ? 'warning' : 'secondary'}>
+                            {t.priority}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                          {t.updated}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleViewTicket(t);
+                            }}
+                            className="h-7 text-xs px-2.5"
+                          >
+                            Triage
+                          </Button>
+                        </TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      <DataTableSkeleton columns={6} rows={3} />
-                    </TableBody>
-                  </Table>
-                </div>
-              ) : queuedTickets.length === 0 ? (
-                <div className="rounded-lg border border-border/60 bg-muted/20 py-8 text-center text-xs text-muted-foreground">
-                  <Inbox className="w-8 h-8 text-muted-foreground/60 mx-auto mb-2" />
-                  <p className="font-semibold text-foreground">Queue is clear</p>
-                  <p className="mt-0.5">No unassigned incoming tickets currently awaiting triage.</p>
-                </div>
-              ) : (
-                <div className="overflow-hidden rounded-lg border border-border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-[130px]">Ticket ID</TableHead>
-                        <TableHead>Title / Subject</TableHead>
-                        <TableHead>Customer</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Priority</TableHead>
-                        <TableHead className="w-[130px]">Received</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {queuedTickets.map((t) => (
-                        <TableRow
-                          key={t.id}
-                          onClick={() => handleViewTicket(t)}
-                          className="hover:bg-muted/40 transition-colors cursor-pointer"
-                        >
-                          <TableCell className="font-semibold text-primary text-xs whitespace-nowrap">
-                            {t.id}
-                          </TableCell>
-                          <TableCell>
-                            <div className="font-medium text-foreground text-xs truncate max-w-xs">{t.title}</div>
-                          </TableCell>
-                          <TableCell className="text-muted-foreground text-xs truncate">
-                            {t.customer || 'Customer'}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={getStatusBadgeVariant(t.status)}>{t.status}</Badge>
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={t.priority === 'Critical' ? 'destructive' : t.priority === 'High' ? 'warning' : 'secondary'}>
-                              {t.priority}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                            {t.updated}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </div>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      {/* ═════════════════════════════════════════════════════════════════════ */}
-      {/* SECTION 3: ASSIGNED & MONITORED TICKETS                              */}
-      {/* ═════════════════════════════════════════════════════════════════════ */}
+      {/* SECTION 3: ASSIGNED & MONITORED TICKETS */}
       {(activeSection === 'all' || activeSection === 'assigned') && (
-        <div className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-6">
-          {/* Section Banner Header */}
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 text-primary flex items-center justify-center shrink-0">
@@ -763,59 +665,38 @@ export default function CSDashboard() {
             </Button>
           </div>
 
-          {/* Assigned Workload Metric */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <MetricCard
-              title="Assigned Workload"
-              value={workloadMetrics.assignedCount}
-              subtitle="Technicians actively assigned"
-              icon={<UserCheck className="w-4 h-4 text-primary" />}
-              loading={loadingWorkload}
-              onClick={() => navigate('/cs/assigned')}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-            />
-            <div className="p-3.5 bg-muted/20 border border-border rounded-xl flex items-center justify-between">
-              <div>
-                <span className="text-xs font-semibold text-foreground">Traffic Routing Policy</span>
-                <p className="text-[11px] text-muted-foreground mt-0.5">Continuous CS SLA monitoring &amp; reassignment tracking active.</p>
-              </div>
-              <span className="text-[10px] font-bold uppercase tracking-wider bg-primary/10 text-primary px-2 py-0.5 rounded-full border border-primary/20">Active</span>
-            </div>
-          </div>
-
-          {/* Counts by Status Breakdown */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div
+          {/* Status Breakdown Filter Pills */}
+          <div className="flex items-center gap-2 flex-wrap bg-muted/20 p-3 rounded-xl border border-border/80">
+            <span className="text-xs font-semibold text-foreground mr-1">Status Breakdown:</span>
+            <button
               onClick={() => navigate('/cs/assigned?status=Open')}
-              className="p-3.5 bg-muted/30 border border-border rounded-xl text-center cursor-pointer hover:bg-muted/50 hover:border-primary/30 transition-all shadow-xs"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-card hover:bg-muted/60 text-foreground border border-border shadow-2xs transition-colors cursor-pointer"
             >
-              <span className="text-[11px] text-muted-foreground font-medium">Open</span>
-              <p className="text-xl font-bold text-primary mt-1">{assignedStatusCounts.open}</p>
-            </div>
-            <div
+              <span className="text-muted-foreground">Open</span>
+              <span className="font-bold text-primary">{assignedStatusCounts.open}</span>
+            </button>
+            <button
               onClick={() => navigate('/cs/assigned?status=In+Progress')}
-              className="p-3.5 bg-muted/30 border border-border rounded-xl text-center cursor-pointer hover:bg-muted/50 hover:border-amber-300 transition-all shadow-xs"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-card hover:bg-muted/60 text-foreground border border-border shadow-2xs transition-colors cursor-pointer"
             >
-              <span className="text-[11px] text-muted-foreground font-medium">In Progress</span>
-              <p className="text-xl font-bold text-amber-600 mt-1">{assignedStatusCounts.inProgress}</p>
-            </div>
-            <div
+              <span className="text-muted-foreground">In Progress</span>
+              <span className="font-bold text-amber-600">{assignedStatusCounts.inProgress}</span>
+            </button>
+            <button
               onClick={() => navigate('/cs/assigned?status=On+Hold')}
-              className="p-3.5 bg-muted/30 border border-border rounded-xl text-center cursor-pointer hover:bg-muted/50 hover:border-slate-400 transition-all shadow-xs"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-card hover:bg-muted/60 text-foreground border border-border shadow-2xs transition-colors cursor-pointer"
             >
-              <span className="text-[11px] text-muted-foreground font-medium flex items-center justify-center gap-1">
-                <PauseCircle className="w-3.5 h-3.5 text-muted-foreground" />
-                On Hold
-              </span>
-              <p className="text-xl font-bold text-slate-700 mt-1">{assignedStatusCounts.onHold}</p>
-            </div>
-            <div
+              <PauseCircle className="w-3.5 h-3.5 text-muted-foreground" />
+              <span className="text-muted-foreground">On Hold</span>
+              <span className="font-bold text-slate-700">{assignedStatusCounts.onHold}</span>
+            </button>
+            <button
               onClick={() => navigate('/cs/assigned?status=Resolved')}
-              className="p-3.5 bg-muted/30 border border-border rounded-xl text-center cursor-pointer hover:bg-muted/50 hover:border-emerald-300 transition-all shadow-xs"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-card hover:bg-muted/60 text-foreground border border-border shadow-2xs transition-colors cursor-pointer"
             >
-              <span className="text-[11px] text-muted-foreground font-medium">Resolved</span>
-              <p className="text-xl font-bold text-emerald-600 mt-1">{assignedStatusCounts.resolved}</p>
-            </div>
+              <span className="text-muted-foreground">Resolved</span>
+              <span className="font-bold text-emerald-600">{assignedStatusCounts.resolved}</span>
+            </button>
           </div>
 
           <div className="p-4 rounded-xl border border-border/80 bg-muted/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">

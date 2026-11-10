@@ -16,12 +16,17 @@ import { getEmployeeAssignedTickets, acceptTicket, updateTicket, updateEmployeeT
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import { isReassignmentDenied, hasPendingReassignment } from '@/utils/reassignmentUtils';
 import { PageHeader } from '@/components/ui/page-header';
+import { OriginPillToggle } from '@/components/ui/OriginPillToggle';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
 import { DataTableSkeleton, DataTableEmptyState } from '@/components/ui/data-table';
 import { Button } from '@/components/ui/button';
+import Pagination from '@/components/Pagination';
 
-const CLOSED_STATUSES = ['Closed', 'Resolved'];
+const CLOSED_STATUSES = ['Closed', 'Resolved', 'Discarded', 'Discarded by Customer'];
+
+const isExcludedStatus = (status) =>
+  ['closed', 'resolved', 'discarded', 'discarded by customer'].includes(String(status || '').trim().toLowerCase());
 
 const buildEmployeeTicketSearchString = (t) => {
   if (!t) return '';
@@ -155,7 +160,7 @@ export default function EmployeeAssigned() {
     setLoadError('');
     try {
       const list = await getEmployeeAssignedTickets({ employeeEmail: email, forceRefresh });
-      setTickets(list.map((t) => ({ ...t, rejected: false })));
+      setTickets(list.filter((t) => !isExcludedStatus(t.status)).map((t) => ({ ...t, rejected: false })));
     } catch {
       setLoadError('Unable to load assigned tickets from ticket-service.');
     } finally {
@@ -244,7 +249,7 @@ export default function EmployeeAssigned() {
     const q = search.trim().toLowerCase();
     let list = tickets.filter((t) => {
       if (t.rejected) return false;
-      if (CLOSED_STATUSES.includes(t.status)) return false;
+      if (CLOSED_STATUSES.includes(t.status) || isExcludedStatus(t.status)) return false;
       if (t.accepted && !t.proofRejected) return false;
 
       // Tab filtering
@@ -305,6 +310,18 @@ export default function EmployeeAssigned() {
 
     return list;
   }, [tickets, search, incomingTab, statusFilter, categoryFilter, priorityFilter, sortPriority, typeFilter]);
+
+  const [page, setPage] = useState(1);
+  const itemsPerPage = 10;
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, incomingTab, statusFilter, categoryFilter, priorityFilter, sortPriority, typeFilter]);
+
+  const paginatedTickets = useMemo(() => {
+    const start = (page - 1) * itemsPerPage;
+    return filtered.slice(start, start + itemsPerPage);
+  }, [filtered, page, itemsPerPage]);
 
   const handleAcceptAssignment = useCallback(async (id) => {
     const ticketObj = tickets.find((t) => t.id === id);
@@ -439,22 +456,10 @@ export default function EmployeeAssigned() {
         title="Incoming Tickets"
         subtitle="Pending tickets awaiting your acceptance."
         actions={
-          <div className="flex border border-gray-200 rounded-xl overflow-hidden bg-surface shadow-xs">
-            {['all', 'external', 'internal'].map((type) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => setTypeFilter(type)}
-                className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors cursor-pointer ${
-                  typeFilter === type
-                    ? 'bg-brand-primary text-white'
-                    : 'bg-surface hover:bg-page text-muted-slate'
-                }`}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
+          <OriginPillToggle
+            value={typeFilter}
+            onChange={(val) => setTypeFilter(val)}
+          />
         }
       />
 
@@ -649,7 +654,7 @@ export default function EmployeeAssigned() {
                 description="No incoming tickets pending acceptance match your current filters."
               />
             ) : (
-              filtered.map((t) => (
+              paginatedTickets.map((t) => (
                 <TableRow
                   key={t.id}
                   className="cursor-pointer hover:bg-page"
@@ -738,6 +743,20 @@ export default function EmployeeAssigned() {
             )}
           </TableBody>
         </Table>
+        {!loading && filtered.length > 0 && (
+          <div className="px-4 py-3 border-t border-slate-200 bg-surface flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-muted-slate">
+            <span>
+              Showing {(page - 1) * itemsPerPage + 1} to{' '}
+              {Math.min(page * itemsPerPage, filtered.length)} of {filtered.length} tickets
+            </span>
+            <Pagination
+              totalItems={filtered.length}
+              itemsPerPage={itemsPerPage}
+              currentPage={page}
+              onPageChange={setPage}
+            />
+          </div>
+        )}
       </div>
 
       {/* Modal: Not-yet-accepted ticket (Accept / Request Reassignment) */}

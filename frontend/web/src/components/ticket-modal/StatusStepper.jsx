@@ -13,17 +13,24 @@ import { STEPPER_STEPS, getStepIndex } from './ticketModalUtils';
 export default function StatusStepper({
   status,
   isAssigned = false,
+  steps = null,
+  activeStepIndex = null,
+  ringCurrentStep = true,
   className = '',
 }) {
-  const currentStepIndex = getStepIndex(status, isAssigned);
+  const stepperSteps = steps || STEPPER_STEPS;
+  const currentStepIndex = activeStepIndex !== null ? activeStepIndex : getStepIndex(status, isAssigned);
 
   return (
     <div className={`w-full py-1 ${className}`}>
       <div className="flex items-start justify-between w-full">
-        {STEPPER_STEPS.map((step, idx) => {
-          const isCompleted = idx <= currentStepIndex;
+        {stepperSteps.map((step, idx) => {
+          const isPriorCompleted = idx < currentStepIndex;
           const isCurrent = idx === currentStepIndex;
-          const hasNext = idx < STEPPER_STEPS.length - 1;
+          const isCurrentFinal = isCurrent && idx === stepperSteps.length - 1;
+          const showCheck = isPriorCompleted || (isCurrentFinal && String(status || '').toLowerCase() === 'resolved');
+          const showRing = isCurrent && ringCurrentStep && !showCheck;
+          const hasNext = idx < stepperSteps.length - 1;
           const isNextCompleted = idx + 1 <= currentStepIndex;
 
           return (
@@ -32,13 +39,15 @@ export default function StatusStepper({
                 {/* Step Circle Indicator */}
                 <div
                   className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${
-                    isCompleted
+                    showCheck
                       ? 'bg-[#1E2A78] text-white shadow-xs'
+                      : showRing
+                      ? 'border-[3px] border-[#1E2A78] bg-white text-transparent shadow-xs'
                       : 'border-2 border-[#D5D9E4] bg-white text-transparent'
                   }`}
                   aria-current={isCurrent ? 'step' : undefined}
                 >
-                  {isCompleted ? (
+                  {showCheck ? (
                     <Check className="w-3.5 h-3.5 stroke-[3]" />
                   ) : (
                     <span className="w-2 h-2 rounded-full bg-transparent" />
@@ -50,7 +59,7 @@ export default function StatusStepper({
                   className={`mt-1.5 text-[11px] sm:text-xs text-center whitespace-nowrap transition-colors ${
                     isCurrent
                       ? 'font-bold text-[#1E2A78]'
-                      : isCompleted
+                      : isPriorCompleted
                       ? 'font-medium text-[#1B2033]'
                       : 'font-normal text-[#5A6178]'
                   }`}

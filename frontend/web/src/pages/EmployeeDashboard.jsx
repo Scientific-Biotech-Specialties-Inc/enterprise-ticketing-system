@@ -52,8 +52,6 @@ export default function EmployeeDashboard() {
 
   // Active view toggle: 'all' (Unified), 'assigned' (My Work), 'requestor' (My Requests)
   const [activeSection, setActiveSection] = useState('all');
-  // In 'all' overview, Section I (Assigned Workload) is compact/chevron-collapsible by default
-  const [isAssignedExpanded, setIsAssignedExpanded] = useState(false);
 
   // Assigned Workload state
   const [assignedTickets, setAssignedTickets] = useState([]);
@@ -345,7 +343,96 @@ export default function EmployeeDashboard() {
         badgeVariant="emerald"
       />
 
-      {/* Visual Navigation Pill Switcher (Clearly separating the two roles) */}
+      {/* Top Hero KPI Row (Industry standard 4-card maximum to eliminate metric clutter) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {activeSection === 'requestor' ? (
+          <>
+            <MetricCard
+              title="Total Requests"
+              value={requestorMetrics.total}
+              subtitle="Submitted requests"
+              icon={<Send className="w-4 h-4 text-accent" />}
+              loading={loadingRequests}
+              onClick={() => navigate('/employee/my-tickets')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+            <MetricCard
+              title="Under Service"
+              value={requestorMetrics.open + requestorMetrics.inProgress}
+              subtitle="Open & In Progress"
+              icon={<Clock className="w-4 h-4 text-amber-600" />}
+              variant="amber"
+              loading={loadingRequests}
+              onClick={() => navigate('/employee/my-tickets?status=Open')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+            <MetricCard
+              title="Action Needed"
+              value={requestorAttentionItems.length}
+              subtitle="Awaiting confirm / review"
+              icon={<AlertCircle className="w-4 h-4 text-amber-600" />}
+              variant="amber"
+              loading={loadingRequests}
+              onClick={() => navigate('/employee/my-tickets?status=Resolved')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+            <MetricCard
+              title="Closed Requests"
+              value={requestorMetrics.closed}
+              subtitle="Successfully closed"
+              icon={<CheckCircle2 className="w-4 h-4 text-emerald-600" />}
+              variant="emerald"
+              loading={loadingRequests}
+              onClick={() => navigate('/employee/my-tickets?status=Closed')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+          </>
+        ) : (
+          <>
+            <MetricCard
+              title="Assigned Workload"
+              value={assignedMetrics.totalActive}
+              subtitle="Active technician tickets"
+              icon={<Briefcase className="w-4 h-4 text-primary" />}
+              loading={loadingAssigned}
+              onClick={() => navigate('/employee/assigned')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+            <MetricCard
+              title="Awaiting Accept"
+              value={assignedMetrics.awaitingAccept}
+              subtitle="Pending acceptance"
+              icon={<Inbox className="w-4 h-4 text-amber-600" />}
+              variant="amber"
+              loading={loadingAssigned}
+              onClick={() => navigate('/employee/assigned?status=Open')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+            <MetricCard
+              title="Approaching SLA"
+              value={assignedMetrics.atRisk}
+              subtitle="Near threshold (warning)"
+              icon={<Clock className="w-4 h-4 text-amber-600" />}
+              variant="amber"
+              loading={loadingAssigned}
+              onClick={() => navigate('/employee/assigned?sla=At+Risk')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+            <MetricCard
+              title="SLA Breached"
+              value={assignedMetrics.breached}
+              subtitle="Resolution overdue"
+              icon={<AlertTriangle className="w-4 h-4 text-rose-600" />}
+              variant="crimson"
+              loading={loadingAssigned}
+              onClick={() => navigate('/employee/assigned?sla=Breached')}
+              className="cursor-pointer hover:shadow-md transition-shadow"
+            />
+          </>
+        )}
+      </div>
+
+      {/* Visual Navigation Pill Switcher */}
       <div className="flex items-center gap-1 bg-muted/40 p-1.5 rounded-xl border border-border w-fit">
         <Button
           variant={activeSection === 'all' ? 'default' : 'ghost'}
@@ -362,7 +449,7 @@ export default function EmployeeDashboard() {
           className="text-xs gap-1.5"
         >
           <Briefcase className="w-3.5 h-3.5" />
-          <span>My Work</span>
+          <span>Assigned Tasks</span>
           <Badge variant="secondary" className="ml-1 text-[10px]">{assignedMetrics.totalActive}</Badge>
         </Button>
         <Button
@@ -381,126 +468,38 @@ export default function EmployeeDashboard() {
       {/* SECTION 1: MY WORK                                                    */}
       {/* ═════════════════════════════════════════════════════════════════════ */}
       {(activeSection === 'all' || activeSection === 'assigned') && (
-        activeSection === 'all' && !isAssignedExpanded ? (
-          /* Compact Collapsed Section 1 */
-          <div className="rounded-2xl border border-border bg-card p-4 sm:p-5 shadow-xs transition-all duration-200">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div
-                className="flex items-start sm:items-center gap-3 min-w-0 cursor-pointer select-none flex-1 group"
-                onClick={() => setIsAssignedExpanded(true)}
-                title="Click to expand My Work"
-              >
-                <Badge
-                  variant="outline"
-                  className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 border-primary/30 text-primary bg-primary/5 rounded-full shrink-0 group-hover:bg-primary/10 transition-colors"
-                >
-                  My Work
-                </Badge>
-
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h2 className="text-sm sm:text-base font-bold text-foreground group-hover:text-primary transition-colors">
-                      My Work
-                    </h2>
-                    {assignedMetrics.totalActive === 0 ? (
-                      <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-2.5 py-0.5 rounded-full">
-                        All clear: no tickets assigned to you
-                      </span>
-                    ) : (
-                      <span className="text-xs font-semibold text-primary bg-primary/10 border border-primary/20 px-2.5 py-0.5 rounded-full">
-                        {assignedMetrics.totalActive} active ticket{assignedMetrics.totalActive === 1 ? '' : 's'} assigned
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                    <span>Open <strong className="font-semibold text-foreground">{assignedMetrics.open}</strong></span>
-                    <span>·</span>
-                    <span>In progress <strong className="font-semibold text-foreground">{assignedMetrics.inProgress}</strong></span>
-                    <span>·</span>
-                    <span>On hold <strong className="font-semibold text-foreground">{assignedMetrics.onHold}</strong></span>
-                    <span>·</span>
-                    <span>Resolved <strong className="font-semibold text-foreground">{assignedMetrics.resolved}</strong></span>
-                    <span>·</span>
-                    <span className={cn(assignedMetrics.atRisk > 0 && "text-amber-700 font-semibold")}>
-                      SLA at risk <strong className="font-semibold">{assignedMetrics.atRisk}</strong>
-                    </span>
-                    <span>·</span>
-                    <span className={cn(assignedMetrics.breached > 0 && "text-rose-700 font-semibold")}>
-                      SLA breached <strong className="font-semibold">{assignedMetrics.breached}</strong>
-                    </span>
-                  </div>
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-6">
+          {/* Section Banner Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                <Briefcase className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-foreground">My Work</h2>
+                  <Badge variant="outline" className="text-[10px] bg-primary/5 text-primary border-primary/20">
+                    Technician Role
+                  </Badge>
                 </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Tickets assigned to you for diagnostics, field maintenance, and repair resolution.
+                </p>
               </div>
+            </div>
 
-              <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => navigate('/employee/assigned')}
-                  className="text-xs text-primary hover:text-primary hover:bg-primary/5 gap-1.5 font-medium"
-                >
-                  <span>Go to work log</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setIsAssignedExpanded(true)}
-                  className="text-xs gap-1.5 h-8 px-2.5 text-muted-foreground hover:text-foreground border-border hover:bg-muted/50"
-                  aria-label="Expand My Work details"
-                >
-                  <span className="hidden sm:inline">Expand</span>
-                  <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                </Button>
-              </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate('/employee/assigned')}
+                className="text-xs gap-1.5 shrink-0"
+              >
+                <span>Go to Work Log</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </Button>
             </div>
           </div>
-        ) : (
-          /* Full Expanded Section 1 */
-          <div className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-6">
-            {/* Section Banner Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
-                  <Briefcase className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-base font-bold text-foreground">My Work</h2>
-                    <Badge variant="outline" className="text-[10px] bg-primary/5 text-primary border-primary/20">
-                      Technician Role
-                    </Badge>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Tickets assigned to you for diagnostics, field maintenance, and repair resolution.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => navigate('/employee/assigned')}
-                  className="text-xs gap-1.5 shrink-0"
-                >
-                  <span>Go to Work Log</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </Button>
-                {activeSection === 'all' && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setIsAssignedExpanded(false)}
-                    className="text-xs gap-1.5 h-8 px-2.5 text-muted-foreground hover:text-foreground border-border hover:bg-muted/50"
-                    aria-label="Collapse My Work details"
-                  >
-                    <span className="hidden sm:inline">Collapse</span>
-                    <ChevronUp className="w-4 h-4 text-muted-foreground" />
-                  </Button>
-                )}
-              </div>
-            </div>
 
           {/* Assigned Section Partial-Failure State */}
           {assignedError ? (
@@ -512,64 +511,37 @@ export default function EmployeeDashboard() {
             </div>
           ) : (
             <>
-              {/* Summary Cards by Status + SLA Risk Highlights (TS060 Criteria) */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                <MetricCard
-                  title="Open Work"
-                  value={assignedMetrics.open}
-                  subtitle="Awaiting start"
-                  icon={<Inbox className="w-4 h-4 text-primary" />}
-                  loading={loadingAssigned}
-                  onClick={() => navigate('/employee/assigned?status=Open')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="In Progress"
-                  value={assignedMetrics.inProgress}
-                  subtitle="Active work"
-                  icon={<ClipboardList className="w-4 h-4 text-amber-600" />}
-                  loading={loadingAssigned}
-                  onClick={() => navigate('/employee/assigned?status=In+Progress')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="On Hold"
-                  value={assignedMetrics.onHold}
-                  subtitle="Paused tickets"
-                  icon={<PauseCircle className="w-4 h-4 text-slate-600" />}
-                  loading={loadingAssigned}
-                  onClick={() => navigate('/employee/assigned?status=On+Hold')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="Completed / Resolved"
-                  value={assignedMetrics.resolved}
-                  subtitle="Successfully serviced"
-                  icon={<CheckCircle2 className="w-4 h-4 text-emerald-600" />}
-                  loading={loadingAssigned}
-                  onClick={() => navigate('/employee/assigned?status=Resolved')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="Approaching SLA"
-                  value={assignedMetrics.atRisk}
-                  subtitle="At Risk (warning)"
-                  icon={<Clock className="w-4 h-4 text-amber-600" />}
-                  variant="amber"
-                  loading={loadingAssigned}
-                  onClick={() => navigate('/employee/assigned?sla=At+Risk')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="SLA Breached"
-                  value={assignedMetrics.breached}
-                  subtitle="SLA exceeded"
-                  icon={<AlertTriangle className="w-4 h-4 text-rose-600" />}
-                  variant="crimson"
-                  loading={loadingAssigned}
-                  onClick={() => navigate('/employee/assigned?sla=Breached')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
+              {/* Compact Status Breakdown Filters */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {[
+                  { label: 'All Status', count: assignedMetrics.totalActive },
+                  { label: 'Open', count: assignedMetrics.open },
+                  { label: 'In Progress', count: assignedMetrics.inProgress },
+                  { label: 'On Hold', count: assignedMetrics.onHold },
+                  { label: 'Resolved', count: assignedMetrics.resolved },
+                ].map((tab) => (
+                  <button
+                    key={tab.label}
+                    type="button"
+                    onClick={() => setStatusFilter(tab.label)}
+                    className={cn(
+                      "px-2.5 py-1 text-xs font-medium rounded-lg transition-colors border",
+                      statusFilter === tab.label
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-muted/40 hover:bg-muted text-muted-foreground border-border"
+                    )}
+                  >
+                    {tab.label}
+                    <span className={cn(
+                      "ml-1.5 text-[10px] px-1.5 py-0.2 rounded-full",
+                      statusFilter === tab.label
+                        ? "bg-white/20 text-white"
+                        : "bg-muted text-foreground"
+                    )}>
+                      {tab.count}
+                    </span>
+                  </button>
+                ))}
               </div>
 
               {/* Assigned Attention Highlights (TS060 Criteria) */}
@@ -700,7 +672,6 @@ export default function EmployeeDashboard() {
             </>
           )}
         </div>
-        )
       )}
 
       {/* ═════════════════════════════════════════════════════════════════════ */}
@@ -748,54 +719,21 @@ export default function EmployeeDashboard() {
             </div>
           ) : (
             <>
-              {/* Summary Cards by Status (TS060 Criteria) */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                <MetricCard
-                  title="Open Requests"
-                  value={requestorMetrics.open}
-                  subtitle="Awaiting triage"
-                  icon={<Inbox className="w-4 h-4 text-accent" />}
-                  loading={loadingRequests}
-                  onClick={() => navigate('/employee/my-tickets?status=Open')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="In Progress"
-                  value={requestorMetrics.inProgress}
-                  subtitle="Being serviced"
-                  icon={<Clock className="w-4 h-4 text-amber-600" />}
-                  loading={loadingRequests}
-                  onClick={() => navigate('/employee/my-tickets?status=In+Progress')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="Resolved (Awaiting Close)"
-                  value={requestorMetrics.resolved}
-                  subtitle="Awaiting your confirm"
-                  icon={<CheckCircle2 className="w-4 h-4 text-emerald-600" />}
-                  variant="emerald"
-                  loading={loadingRequests}
-                  onClick={() => navigate('/employee/my-tickets?status=Resolved')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="Auto-Closing Soon"
-                  value={requestorMetrics.autoClosingSoon}
-                  subtitle="Resolution window active"
-                  icon={<Clock className="w-4 h-4 text-primary" />}
-                  loading={loadingRequests}
-                  onClick={() => navigate('/employee/my-tickets?status=Resolved')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
-                <MetricCard
-                  title="Closed Requests"
-                  value={requestorMetrics.closed}
-                  subtitle="Past request history"
-                  icon={<CheckCircle2 className="w-4 h-4 text-slate-500" />}
-                  loading={loadingRequests}
-                  onClick={() => navigate('/employee/my-tickets?status=Closed')}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                />
+              {/* Compact Status Breakdown Overview */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-medium text-muted-foreground">Requests Breakdown:</span>
+                <span className="text-xs px-2.5 py-1 rounded-lg bg-muted/40 border border-border">
+                  Open: <strong className="font-semibold text-foreground">{requestorMetrics.open}</strong>
+                </span>
+                <span className="text-xs px-2.5 py-1 rounded-lg bg-muted/40 border border-border">
+                  In Progress: <strong className="font-semibold text-foreground">{requestorMetrics.inProgress}</strong>
+                </span>
+                <span className="text-xs px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200">
+                  Resolved: <strong className="font-bold">{requestorMetrics.resolved}</strong>
+                </span>
+                <span className="text-xs px-2.5 py-1 rounded-lg bg-muted/40 border border-border">
+                  Closed: <strong className="font-semibold text-foreground">{requestorMetrics.closed}</strong>
+                </span>
               </div>
 
               {/* Requestor Attention Highlights (TS060 Criteria: Resolved awaiting confirm or reopened) */}

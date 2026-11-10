@@ -254,6 +254,7 @@ function App() {
                 <Route path="tickets/:ticketId" element={<MyTickets />} />
                 <Route path="my-tickets/:ticketId" element={<MyTickets />} />
                 <Route path="history" element={<CustomerHistory />} />
+                <Route path="history/:ticketId" element={<EmployeeHistoryDetail />} />
                 <Route path="messages" element={<MessagingPage />} />
                 <Route path="profile" element={<Profile />} />
                 <Route path="notifications" element={<Notifications />} />

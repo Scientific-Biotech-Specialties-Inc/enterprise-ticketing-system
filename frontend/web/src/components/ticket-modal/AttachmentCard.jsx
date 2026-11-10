@@ -15,9 +15,11 @@ export default function AttachmentCard({
   const fileUrl = getFileUrl(file);
   const isQuarantined = isQuarantinedFile(file);
 
-  const ext = fileName.split('.').pop()?.toUpperCase() || 'FILE';
-  const isPdf = ext === 'PDF';
-  const isImg = ['PNG', 'JPG', 'JPEG', 'WEBP', 'GIF'].includes(ext);
+  const mimeType = String(file?.file_type || file?.type || file?.mime_type || '').toLowerCase();
+  const rawExt = fileName.includes('.') ? fileName.split('.').pop()?.toUpperCase() : (mimeType.split('/').pop()?.toUpperCase() || 'FILE');
+  const ext = rawExt || 'FILE';
+  const isPdf = ext === 'PDF' || mimeType.includes('pdf');
+  const isImg = ['PNG', 'JPG', 'JPEG', 'WEBP', 'GIF', 'SVG'].includes(ext) || mimeType.startsWith('image/');
 
   if (isQuarantined) {
     return (
@@ -50,7 +52,7 @@ export default function AttachmentCard({
 
   return (
     <div
-      onClick={() => onPreview?.({ name: fileName, url: fileUrl })}
+      onClick={() => onPreview?.({ name: fileName, url: fileUrl, file_type: file?.file_type || file?.type, size: file?.size || file?.file_size })}
       className={`flex items-center justify-between p-3 rounded-xl border border-[#D5D9E4] bg-white hover:bg-[#F5F6FA] cursor-pointer transition-colors shadow-2xs gap-3 ${className}`}
     >
       <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -79,7 +81,7 @@ export default function AttachmentCard({
             e.stopPropagation();
             if (onPreview) {
               e.preventDefault();
-              onPreview({ name: fileName, url: fileUrl });
+              onPreview({ name: fileName, url: fileUrl, file_type: file?.file_type || file?.type, size: file?.size || file?.file_size });
             }
           }}
           className="text-xs font-semibold text-[#1E2A78] hover:underline px-2 py-1 shrink-0"

@@ -7,23 +7,29 @@ import {
   CheckCircle2,
   ArrowUpDown,
   ImageIcon,
+  RotateCcw,
+  X,
+  Clock,
+  AlertCircle,
+  ShieldAlert,
+  MessageSquare,
 } from 'lucide-react';
 import { formatDisplayDate } from '@/utils/dateUtils';
 import FilePreviewModal from '@/components/FilePreviewModal';
 import AuthenticatedImage from '@/components/AuthenticatedImage';
 import ReassignmentDisapprovalBanner from '@/components/employee/ReassignmentDisapprovalBanner';
-import { getTicketDetails } from '@/services/ticketService';
+import { getTicketDetails, reopenTicket } from '@/services/ticketService';
 import { getWindowConfiguration, getCachedWindowConfiguration } from '@/services/configurationService';
 import { useAuth } from '@/context/AuthContext';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Clock, AlertCircle, ShieldAlert, MessageSquare } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
 } from '@/components/ui/dialog';
 import TicketFeedbackSection from '@/components/feedback/TicketFeedbackSection';
+import FeedbackModal from '@/components/feedback/FeedbackModal';
 import InternalTicketMessageThread from '@/components/InternalTicketMessageThread';
 import TicketActivityTimeline from '@/components/TicketActivityTimeline';
 
@@ -33,6 +39,14 @@ export default function EmployeeHistoryDetail() {
   const { ticketId } = useParams();
   const { user } = useAuth();
 
+  const isCustomer = user?.role === 'customer' || (
+    !window.location.pathname.startsWith('/employee') &&
+    !window.location.pathname.startsWith('/cs') &&
+    !window.location.pathname.startsWith('/it-manager') &&
+    !window.location.pathname.startsWith('/service-manager') &&
+    !window.location.pathname.startsWith('/cs-manager')
+  );
+
   const [ticket, setTicket] = useState(state?.ticket || null);
   const [loading, setLoading] = useState(!state?.ticket);
   const [error, setError] = useState(null);
@@ -41,18 +55,40 @@ export default function EmployeeHistoryDetail() {
     window.location.pathname.startsWith('/service-manager') ? '/service-manager/history' :
     window.location.pathname.startsWith('/cs-manager') ? '/cs-manager/history' :
     window.location.pathname.startsWith('/cs') ? '/cs/history' :
-    '/employee/progress'
+    window.location.pathname.startsWith('/employee') ? '/employee/progress' :
+    '/history'
+  );
+  const messagesPath = (
+    window.location.pathname.startsWith('/it-manager') ? '/it-manager/messages' :
+    window.location.pathname.startsWith('/service-manager') ? '/service-manager/messages' :
+    window.location.pathname.startsWith('/cs-manager') ? '/cs-manager/messages' :
+    window.location.pathname.startsWith('/cs') ? '/cs/messages' :
+    window.location.pathname.startsWith('/employee') ? '/employee/messages' :
+    '/messages'
   );
   const [previewFile, setPreviewFile] = useState(null);
   const [timelineSortOrder, setTimelineSortOrder] = useState('asc'); // 'asc' or 'desc'
   const [now, setNow] = useState(Date.now());
   const [showConversationModal, setShowConversationModal] = useState(false);
 
+  // Reopen State
+  const [showReopenModal, setShowReopenModal] = useState(false);
+  const [reopenReason, setReopenReason] = useState('');
+  const [reopenValidationError, setReopenValidationError] = useState('');
+  const [reopenSubmitting, setReopenSubmitting] = useState(false);
+  const [reopenSuccessNotice, setReopenSuccessNotice] = useState('');
+
+  // Feedback State
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [editingFeedback, setEditingFeedback] = useState(null);
+
   const [windowConfig, setWindowConfig] = useState(() => {
     const cached = getCachedWindowConfiguration();
     return {
       autoCloseEnabled: Boolean(cached?.autoCloseEnabled ?? true),
       autoCloseWindowDays: Number(cached?.autoCloseWindowDays ?? 2),
+      reopenEnabled: Boolean(cached?.reopenEnabled ?? true),
+      reopenWindowDays: Number(cached?.reopenWindowDays ?? 2),
     };
   });
 
@@ -64,6 +100,8 @@ export default function EmployeeHistoryDetail() {
           setWindowConfig({
             autoCloseEnabled: Boolean(cfg.autoCloseEnabled ?? true),
             autoCloseWindowDays: Number(cfg.autoCloseWindowDays ?? 2),
+            reopenEnabled: Boolean(cfg.reopenEnabled ?? true),
+            reopenWindowDays: Number(cfg.reopenWindowDays ?? 2),
           });
         }
       })
@@ -85,6 +123,54 @@ export default function EmployeeHistoryDetail() {
     }
     return null;
   }, [ticketId, state?.ticket]);
+
+  const canReopen = useMemo(() => {
+    if (!isCustomer || !ticket) return false;
+    if (ticket.status !== 'Closed' && ticket.status !== 'Resolved') return false;
+    if (!windowConfig.reopenEnabled) return false;
+    const resolvedOrClosedAt = ticket.closed_at || ticket.resolved_at || ticket.updated_at || ticket.date;
+    if (!resolvedOrClosedAt) return true;
+    const closedMs = new Date(resolvedOrClosedAt).getTime();
+    if (isNaN(closedMs)) return true;
+    const windowMs = (windowConfig.reopenWindowDays || 2) * 24 * 60 * 60 * 1000;
+    return (Date.now() - closedMs) <= windowMs;
+  }, [isCustomer, ticket, windowConfig]);
+
+  const handleExecuteReopen = async () => {
+    const trimmed = reopenReason.trim();
+    if (!trimmed || trimmed.length < 3) {
+      setReopenValidationError('Please provide a reason for reopening (at least 3 characters).');
+      return;
+    }
+    setReopenSubmitting(true);
+    setReopenValidationError('');
+    try {
+      await reopenTicket(numericId, trimmed);
+      setShowReopenModal(false);
+      setReopenReason('');
+      setReopenSuccessNotice('Ticket successfully reopened.');
+      setTicket((prev) => ({
+        ...prev,
+        status: 'Reopened',
+      }));
+      getTicketDetails(numericId).then((fresh) => {
+        if (fresh) setTicket((prev) => ({ ...prev, ...fresh }));
+      }).catch(() => {});
+    } catch (err) {
+      setReopenValidationError(err?.response?.data?.message || err?.message || 'Failed to reopen ticket.');
+    } finally {
+      setReopenSubmitting(false);
+    }
+  };
+
+  const handleOpenConversation = () => {
+    navigate(messagesPath, {
+      state: {
+        selectedTicketId: numericId,
+        openDirectChat: true,
+      },
+    });
+  };
 
   useEffect(() => {
     if (!numericId) {
@@ -307,7 +393,7 @@ export default function EmployeeHistoryDetail() {
 
   if (loading) {
     return (
-      <div className="space-y-6 max-w-5xl mx-auto">
+      <div className="space-y-6 w-full min-w-0 max-w-full">
         <Skeleton className="h-10 w-36 rounded-lg" />
         <Skeleton className="h-48 w-full rounded-xl" />
         <Skeleton className="h-64 w-full rounded-xl" />
@@ -317,7 +403,7 @@ export default function EmployeeHistoryDetail() {
 
   if (error || !ticket) {
     return (
-      <div className="space-y-6 max-w-5xl mx-auto">
+      <div className="space-y-6 w-full min-w-0 max-w-full">
         <Button
           variant="ghost"
           size="sm"
@@ -358,17 +444,23 @@ export default function EmployeeHistoryDetail() {
     ticket.resolved_at || ticket.closed_at ? formatDisplayDate(ticket.resolved_at || ticket.closed_at) : null;
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
+    <div className="space-y-6 w-full min-w-0 max-w-full">
       {/* Back button */}
       <div>
         <Button
           variant="ghost"
           size="sm"
           onClick={() => navigate(backPath)}
-          className="text-primary hover:text-primary gap-2 -ml-2 font-medium"
+          className="text-primary hover:text-primary gap-2 -ml-2 font-medium cursor-pointer"
         >
           <ArrowLeft className="h-4 w-4" />
-          Back to History
+          {backPath.includes('dashboard')
+            ? 'Back to Dashboard'
+            : backPath.includes('my-tickets')
+            ? 'Back to My Tickets'
+            : backPath.includes('progress')
+            ? 'Back to Progress'
+            : 'Back to History'}
         </Button>
       </div>
 
@@ -376,61 +468,93 @@ export default function EmployeeHistoryDetail() {
       <div className="rounded-xl border border-border bg-card p-6 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-3">
           <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-bold text-primary bg-primary/10 px-2.5 py-1 rounded-md">
-            {ticket.id || (ticket.ticket_ID ? `TKT-${String(ticket.ticket_ID).padStart(4, '0')}` : 'Ticket')}
-          </span>
-          {ticket.status === 'Closed' && isAutoClosed ? (
-            <Badge variant="outline" className="bg-slate-100 text-slate-800 border-slate-300 gap-1.5" title="Ticket was closed automatically due to inactivity following resolution window.">
-              <Clock className="h-3 w-3 text-slate-500" />
-              Closed automatically
+            <span className="text-xs font-bold text-primary bg-primary/10 px-2.5 py-1 rounded-md">
+              {ticket.id || (ticket.ticket_ID ? `TKT-${String(ticket.ticket_ID).padStart(4, '0')}` : 'Ticket')}
+            </span>
+            {ticket.status === 'Closed' && isAutoClosed ? (
+              <Badge variant="outline" className="bg-slate-100 text-slate-800 border-slate-300 gap-1.5" title="Ticket was closed automatically due to inactivity following resolution window.">
+                <Clock className="h-3 w-3 text-slate-500" />
+                Closed automatically
+              </Badge>
+            ) : (
+              <Badge variant={getStatusBadgeVariant(ticket.status)}>
+                {ticket.status}
+              </Badge>
+            )}
+            <Badge
+              variant={
+                ticket.priority?.toLowerCase() === 'critical'
+                  ? 'destructive'
+                  : ticket.priority?.toLowerCase() === 'high'
+                  ? 'warning'
+                  : 'secondary'
+              }
+            >
+              {ticket.priority}
             </Badge>
-          ) : (
-            <Badge variant={getStatusBadgeVariant(ticket.status)}>
-              {ticket.status}
-            </Badge>
-          )}
-          <Badge
-            variant={
-              ticket.priority?.toLowerCase() === 'critical'
-                ? 'destructive'
-                : ticket.priority?.toLowerCase() === 'high'
-                ? 'warning'
-                : 'secondary'
-            }
-          >
-            {ticket.priority}
-          </Badge>
-          {(ticket.title?.startsWith('[Internal]') || ticket.is_internal || ticket.ticket_type === 'Internal' || ticket.type === 'Internal') && (
-            <Badge variant="secondary">
-              Internal
-            </Badge>
-          )}
-          {ticket.escalated && (
-            <Badge variant="destructive">
-              Escalated
-            </Badge>
-          )}
-          {ticket.reassignmentRequested && (
-            <Badge variant="warning">
-              Reassigned
-            </Badge>
-          )}
+            {!isCustomer && (ticket.title?.startsWith('[Internal]') || ticket.is_internal || ticket.ticket_type === 'Internal' || ticket.type === 'Internal') && (
+              <Badge variant="secondary">
+                Internal
+              </Badge>
+            )}
+            {!isCustomer && ticket.escalated && (
+              <Badge variant="destructive">
+                Escalated
+              </Badge>
+            )}
+            {!isCustomer && ticket.reassignmentRequested && (
+              <Badge variant="warning">
+                Reassigned
+              </Badge>
+            )}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {canReopen && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowReopenModal(true)}
+                className="text-xs font-semibold gap-1.5 border-border hover:bg-muted/50 cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-primary" />
+                <span>Reopen Ticket</span>
+              </Button>
+            )}
+            {numericId && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleOpenConversation}
+                className="text-xs font-semibold gap-1.5 shrink-0 border-border hover:bg-muted/50 cursor-pointer"
+              >
+                <MessageSquare className="w-3.5 h-3.5 text-primary" />
+                <span>{isCustomer ? 'Message Support' : 'Open Conversation'}</span>
+              </Button>
+            )}
+          </div>
         </div>
-        {numericId && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setShowConversationModal(true)}
-            className="text-xs font-semibold gap-1.5 shrink-0 border-border hover:bg-muted/50 cursor-pointer"
-          >
-            <MessageSquare className="w-3.5 h-3.5 text-primary" />
-            <span>Open Conversation</span>
-          </Button>
-        )}
-      </div>
 
-        {/* ─── Remaining-Time-to-Auto-Close Indicator (Resolved Internal Tickets) ─── */}
+        {/* Reopen Success Alert */}
+        {reopenSuccessNotice && (
+          <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-900 flex items-center justify-between gap-2 shadow-xs">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{reopenSuccessNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReopenSuccessNotice('')}
+              className="p-1 text-emerald-700 hover:text-emerald-900 cursor-pointer"
+              aria-label="Dismiss notice"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* ─── Remaining-Time-to-Auto-Close Indicator (Resolved Tickets) ─── */}
         {isResolved && windowConfig.autoCloseEnabled && remainingSeconds !== null && (
           <div
             role="region"
@@ -471,7 +595,7 @@ export default function EmployeeHistoryDetail() {
                   </span>
                 </div>
                 <p className="text-xs mt-1 opacity-90 leading-relaxed">
-                  This resolved internal ticket will automatically close in{' '}
+                  This resolved {isCustomer ? '' : 'internal '}ticket will automatically close in{' '}
                   <strong className="font-semibold underline decoration-dotted">
                     {formatRemainingText(remainingSeconds)}
                   </strong>{' '}
@@ -503,7 +627,7 @@ export default function EmployeeHistoryDetail() {
           {ticket.category && ` · ${ticket.category}`}
         </p>
 
-        <ReassignmentDisapprovalBanner ticket={ticket} className="mb-5" />
+        {!isCustomer && <ReassignmentDisapprovalBanner ticket={ticket} className="mb-5" />}
 
         {/* Info grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
@@ -609,7 +733,7 @@ export default function EmployeeHistoryDetail() {
               return (
                 <div
                   key={idx}
-                  onClick={() => setPreviewFile({ name: fileName, url: fileUrl })}
+                  onClick={() => setPreviewFile(typeof file === 'object' ? file : { name: fileName, url: fileUrl })}
                   className="border border-border rounded-lg overflow-hidden shadow-xs cursor-pointer hover:border-accent transition-colors"
                 >
                   {isImage(fileName) ? (
@@ -678,7 +802,7 @@ export default function EmployeeHistoryDetail() {
               return (
                 <div
                   key={idx}
-                  onClick={() => setPreviewFile({ name: fileName, url: fileUrl })}
+                  onClick={() => setPreviewFile(typeof file === 'object' ? file : { name: fileName, url: fileUrl })}
                   className="border border-emerald-500/30 rounded-lg overflow-hidden shadow-xs cursor-pointer hover:border-emerald-600 transition-colors"
                 >
                   {isImage(fileName) ? (
@@ -724,7 +848,7 @@ export default function EmployeeHistoryDetail() {
                 <div className="flex items-center justify-between text-muted-foreground mb-1.5">
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-primary text-xs uppercase tracking-wider">
-                      {rem.author || 'Staff Member'}
+                      {rem.author || (isCustomer ? 'Support Team' : 'Staff Member')}
                     </span>
                     {rem.status && (
                       <span className="px-2 py-0.5 text-[10px] font-semibold bg-muted text-foreground rounded-full border border-border">
@@ -745,7 +869,7 @@ export default function EmployeeHistoryDetail() {
         </div>
       )}
 
-      {/* Internal Ticket Discussion Trigger Card */}
+      {/* Ticket Discussion Trigger Card */}
       {numericId && (
         <div className="rounded-xl border border-border bg-card p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -753,9 +877,13 @@ export default function EmployeeHistoryDetail() {
               <MessageSquare className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-foreground">Internal Ticket Discussion</h3>
+              <h3 className="text-sm font-bold text-foreground">
+                {isCustomer ? 'Support Conversation' : 'Internal Ticket Discussion'}
+              </h3>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Collaboration messages and team communication recorded for this ticket.
+                {isCustomer
+                  ? 'Direct communications and updates with our customer support team.'
+                  : 'Collaboration messages and team communication recorded for this ticket.'}
               </p>
             </div>
           </div>
@@ -763,17 +891,17 @@ export default function EmployeeHistoryDetail() {
             type="button"
             variant="default"
             size="sm"
-            onClick={() => setShowConversationModal(true)}
+            onClick={handleOpenConversation}
             className="text-xs font-semibold gap-2 bg-[#252578] hover:bg-[#1d1d60] text-white shrink-0 cursor-pointer h-9 px-4"
           >
             <MessageSquare className="w-4 h-4" />
-            <span>Open Conversation</span>
+            <span>{isCustomer ? 'Chat with Support' : 'Open Conversation'}</span>
           </Button>
         </div>
       )}
 
-      {/* Internal Ticket Discussion Modal */}
-      {showConversationModal && numericId && (
+      {/* Internal Ticket Discussion Modal (only for internal modal if enabled) */}
+      {!isCustomer && showConversationModal && numericId && (
         <Dialog open={showConversationModal} onOpenChange={setShowConversationModal}>
           <DialogContent className="max-w-3xl w-full p-0 overflow-hidden max-h-[85vh] flex flex-col">
             <div className="p-4 border-b border-border flex items-center justify-between bg-card shrink-0">
@@ -799,7 +927,18 @@ export default function EmployeeHistoryDetail() {
       {/* Customer Satisfaction Feedback */}
       {ticket && (
         <div className="rounded-xl border border-border bg-card p-6 shadow-xs">
-          <TicketFeedbackSection ticket={ticket} readOnly={true} />
+          <TicketFeedbackSection
+            ticket={ticket}
+            readOnly={!isCustomer}
+            onLeaveFeedback={() => {
+              setEditingFeedback(null);
+              setShowFeedbackModal(true);
+            }}
+            onEditFeedback={(fb) => {
+              setEditingFeedback(fb);
+              setShowFeedbackModal(true);
+            }}
+          />
         </div>
       )}
 
@@ -809,6 +948,86 @@ export default function EmployeeHistoryDetail() {
         ticketId={numericId}
         pageSize={8}
       />
+
+      {/* Reopen Modal for Customer */}
+      {showReopenModal && (
+        <Dialog open={showReopenModal} onOpenChange={setShowReopenModal}>
+          <DialogContent className="max-w-md w-full p-6">
+            <div className="flex items-center justify-between pb-3 border-b border-border">
+              <div className="flex items-center gap-2">
+                <RotateCcw className="w-5 h-5 text-primary" />
+                <h3 className="text-base font-bold text-foreground">Reopen Support Ticket</h3>
+              </div>
+            </div>
+
+            <div className="py-4 space-y-4">
+              {reopenValidationError && (
+                <div className="rounded-lg bg-destructive/10 text-destructive border border-destructive/20 p-3 text-xs font-semibold">
+                  {reopenValidationError}
+                </div>
+              )}
+              <div>
+                <label htmlFor="reopen-reason-input" className="block text-xs font-bold text-foreground uppercase tracking-wider mb-1.5">
+                  Reason for Reopening <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  id="reopen-reason-input"
+                  rows={4}
+                  value={reopenReason}
+                  onChange={(e) => {
+                    setReopenReason(e.target.value);
+                    if (reopenValidationError) setReopenValidationError('');
+                  }}
+                  placeholder="Please detail why this issue persists or why further assistance is required..."
+                  className="w-full rounded-xl border border-border bg-card p-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent resize-none"
+                />
+                <p className="text-[11px] text-muted-foreground mt-1">Minimum 3 characters required.</p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-border">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setShowReopenModal(false);
+                  setReopenValidationError('');
+                }}
+                disabled={reopenSubmitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleExecuteReopen}
+                disabled={reopenSubmitting}
+                className="bg-[#252578] hover:bg-[#1d1d60] text-white"
+              >
+                {reopenSubmitting ? 'Reopening...' : 'Confirm Reopen'}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Customer Feedback Modal */}
+      {showFeedbackModal && (
+        <FeedbackModal
+          ticket={ticket}
+          existingFeedback={editingFeedback}
+          mode={editingFeedback ? 'edit' : 'create'}
+          onClose={() => {
+            setShowFeedbackModal(false);
+            setEditingFeedback(null);
+          }}
+          onSubmitSuccess={() => {
+            setShowFeedbackModal(false);
+            setEditingFeedback(null);
+          }}
+        />
+      )}
 
       {previewFile && (
         <FilePreviewModal

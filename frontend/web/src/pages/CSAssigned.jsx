@@ -19,6 +19,7 @@ import { TicketSummary, AssignModal } from '@/components/CSModals';
 import SlaStatusBadge from '@/components/sla/SlaStatusBadge';
 import { formatDisplayDate, parseUTCDate } from '@/utils/dateUtils';
 import { PageHeader } from '@/components/ui/page-header';
+import { OriginPillToggle } from '@/components/ui/OriginPillToggle';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
@@ -342,8 +343,10 @@ export default function CSAssigned() {
   }, [tickets, csFilterOptions.machines]);
 
   const statuses = useMemo(() => {
-    const defaultStatuses = ['In Progress', 'Pending Evaluation', 'On Hold', 'Pending Assignment', 'Resolved', 'Closed', 'Reopened'];
-    const fromBackend = (csFilterOptions.statuses || []).map((s) => s.status_name || s.name || s);
+    const defaultStatuses = ['In Progress', 'Pending Evaluation', 'On Hold', 'Pending Assignment', 'Reopened'];
+    const fromBackend = (csFilterOptions.statuses || [])
+      .map((s) => s.status_name || s.name || s)
+      .filter((s) => !['resolved', 'closed', 'discarded', 'discarded by customer'].includes(String(s).trim().toLowerCase()));
     return ['All Statuses', ...Array.from(new Set([...defaultStatuses, ...fromBackend]))];
   }, [csFilterOptions.statuses]);
 
@@ -375,9 +378,12 @@ export default function CSAssigned() {
     resolvedClosed: tabCounts?.resolvedClosed ?? 0,
   };
 
-  // Spec 0037 (AC-15): render the server's rows as they are. Tab, filters, SLA filter,
-  // and sort were all applied on the server.
-  const filtered = tickets;
+  const EXCLUDED_STATUSES = useMemo(() => ['resolved', 'closed', 'discarded', 'discarded by customer'], []);
+
+  // Filter out resolved, closed, and discarded tickets - they only belong on the Ticket History page
+  const filtered = useMemo(() => {
+    return (tickets || []).filter((t) => !EXCLUDED_STATUSES.includes(String(t.status || '').trim().toLowerCase()));
+  }, [tickets, EXCLUDED_STATUSES]);
 
   const totalPages = lastPage;
 
@@ -471,22 +477,10 @@ export default function CSAssigned() {
         title="Assigned Tickets"
         subtitle="Manage and track ongoing assigned support tickets"
         actions={
-          <div className="flex border border-border rounded-lg overflow-hidden bg-card shrink-0">
-            {['all', 'external', 'internal'].map((type) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => setTypeFilter(type)}
-                className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
-                  typeFilter === type
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-card hover:bg-muted text-muted-foreground'
-                }`}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
+          <OriginPillToggle
+            value={typeFilter}
+            onChange={(val) => setTypeFilter(val)}
+          />
         }
       />
 
@@ -560,22 +554,6 @@ export default function CSAssigned() {
             assignedTab === 'reassigned' ? 'bg-warning/15 text-warning' : 'bg-muted text-muted-foreground'
           }`}>
             {counts.reassigned}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => { setAssignedTab('resolved_closed'); setPage(1); }}
-          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
-            assignedTab === 'resolved_closed'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-          }`}
-        >
-          <span>Resolved / Closed</span>
-          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-            assignedTab === 'resolved_closed' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
-          }`}>
-            {counts.resolvedClosed}
           </span>
         </button>
       </div>

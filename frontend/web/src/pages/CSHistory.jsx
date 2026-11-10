@@ -5,14 +5,22 @@ import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import {
   getCSIncomingTickets,
   getDepartments,
+  getInternalTickets,
 } from '@/services/ticketService';
 import { formatDisplayDate, parseUTCDate } from '@/utils/dateUtils';
 import { PageHeader } from '@/components/ui/page-header';
+import { OriginPillToggle } from '@/components/ui/OriginPillToggle';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
 import { DataTableSkeleton, DataTableEmptyState } from '@/components/ui/data-table';
+import Pagination from '@/components/Pagination';
 
-const HISTORY_STATUSES = ['Closed', 'Resolved', 'Discarded', 'Discarded by Customer'];
+const HISTORY_STATUSES = ['Closed', 'Resolved'];
+
+const isClosedOrResolved = (status) => {
+  const s = String(status || '').trim().toLowerCase();
+  return s === 'closed' || s === 'resolved';
+};
 
 const getDisplayStatus = (ticket) => ticket.status;
 
@@ -24,11 +32,14 @@ export default function CSHistory({ roleContext = 'cs' }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  const [typeScope, setTypeScope] = useState('all'); // 'all' | 'external' | 'internal'
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All Status');
   const [categoryFilter, setCategoryFilter] = useState('All Category');
   const [priorityFilter, setPriorityFilter] = useState('All Priority');
   const [dateFilter, setDateFilter] = useState('');
+  const [page, setPage] = useState(1);
+  const itemsPerPage = 10;
 
   const loadStaticData = useCallback(async () => {
     try {
@@ -48,10 +59,58 @@ export default function CSHistory({ roleContext = 'cs' }) {
     setError('');
 
     try {
-      const incomingResult = await getCSIncomingTickets({ limit: 150, forceRefresh });
-      const list = incomingResult.filter((ticket) =>
-        HISTORY_STATUSES.includes(ticket.status) || ticket.reassignmentRequested
-      );
+      const [incomingResult, internalResult] = await Promise.allSettled([
+        getCSIncomingTickets({ limit: 150, forceRefresh }),
+        getInternalTickets(),
+      ]);
+
+      const incomingList = incomingResult.status === 'fulfilled' ? (incomingResult.value || []) : [];
+      const internalList = internalResult.status === 'fulfilled' ? (internalResult.value || []) : [];
+      let sessionInternal = [];
+      try {
+        sessionInternal = JSON.parse(sessionStorage.getItem('cs_created_tickets') || '[]');
+      } catch {
+        sessionInternal = [];
+      }
+
+      const seen = new Set();
+      const combined = [];
+
+      // 1. Process internal tickets (where CS/staff is requestor)
+      [...internalList, ...sessionInternal].forEach((t) => {
+        const id = t.ticket_ID || t.id;
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        combined.push({
+          ...t,
+          is_internal: true,
+          ticket_type: 'Internal',
+          is_own_ticket: true,
+          customer: t.customer || t.requestor || 'Staff (Internal)',
+        });
+      });
+
+      // 2. Process incoming tickets
+      incomingList.forEach((t) => {
+        const id = t.ticket_ID || t.id;
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        const isInternal = Boolean(
+          t.is_internal ||
+          t.ticket_type === 'Internal' ||
+          t.type === 'Internal' ||
+          t.title?.startsWith('[Internal]') ||
+          t.requester_employee_name ||
+          (t.requested_by && t.requested_by !== null)
+        );
+        combined.push({
+          ...t,
+          is_internal: isInternal,
+          ticket_type: isInternal ? 'Internal' : 'External',
+        });
+      });
+
+      const list = combined.filter((ticket) => isClosedOrResolved(ticket.status));
       setTickets(list);
     } catch {
       setError('Unable to load ticket history.');
@@ -73,7 +132,7 @@ export default function CSHistory({ roleContext = 'cs' }) {
 
         if (action === 'created') return;
 
-        const isHistoryTicket = HISTORY_STATUSES.includes(ticket.status) || ticket.reassignmentRequested;
+        const isHistoryTicket = isClosedOrResolved(ticket.status);
 
         setTickets((prev) => {
           const index = prev.findIndex((t) => t.id === ticket.id || t.ticket_ID === ticket.ticket_ID);
@@ -115,10 +174,29 @@ export default function CSHistory({ roleContext = 'cs' }) {
     return ['All Category', ...list.sort()];
   }, [tickets]);
 
+  const isInternalTicket = (t) =>
+    Boolean(
+      t.is_internal ||
+      t.ticket_type === 'Internal' ||
+      t.type === 'Internal' ||
+      t.title?.startsWith('[Internal]') ||
+      t.is_own_ticket ||
+      t.requester_employee_name ||
+      (t.requested_by && t.requested_by !== null)
+    );
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return tickets.filter((t) => {
       const displayStatus = getDisplayStatus(t);
+
+      // Origin filter (ALL / EXTERNAL / INTERNAL)
+      const scope = String(typeScope || 'all').toLowerCase();
+      if (scope === 'external' && isInternalTicket(t)) return false;
+      if (scope === 'internal' && !isInternalTicket(t)) return false;
+
+      // Only Closed and Resolved tickets belong in Ticket History
+      if (!isClosedOrResolved(t.status)) return false;
 
       if (statusFilter !== 'All Status' && displayStatus !== statusFilter) return false;
       if (categoryFilter !== 'All Category' && t.category !== categoryFilter) return false;
@@ -155,7 +233,16 @@ export default function CSHistory({ roleContext = 'cs' }) {
       }
       return true;
     });
-  }, [tickets, search, statusFilter, categoryFilter, priorityFilter, dateFilter]);
+  }, [tickets, search, statusFilter, categoryFilter, priorityFilter, dateFilter, typeScope]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, statusFilter, categoryFilter, priorityFilter, dateFilter, typeScope]);
+
+  const paged = useMemo(() => {
+    const start = (page - 1) * itemsPerPage;
+    return filtered.slice(start, start + itemsPerPage);
+  }, [filtered, page, itemsPerPage]);
 
   const openDetail = (t) => {
     const ticketId = t.ticket_ID || Number(String(t.id).replace(/\D/g, ''));
@@ -173,10 +260,16 @@ export default function CSHistory({ roleContext = 'cs' }) {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full min-w-0 max-w-full">
       <PageHeader
         title="Ticket History"
-        subtitle="Closed, resolved, and completed tickets on record."
+        subtitle="Closed and resolved tickets on record."
+        actions={
+          <OriginPillToggle
+            value={typeScope}
+            onChange={(val) => setTypeScope(val)}
+          />
+        }
       />
 
       {error && (
@@ -267,10 +360,16 @@ export default function CSHistory({ roleContext = 'cs' }) {
             ) : filtered.length === 0 ? (
               <DataTableEmptyState
                 colSpan={7}
-                message="No history tickets found. Closed, resolved, and completed tickets will appear here."
+                message={
+                  (typeScope || 'all').toLowerCase() === 'external'
+                    ? 'No external customer history tickets found.'
+                    : (typeScope || 'all').toLowerCase() === 'internal'
+                    ? 'No internal tickets found where you are the requestor.'
+                    : 'No history tickets found. Closed and resolved tickets will appear here.'
+                }
               />
             ) : (
-              filtered.map((t) => (
+              paged.map((t) => (
                 <TableRow
                   key={t.id}
                   onClick={() => openDetail(t)}
@@ -279,6 +378,11 @@ export default function CSHistory({ roleContext = 'cs' }) {
                   <TableCell className="font-semibold text-primary whitespace-nowrap">
                     <div className="flex flex-col min-w-0">
                       <span>{t.id}</span>
+                      {Boolean(t.is_internal || t.ticket_type === 'Internal' || t.is_own_ticket) && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-[#252578] border border-blue-200 mt-1 w-fit">
+                          Internal
+                        </span>
+                      )}
                       {t.reassignmentRequested && (
                         <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-warning/15 text-warning mt-1 w-fit">
                           Reassigned
@@ -321,10 +425,17 @@ export default function CSHistory({ roleContext = 'cs' }) {
           </TableBody>
         </Table>
         {!loading && filtered.length > 0 && (
-          <div className="px-4 py-3 border-t border-border bg-card">
+          <div className="px-4 py-3 border-t border-border bg-card flex flex-col sm:flex-row items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground">
-              Showing {filtered.length} of {tickets.length} history records
+              Showing {(page - 1) * itemsPerPage + 1} to{' '}
+              {Math.min(page * itemsPerPage, filtered.length)} of {filtered.length} history records
             </p>
+            <Pagination
+              totalItems={filtered.length}
+              itemsPerPage={itemsPerPage}
+              currentPage={page}
+              onPageChange={setPage}
+            />
           </div>
         )}
       </div>

@@ -8,6 +8,7 @@ import { formatDisplayDate, parseUTCDate } from '@/utils/dateUtils';
 import { useAuth } from '@/context/AuthContext';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import { PageHeader } from '@/components/ui/page-header';
+import { OriginPillToggle } from '@/components/ui/OriginPillToggle';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
@@ -497,9 +498,12 @@ export default function CSIncoming() {
     all: tabCounts?.all ?? 0,
   };
 
-  // Spec 0037 (AC-15): render the server's rows as they are. Tab, filters, SLA filter,
-  // and sort were all applied on the server.
-  const filtered = tickets;
+  const EXCLUDED_STATUSES = useMemo(() => ['resolved', 'closed', 'discarded', 'discarded by customer'], []);
+
+  // Filter out resolved, closed, and discarded tickets - they only belong on the Ticket History page
+  const filtered = useMemo(() => {
+    return (tickets || []).filter((t) => !EXCLUDED_STATUSES.includes(String(t.status || '').trim().toLowerCase()));
+  }, [tickets, EXCLUDED_STATUSES]);
 
   const totalPages = lastPage;
 
@@ -656,22 +660,10 @@ export default function CSIncoming() {
         title="Incoming Tickets"
         subtitle="Triage and assign new support tickets"
         actions={
-          <div className="flex border border-border rounded-lg overflow-hidden bg-card shrink-0">
-            {['all', 'external', 'internal'].map((type) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => setTypeFilter(type)}
-                className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
-                  typeFilter === type
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-card hover:bg-muted text-muted-foreground'
-                }`}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
+          <OriginPillToggle
+            value={typeFilter}
+            onChange={(val) => setTypeFilter(val)}
+          />
         }
       />
 

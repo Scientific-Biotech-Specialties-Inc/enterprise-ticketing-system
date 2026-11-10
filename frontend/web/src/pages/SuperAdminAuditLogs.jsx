@@ -44,6 +44,7 @@ import { Button } from '@/components/ui/button';
 import SecurityIncidentModal from '@/components/security/SecurityIncidentModal';
 import SystemAlertModal from '@/components/security/SystemAlertModal';
 import { formatDisplayDate } from '@/utils/dateUtils';
+import Pagination from '@/components/Pagination';
 
 const DEFAULT_RETENTION_DAYS = 365;
 
@@ -804,31 +805,12 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1.5 justify-end">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={currentPage <= 1}
-                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    className="h-8 w-8 p-0"
-                    title="Previous Page"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </Button>
-                  <span className="px-3 py-1 font-semibold text-foreground">
-                    Page {currentPage} of {totalPages}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={currentPage >= totalPages}
-                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    className="h-8 w-8 p-0"
-                    title="Next Page"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </Button>
-                </div>
+                <Pagination
+                  totalItems={totalEntries}
+                  itemsPerPage={pageSize}
+                  currentPage={currentPage}
+                  onPageChange={setCurrentPage}
+                />
               </div>
             )}
           </div>

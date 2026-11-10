@@ -3,11 +3,12 @@ import { Copy, Check, X } from 'lucide-react';
 
 /**
  * ModalHeader component
- * Displays: Monospace Ticket ID, Copy ID button, optional Staff view pill, 44x44 Close button
+ * Displays: Monospace Ticket ID, Copy ID button, 44x44 Close button
  */
 export default function ModalHeader({
   ticketId,
   isStaffView = false,
+  viewBadge = null,
   onClose,
   extraBadge = null,
 }) {
@@ -42,12 +43,6 @@ export default function ModalHeader({
           )}
           <span>{copied ? 'Copied' : 'Copy ID'}</span>
         </button>
-
-        {isStaffView && (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-900 text-white">
-            Staff view
-          </span>
-        )}
 
         {extraBadge}
       </div>

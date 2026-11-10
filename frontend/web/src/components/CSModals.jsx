@@ -1371,41 +1371,63 @@ export function TicketSummary({ ticket, employees = [], onClose, onEdit, onStatu
         header={
           <ModalHeader
             ticketId={ticketFormattedId}
-            isStaffView={true}
             onClose={onClose}
           />
         }
         footer={
-          !readOnly && (
-            <ModalFooter
-              leftContent={
-                <div className="flex items-center gap-2 flex-wrap">
-                  {/* Secondary: Place on Hold */}
-                  {currentStatus !== 'Closed' && currentStatus !== 'Resolved' && currentStatus !== 'On Hold' && typeof onStatusUpdate === 'function' && (
-                    <button
-                      type="button"
-                      onClick={() => setShowHoldModal(true)}
-                      disabled={isProcessing || isHolding}
-                      className="min-h-[44px] px-3.5 border border-[#D5D9E4] hover:bg-[#F5F6FA] text-xs font-semibold text-[#1B2033] rounded-lg transition-colors disabled:opacity-50 inline-flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <PauseCircle className="w-3.5 h-3.5 text-amber-600" />
-                      <span>Place on hold</span>
-                    </button>
-                  )}
+          <ModalFooter
+            leftContent={
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Secondary: Place on Hold */}
+                {!readOnly && currentStatus !== 'Closed' && currentStatus !== 'Resolved' && currentStatus !== 'On Hold' && typeof onStatusUpdate === 'function' && (
+                  <button
+                    type="button"
+                    onClick={() => setShowHoldModal(true)}
+                    disabled={isProcessing || isHolding}
+                    className="min-h-[44px] px-3.5 border border-[#D5D9E4] hover:bg-[#F5F6FA] text-xs font-semibold text-[#1B2033] rounded-lg transition-colors disabled:opacity-50 inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <PauseCircle className="w-3.5 h-3.5 text-amber-600" />
+                    <span>Place on hold</span>
+                  </button>
+                )}
 
-                  {/* Secondary: Message the Customer */}
+                {/* Secondary: Message the Assigned Employee */}
+                {assignee.isAssigned ? (
                   <button
                     type="button"
                     onClick={handleOpenMessages}
                     className="min-h-[44px] px-3.5 border border-[#D5D9E4] hover:bg-[#F5F6FA] text-xs font-semibold text-[#1B2033] rounded-lg transition-colors inline-flex items-center gap-1.5 cursor-pointer"
-                    title="Communicate directly with the customer regarding this ticket"
+                    title={`Communicate directly with ${assignee.name || 'the assigned employee'} regarding this ticket`}
                   >
                     <MessageCircle className="w-3.5 h-3.5 text-[#1E2A78]" />
-                    <span>Message the customer</span>
+                    <span>Message the assigned employee</span>
                   </button>
-                </div>
-              }
-              primaryAction={
+                ) : (
+                  <button
+                    type="button"
+                    disabled
+                    className="min-h-[44px] px-3.5 border border-[#D5D9E4] bg-gray-50 text-xs font-semibold text-gray-400 rounded-lg inline-flex items-center gap-1.5 opacity-60 cursor-not-allowed"
+                    title="No employee assigned to this ticket yet"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5 text-gray-400" />
+                    <span>Message the assigned employee</span>
+                  </button>
+                )}
+
+                {/* Secondary: Message the Customer */}
+                <button
+                  type="button"
+                  onClick={handleOpenMessages}
+                  className="min-h-[44px] px-3.5 border border-[#D5D9E4] hover:bg-[#F5F6FA] text-xs font-semibold text-[#1B2033] rounded-lg transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                  title="Communicate directly with the customer regarding this ticket"
+                >
+                  <MessageCircle className="w-3.5 h-3.5 text-[#1E2A78]" />
+                  <span>Message the customer</span>
+                </button>
+              </div>
+            }
+            primaryAction={
+              !readOnly ? (
                 <div className="flex items-center gap-2">
                   {/* If pending reassignment: No Reassign here since DecisionCard handles it; offer Escalate */}
                   {ticket.reassignmentRequested ? (
@@ -1490,9 +1512,9 @@ export function TicketSummary({ ticket, employees = [], onClose, onEdit, onStatu
                     </button>
                   ) : null}
                 </div>
-              }
-            />
-          )
+              ) : null
+            }
+          />
         }
       >
         {/* Alerts & Notifications */}
@@ -1639,6 +1661,8 @@ export function TicketSummary({ ticket, employees = [], onClose, onEdit, onStatu
               initials={assignee.initials}
               department={assignee.department}
               updatedText={`Updated ${formatPHT(ticket.last_updated || ticket.updated_at || ticket.created_at)}`}
+              onMessage={assignee.isAssigned ? handleOpenMessages : null}
+              messageLabel={`Message ${assignee.firstName || 'assigned employee'}`}
               onRemind={(!readOnly && isEligibleForReminder) ? () => setShowReminderModal(true) : null}
               remindDisabled={isProcessing || isReminderOnCooldown}
               remindTitle={isReminderOnCooldown ? `Reminder sent recently (${cooldownMinutesRemaining}m cooldown)` : `Send reminder to ${assignee.firstName}`}
@@ -1682,40 +1706,45 @@ export function TicketSummary({ ticket, employees = [], onClose, onEdit, onStatu
               <span className="text-xs font-bold uppercase tracking-wider text-[#5A6178] block">
                 TIMELINE
               </span>
-              <div className="relative pl-4 space-y-3 border-l-2 border-[#1E2A78] ml-2 pt-0.5">
-                {ticket.reassignmentRequested && (
-                  <div className="relative text-xs">
-                    <div className="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-amber-500" />
-                    <p className="font-bold text-[#1B2033]">
-                      Reassignment requested by {requestingEmployee.name}
-                    </p>
-                    <span className="text-[11px] text-[#5A6178]">
-                      Awaiting your decision
-                    </span>
-                  </div>
-                )}
-
-                {isTicketAssigned && (
-                  <div className="relative text-xs">
-                    <div className="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-[#1E2A78]" />
-                    <p className="font-bold text-[#1B2033]">
-                      Assigned to {assignee.name}
-                    </p>
-                    <span className="text-[11px] text-[#5A6178]">
-                      {formatPHT(ticket.assigned_at || ticket.last_updated || ticket.updated_at || ticket.created_at)}
-                    </span>
-                  </div>
-                )}
-
-                <div className="relative text-xs">
-                  <div className="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-[#1E2A78]" />
-                  <p className="font-bold text-[#1B2033]">
-                    Ticket submitted
-                  </p>
-                  <span className="text-[11px] text-[#5A6178]">
-                    {formatPHT(ticket.created_at || ticket.date_created || ticket.date)}
-                  </span>
-                </div>
+              <div className="space-y-0 ml-1">
+                {[
+                  ticket.reassignmentRequested ? {
+                    id: 'reassign',
+                    dotColor: 'bg-amber-500',
+                    title: `Reassignment requested by ${requestingEmployee.name}`,
+                    time: 'Awaiting your decision',
+                  } : null,
+                  isTicketAssigned ? {
+                    id: 'assigned',
+                    dotColor: 'bg-[#1E2A78]',
+                    title: `Assigned to ${assignee.name}`,
+                    time: formatPHT(ticket.assigned_at || ticket.last_updated || ticket.updated_at || ticket.created_at),
+                  } : null,
+                  {
+                    id: 'submitted',
+                    dotColor: 'bg-[#1E2A78]',
+                    title: 'Ticket submitted',
+                    time: formatPHT(ticket.created_at || ticket.date_created || ticket.date),
+                  },
+                ].filter(Boolean).map((evt, idx, arr) => {
+                  const isLast = idx === arr.length - 1;
+                  return (
+                    <div key={evt.id} className="flex items-start gap-3 text-xs">
+                      <div className="flex flex-col items-center self-stretch shrink-0 w-3">
+                        <div className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1 ${evt.dotColor}`} />
+                        {!isLast && <div className="w-[2px] bg-[#1E2A78] flex-1 my-0.5" />}
+                      </div>
+                      <div className={`flex-1 min-w-0 ${!isLast ? 'pb-3' : 'pb-0.5'}`}>
+                        <p className="font-bold text-[#1B2033]">
+                          {evt.title}
+                        </p>
+                        <span className="text-[11px] text-[#5A6178]">
+                          {evt.time}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
