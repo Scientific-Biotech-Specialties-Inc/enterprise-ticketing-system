@@ -20,6 +20,7 @@ Route::middleware('auth:api')->get('/user', function (Request $request) {
 Route::middleware('auth.token_or_internal')->group(function () {
     Route::post('/chat', [AiChatController::class, 'chat']);
     Route::post('/classify-department', [AiChatController::class, 'classifyDepartment']);
+    Route::post('/classify-category', [AiChatController::class, 'classifyCategory']);
     Route::get('/conversations', [AiChatController::class, 'conversations']);
     Route::get('/conversations/{id}', [AiChatController::class, 'showConversation']);
     Route::get('/conversations/{id}/escalate-handoff', [AiChatController::class, 'escalateHandoff']);

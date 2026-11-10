@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import tokenStore from '@/auth/tokenStore';
-import { saveFeedback, updateFeedback, deleteFeedback, fetchFeedbackForTicket } from './mockFeedbackData';
+import { saveFeedback, updateFeedback, deleteFeedback, fetchFeedbackForTicket, feedbackTicketId } from './mockFeedbackData';
 
 /**
  * Spec 0034 (AC-4, AC-11): the analytics service identifies the caller from the verified token only.
@@ -84,12 +84,25 @@ describe('feedback requests to the analytics service (spec 0034)', () => {
     expect(init.headers).not.toHaveProperty('Authorization');
   });
 
-  it('keeps the saved local copy even when the analytics request is refused', async () => {
-    global.fetch = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({ message: 'Unauthenticated.' }) }));
+  it('reports a refused analytics request and does not pretend the feedback was saved', async () => {
+    global.fetch = vi.fn(async () => ({ ok: false, status: 404, json: async () => ({ message: 'Ticket not found.' }) }));
+
+    await expect(saveFeedback('5001', { 501: 5 }, {}, 'Not saved')).rejects.toThrow('Ticket not found.');
+
+    expect(JSON.parse(localStorage.getItem('customer_feedback') || '{}')['5001']).toBeUndefined();
+  });
+
+  it('keeps the saved local copy when the analytics service cannot be reached at all', async () => {
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch'); });
 
     await saveFeedback('5001', { 501: 5 }, {}, 'Still saved locally');
 
     const stored = JSON.parse(localStorage.getItem('customer_feedback'));
     expect(stored['5001'].overallComment).toBe('Still saved locally');
+  });
+
+  it('uses the numeric ticket_ID, not the display number, for backend calls', () => {
+    expect(feedbackTicketId({ id: 'TKT-0012', ticket_ID: 12 })).toBe(12);
+    expect(feedbackTicketId({ id: 'TKT-0012' })).toBe('TKT-0012');
   });
 });

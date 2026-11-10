@@ -66,6 +66,7 @@ vi.mock('@/data/mockFeedbackData', () => ({
   deleteFeedback: vi.fn(() => Promise.resolve(true)),
   hasFeedbackBeenSubmitted: vi.fn(),
   fetchFeedbackForTicket: vi.fn(() => Promise.resolve(null)),
+  feedbackTicketId: vi.fn((ticket) => ticket?.ticket_ID ?? ticket?.id),
 }));
 
 describe('CS SLA Display and Employee Reminder Tests', () => {
@@ -96,9 +97,11 @@ describe('CS SLA Display and Employee Reminder Tests', () => {
   });
 
   it('renders SLA due date and accessible status badge in TicketSummary', () => {
-    render(<TicketSummary ticket={getFreshTicket()} employees={[]} onClose={vi.fn()} />);
+    // The SLA Status badge row lives in the read only summary; the editable view shows the due date only.
+    render(<TicketSummary ticket={getFreshTicket()} employees={[]} onClose={vi.fn()} readOnly />);
 
     expect(screen.getByText('SLA Due Date')).toBeInTheDocument();
+    expect(screen.getByText('SLA Status')).toBeInTheDocument();
     expect(screen.getByText('At Risk')).toBeInTheDocument();
   });
 
@@ -221,7 +224,7 @@ describe('CS SLA Display and Employee Reminder Tests', () => {
 
     const reminderBtn = screen.getByRole('button', { name: /send reminder/i });
     expect(reminderBtn).toBeDisabled();
-    expect(screen.getByText('Last Reminder Sent')).toBeInTheDocument();
+    expect(screen.getByText('Employee Reminder Dispatched')).toBeInTheDocument();
   });
 
   it('covers AC-6 (unassigned): hides Send Reminder button when ticket has no assigned employee', () => {

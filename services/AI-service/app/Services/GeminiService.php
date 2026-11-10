@@ -509,6 +509,75 @@ class GeminiService
     }
 
     /**
+     * Suggest which problem category a ticket belongs to, choosing only from the supplied list.
+     *
+     * There is deliberately no keyword fallback: when Gemini is unavailable, errors, or is not
+     * confident, category_id is null and the customer picks manually (no local fallback model).
+     *
+     * @param  array<int, array{id:int|string, name:string}>  $categories
+     * @return array{category_id: int|string|null, confidence: float, reasoning: string, source: string}
+     */
+    public function classifyCategory(string $title, string $description, array $categories, float $minConfidence = 0.6): array
+    {
+        $none = ['category_id' => null, 'confidence' => 0.0, 'reasoning' => '', 'source' => 'none'];
+
+        if (empty($this->apiKey) || empty($categories)) {
+            return $none;
+        }
+
+        $byId = [];
+        $lines = [];
+        foreach ($categories as $c) {
+            $byId[(string) $c['id']] = $c['id'];
+            $lines[] = "{$c['id']}: {$c['name']}";
+        }
+
+        try {
+            $url = "{$this->baseUrl}/{$this->model}:generateContent";
+            $systemInstruction = "You are an enterprise hospital and clinic IT/Service desk triage assistant.\n"
+                . "Choose the single best problem category for the support ticket from this list only (format 'id: name'):\n"
+                . implode("\n", $lines) . "\n\n"
+                . "If none clearly fits, set category_id to null. Never invent an id.\n"
+                . "Output strictly a raw JSON object with no markdown:\n"
+                . "{\"category_id\": <id from the list or null>, \"confidence\": 0.90, \"reasoning\": \"1 concise sentence.\"}";
+
+            $response = Http::withHeaders(['Content-Type' => 'application/json', 'x-goog-api-key' => $this->apiKey])
+                ->timeout(6)
+                ->post($url, [
+                    'systemInstruction' => ['parts' => [['text' => $systemInstruction]]],
+                    'contents' => [[
+                        'role' => 'user',
+                        'parts' => [['text' => "Ticket Title: {$title}\nDescription: {$description}"]],
+                    ]],
+                    'generationConfig' => ['temperature' => 0.1, 'maxOutputTokens' => 200],
+                ]);
+
+            if ($response->successful()) {
+                $raw = $response->json('candidates.0.content.parts.0.text') ?? '';
+                if (preg_match('/\{[\s\S]*\}/', $raw, $m)) {
+                    $data = json_decode($m[0], true);
+                    $picked = is_array($data) ? ($data['category_id'] ?? null) : null;
+                    $confidence = (float) ($data['confidence'] ?? 0);
+
+                    // Only accept an id that really is in the supplied list, with enough confidence.
+                    if ($picked !== null && isset($byId[(string) $picked]) && $confidence >= $minConfidence) {
+                        return [
+                            'category_id' => $byId[(string) $picked],
+                            'confidence' => $confidence,
+                            'reasoning' => (string) ($data['reasoning'] ?? ''),
+                            'source' => 'gemini',
+                        ];
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Gemini category classification failed; leaving category for manual selection: ' . $e->getMessage());
+        }
+
+        return $none;
+    }
+
+    /**
      * Resilient keyword based heuristic classification when AI is unavailable or offline.
      */
     public function heuristicClassifyDepartment(string $title, string $description): array

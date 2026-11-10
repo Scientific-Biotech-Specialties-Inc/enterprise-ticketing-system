@@ -1166,7 +1166,7 @@ export default function EmployeeTicketUpdate() {
                       </label>
                       <input
                         type="number"
-                        step="0.5"
+                        step="0.1"
                         min="0.1"
                         max="24"
                         placeholder="e.g. 2.5"
