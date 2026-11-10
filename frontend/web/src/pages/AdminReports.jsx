@@ -3,7 +3,6 @@ import {
   FileText,
   Download,
   ChevronDown,
-  Filter,
   Eye,
   RefreshCw,
   AlertCircle,
@@ -25,6 +24,12 @@ import {
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
 import { DataTableSkeleton } from '@/components/ui/data-table';
+import {
+  DATE_RANGE_ERROR_MESSAGE,
+  isDateRangeValid,
+  resolveStartDateUpdate,
+  resolveEndDateUpdate,
+} from '@/utils/dateUtils';
 
 // ─── Available Report Types ──────────────────────────────────────────────────
 const REPORT_TYPES = [
@@ -90,6 +95,7 @@ export default function AdminReports() {
   const [customEndDate, setCustomEndDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [selectedDepartment, setSelectedDepartment] = useState('All Departments');
   const [priorityFilter, setPriorityFilter] = useState('All');
+  const [dateRangeError, setDateRangeError] = useState('');
 
   // ─── Preview Display State ────────────────────────────────────────────────
   const [previewData, setPreviewData] = useState([]);
@@ -144,6 +150,11 @@ export default function AdminReports() {
 
   // ─── Generate Live Preview Action ─────────────────────────────────────────
   const handleGeneratePreview = useCallback(async () => {
+    if (datePreset === 'Custom Range' && !isDateRangeValid(customStartDate, customEndDate)) {
+      setDateRangeError(DATE_RANGE_ERROR_MESSAGE);
+      setGenerationError(DATE_RANGE_ERROR_MESSAGE);
+      return;
+    }
     setIsGenerating(true);
     setGenerationError(null);
     setGenerationNotice(`Querying live "${currentReportDef.name}" records across ${branchName}...`);
@@ -198,6 +209,11 @@ export default function AdminReports() {
   // ─── Format Export Handlers (TS061 Criteria: PDF, Excel, CSV) ─────────────
   const handleExport = async (format) => {
     if (!previewData || previewData.length === 0) return;
+    if (datePreset === 'Custom Range' && !isDateRangeValid(customStartDate, customEndDate)) {
+      setDateRangeError(DATE_RANGE_ERROR_MESSAGE);
+      setGenerationError(DATE_RANGE_ERROR_MESSAGE);
+      return;
+    }
 
     // The server renders PDF, Excel and CSV from the same query as the preview, so files match what is on screen.
     const apiFormat = format === 'excel' ? 'xlsx' : format;
@@ -258,134 +274,118 @@ export default function AdminReports() {
         }
       />
 
-      {/* ─── STEP 1 & 2: CONFIGURATION CONTROLS (TS061 Criteria) ─────────── */}
-      <div className="rounded-xl border border-border bg-card p-6 shadow-xs space-y-5">
-        <div className="flex items-center justify-between border-b border-border pb-3">
-          <div className="flex items-center gap-2">
-            <Filter className="w-4 h-4 text-primary" />
-            <h2 className="text-sm font-bold text-foreground">Configure Report Scope &amp; Filters</h2>
-          </div>
-          <span className="text-xs text-muted-foreground">Branch Scoped: <strong>{branchName}</strong></span>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* ─── Filter Toolbar (Matches dropdown styling across other roles) ──── */}
+      <div className="w-full space-y-2.5">
+        <div className="flex flex-wrap items-center gap-2.5 w-full">
           {/* 1. Report Type Selector */}
-          <div className="space-y-1.5">
-            <label htmlFor="report-type-select" className="text-xs font-semibold text-foreground">Report Type</label>
-            <select
-              id="report-type-select"
-              aria-label="Report Type"
-              value={selectedReportType}
-              onChange={(e) => setSelectedReportType(e.target.value)}
-              className="w-full h-9 rounded-lg border border-border bg-page px-3 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
-            >
-              {REPORT_TYPES.map((r) => (
-                <option key={r.id} value={r.id}>{r.name}</option>
-              ))}
-            </select>
-            <p className="text-[11px] text-muted-foreground line-clamp-1">{currentReportDef.description}</p>
-          </div>
+          <select
+            id="report-type-select"
+            aria-label="Report Type"
+            title="Report Type"
+            value={selectedReportType}
+            onChange={(e) => setSelectedReportType(e.target.value)}
+            className="h-10 flex-1 min-w-[180px] rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors cursor-pointer"
+          >
+            {REPORT_TYPES.map((r) => (
+              <option key={r.id} value={r.id}>{r.name}</option>
+            ))}
+          </select>
 
           {/* 2. Date Range Presets */}
-          <div className="space-y-1.5">
-            <label htmlFor="report-date-range-select" className="text-xs font-semibold text-foreground">Date Range</label>
-            <select
-              id="report-date-range-select"
-              aria-label="Date Range"
-              value={datePreset}
-              onChange={(e) => setDatePreset(e.target.value)}
-              className="w-full h-9 rounded-lg border border-border bg-page px-3 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
-            >
-              {['Today', 'Last 7 Days', 'Last 30 Days', 'Last 90 Days', 'Custom Range'].map((p) => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
-            {datePreset === 'Custom Range' ? (
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="date"
-                  value={customStartDate}
-                  onChange={(e) => setCustomStartDate(e.target.value)}
-                  className="w-1/2 h-7 px-1.5 text-[11px] border border-border rounded bg-page"
-                />
-                <span className="text-xs text-muted-foreground">to</span>
-                <input
-                  type="date"
-                  value={customEndDate}
-                  onChange={(e) => setCustomEndDate(e.target.value)}
-                  className="w-1/2 h-7 px-1.5 text-[11px] border border-border rounded bg-page"
-                />
-              </div>
-            ) : (
-              <p className="text-[11px] text-muted-foreground">Applied timeframe: {effectiveDateRange}</p>
-            )}
-          </div>
+          <select
+            id="report-date-range-select"
+            aria-label="Date Range"
+            title="Date Range"
+            value={datePreset}
+            onChange={(e) => {
+              setDatePreset(e.target.value);
+              setDateRangeError('');
+            }}
+            className="h-10 flex-1 min-w-[140px] rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors cursor-pointer"
+          >
+            {['Today', 'Last 7 Days', 'Last 30 Days', 'Last 90 Days', 'Custom Range'].map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
 
           {/* 3. Department Scope */}
-          <div className="space-y-1.5">
-            <label htmlFor="report-department-select" className="text-xs font-semibold text-foreground">Department Filter</label>
-            <select
-              id="report-department-select"
-              aria-label="Department Filter"
-              value={selectedDepartment}
-              onChange={(e) => setSelectedDepartment(e.target.value)}
-              className="w-full h-9 rounded-lg border border-border bg-page px-3 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
-            >
-              {DEPARTMENTS.map((d) => (
-                <option key={d} value={d}>{d}</option>
-              ))}
-            </select>
-            <p className="text-[11px] text-muted-foreground">Departmental allocation</p>
-          </div>
+          <select
+            id="report-department-select"
+            aria-label="Department Filter"
+            title="Department Filter"
+            value={selectedDepartment}
+            onChange={(e) => setSelectedDepartment(e.target.value)}
+            className="h-10 flex-1 min-w-[150px] rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors cursor-pointer"
+          >
+            {DEPARTMENTS.map((d) => (
+              <option key={d} value={d}>{d}</option>
+            ))}
+          </select>
 
           {/* 4. Priority Filter */}
-          <div className="space-y-1.5">
-            <label htmlFor="report-priority-select" className="text-xs font-semibold text-foreground">Severity / Priority</label>
-            <select
-              id="report-priority-select"
-              aria-label="Severity / Priority"
-              value={priorityFilter}
-              onChange={(e) => setPriorityFilter(e.target.value)}
-              className="w-full h-9 rounded-lg border border-border bg-page px-3 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
-            >
-              <option value="All">All Severity Levels</option>
-              <option value="Critical Only">Critical Only</option>
-              <option value="High">High Only</option>
-              <option value="Medium">Medium Only</option>
-              <option value="Low">Low Only</option>
-            </select>
-            <p className="text-[11px] text-muted-foreground">Filter by ticket criticality</p>
-          </div>
-        </div>
-
-        {/* Generate / Regenerate Preview Action Button */}
-        <div className="flex items-center justify-between pt-2 border-t border-border">
-          <div className="text-xs text-muted-foreground">
-            {isGenerating && generationNotice ? (
-              <span className="text-primary font-medium flex items-center gap-1.5">
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                {generationNotice}
-              </span>
-            ) : appliedFilters ? (
-              <span>Last preview generated at <strong>{appliedFilters.generationTime}</strong></span>
-            ) : null}
-          </div>
-
-          <Button
-            variant="default"
-            size="sm"
-            onClick={handleGeneratePreview}
-            disabled={isGenerating}
-            className="gap-1.5 text-xs bg-[#252578] hover:bg-[#1d1d60] text-white shadow-xs font-semibold cursor-pointer"
+          <select
+            id="report-priority-select"
+            aria-label="Severity / Priority"
+            title="Severity / Priority"
+            value={priorityFilter}
+            onChange={(e) => setPriorityFilter(e.target.value)}
+            className="h-10 flex-1 min-w-[140px] rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors cursor-pointer"
           >
-            {isGenerating ? (
-              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <Eye className="w-3.5 h-3.5" />
-            )}
-            <span>{isGenerating ? 'Generating Preview...' : 'Generate & Preview Report'}</span>
-          </Button>
+            <option value="All">All Severity Levels</option>
+            <option value="Critical Only">Critical Only</option>
+            <option value="High">High Only</option>
+            <option value="Medium">Medium Only</option>
+            <option value="Low">Low Only</option>
+          </select>
         </div>
+
+        {datePreset === 'Custom Range' && (
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="date"
+                aria-label="Start date"
+                value={customStartDate}
+                onChange={(e) => {
+                  const next = resolveStartDateUpdate(e.target.value, customEndDate);
+                  setCustomStartDate(next.startDate);
+                  setCustomEndDate(next.endDate);
+                  setDateRangeError(next.error);
+                }}
+                className="h-9 px-3 text-xs border border-border rounded-lg bg-card text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+              />
+              <span className="text-xs text-muted-foreground">to</span>
+              <input
+                type="date"
+                aria-label="End date"
+                min={customStartDate || undefined}
+                value={customEndDate}
+                onChange={(e) => {
+                  const next = resolveEndDateUpdate(customStartDate, e.target.value);
+                  if (!next.valid) {
+                    setDateRangeError(next.error);
+                    return;
+                  }
+                  setCustomEndDate(next.endDate);
+                  setDateRangeError('');
+                }}
+                className="h-9 px-3 text-xs border border-border rounded-lg bg-card text-foreground outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+              />
+            </div>
+            {dateRangeError && (
+              <p role="alert" className="text-xs text-destructive font-medium">
+                {dateRangeError}
+              </p>
+            )}
+          </div>
+        )}
+
+        {isGenerating && generationNotice && (
+          <p className="text-xs text-primary font-medium flex items-center gap-1.5">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            {generationNotice}
+          </p>
+        )}
       </div>
 
       {/* ─── ERROR STATE ───────────────────────────────────────────────────── */}
@@ -403,20 +403,19 @@ export default function AdminReports() {
 
       {/* ─── STEP 3: PREVIEW DISPLAY & FILTER SUMMARY (TS061 Criteria) ─────── */}
       <div className="rounded-xl border border-border bg-card p-6 shadow-xs space-y-4">
-        {/* Applied Filter Summary Banner */}
+        {/* Report Title & Export Action */}
         {appliedFilters && (
-          <div className="p-3.5 bg-muted/40 rounded-xl border border-border flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
-            <div className="space-y-1">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+            <div className="space-y-0.5">
               <div className="flex items-center gap-2">
                 <span className="font-bold text-foreground">Report:</span>
                 <span className="text-primary font-semibold">{appliedFilters.reportType}</span>
               </div>
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground text-[11px]">
-                <span>Branch: <strong className="text-foreground">{appliedFilters.branch}</strong></span>
-                <span>Range: <strong className="text-foreground">{appliedFilters.dateRange}</strong></span>
-                <span>Department: <strong className="text-foreground">{appliedFilters.department}</strong></span>
-                <span>Priority: <strong className="text-foreground">{appliedFilters.priority}</strong></span>
-              </div>
+              {appliedFilters.generationTime && (
+                <p className="text-muted-foreground text-[11px]">
+                  Generated: <strong className="text-foreground">{appliedFilters.generationTime}</strong>
+                </p>
+              )}
             </div>
 
             {/* Export Format Dropdown (PDF, Excel, CSV) */}

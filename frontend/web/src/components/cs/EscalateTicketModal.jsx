@@ -224,7 +224,7 @@ export default function EscalateTicketModal({
 
   return (
     <div
-      className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] animate-in fade-in duration-200"
+      className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none animate-in fade-in duration-200"
       role="dialog"
       aria-modal="true"
       aria-labelledby="escalate-modal-title"
@@ -262,7 +262,7 @@ export default function EscalateTicketModal({
         </div>
 
         {/* Modal Body */}
-        <form onSubmit={handleConfirm} className="p-6 overflow-y-auto space-y-5 flex-1">
+        <form onSubmit={handleConfirm} className="p-6 overflow-y-auto overscroll-contain space-y-5 flex-1">
           {/* Category Rule Badge Banner */}
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2.5">
             <div className="flex items-center justify-between">

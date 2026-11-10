@@ -318,4 +318,41 @@ describe('SuperAdminAuditLogs Component Tests', () => {
       expect(screen.getByText(/Purged 1 expired log records/i)).toBeInTheDocument();
     });
   });
+
+  it('rejects End date earlier than Start date under Custom Range', async () => {
+    render(
+      <MemoryRouter initialEntries={['/superadmin/audit-logs']}>
+        <SuperAdminAuditLogs defaultTab="logs" />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByDisplayValue('All Dates')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByDisplayValue('All Dates'), { target: { value: 'custom' } });
+    const startInput = screen.getByLabelText('Start date');
+    const endInput = screen.getByLabelText('End date');
+
+    fireEvent.change(startInput, { target: { value: '2026-11-10' } });
+    fireEvent.change(endInput, { target: { value: '2026-11-12' } });
+    expect(endInput.value).toBe('2026-11-12');
+
+    fireEvent.change(endInput, { target: { value: '2026-11-05' } });
+    expect(screen.getByRole('alert')).toHaveTextContent('End date cannot be earlier than start date.');
+    expect(endInput.value).toBe('2026-11-12');
+  });
+
+  it('renders search bar and filter dropdowns without an outer background card container', async () => {
+    render(
+      <MemoryRouter initialEntries={['/superadmin/audit-logs']}>
+        <SuperAdminAuditLogs defaultTab="logs" />
+      </MemoryRouter>
+    );
+
+    const dateSelect = await screen.findByDisplayValue('All Dates');
+    const filterRow = dateSelect.parentElement;
+    const filterWrapper = filterRow?.parentElement;
+    expect(filterWrapper).toBeTruthy();
+    expect(filterWrapper.className).not.toContain('bg-card');
+    expect(filterWrapper.className).not.toContain('border-border');
+  });
 });

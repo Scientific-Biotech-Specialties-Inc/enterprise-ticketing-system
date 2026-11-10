@@ -24,6 +24,7 @@ import { InfoTooltip } from '@/components/ui/tooltip';
 import { adaptDepartmentPerformance, METRIC_DEFINITIONS } from '@/services/dashboardAnalyticsService';
 import { getAdminDepartmentPerformance } from '@/services/ticketService';
 import { cn } from '@/lib/utils';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 
 export default function DepartmentPerformanceView({
   branchName = 'your branch',
@@ -36,6 +37,7 @@ export default function DepartmentPerformanceView({
   const [sortField, setSortField] = useState('totalTicketsHandled');
   const [sortDirection, setSortDirection] = useState('desc');
   const [selectedDeptDetail, setSelectedDeptDetail] = useState(null);
+  useLockBodyScroll(Boolean(selectedDeptDetail));
 
   const [deptData, setDeptData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -180,7 +182,7 @@ export default function DepartmentPerformanceView({
           subtitle={`Across departments (${selectedPeriod})`}
           icon={<BarChart3 className="w-4 h-4 text-accent" />}
           iconBg="bg-blue-50 text-accent"
-          calculationBasis={METRIC_DEFINITIONS.totalTickets}
+          showTooltip={false}
         />
         <MetricCard
           title="Dept SLA Compliance"
@@ -188,7 +190,7 @@ export default function DepartmentPerformanceView({
           subtitle="Department adherence target ≥ 90%"
           icon={<ShieldCheck className="w-4 h-4 text-emerald-600" />}
           iconBg="bg-emerald-50 text-emerald-600"
-          calculationBasis={METRIC_DEFINITIONS.slaCompliance}
+          showTooltip={false}
         />
         <MetricCard
           title="Overdue / Breached"
@@ -197,7 +199,7 @@ export default function DepartmentPerformanceView({
           icon={<AlertTriangle className="w-4 h-4 text-rose-600" />}
           iconBg="bg-rose-50 text-rose-600"
           variant="destructive"
-          calculationBasis={METRIC_DEFINITIONS.overdueTickets}
+          showTooltip={false}
         />
         <MetricCard
           title="Staff Imbalance"
@@ -206,7 +208,7 @@ export default function DepartmentPerformanceView({
           icon={<Users className="w-4 h-4 text-amber-600" />}
           iconBg="bg-amber-50 text-amber-600"
           variant="amber"
-          calculationBasis={METRIC_DEFINITIONS.employeeWorkload}
+          showTooltip={false}
         />
       </div>
 
@@ -427,8 +429,8 @@ export default function DepartmentPerformanceView({
 
       {/* Department Team Drill-down Modal */}
       {selectedDeptDetail && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-card rounded-2xl border border-border shadow-2xl max-w-lg w-full p-6 space-y-4 font-sans animate-in fade-in-0 zoom-in-95">
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 overscroll-none">
+          <div className="bg-card rounded-2xl border border-border shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto overscroll-contain p-6 space-y-4 font-sans animate-in fade-in-0 zoom-in-95">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <div>
                 <h3 className="text-base font-bold text-slate-dark">{selectedDeptDetail.name} Team Drill-Down</h3>

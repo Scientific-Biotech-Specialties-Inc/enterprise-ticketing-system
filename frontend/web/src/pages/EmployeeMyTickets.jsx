@@ -2,9 +2,11 @@ import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Filter, Plus, Search, Inbox, AlertTriangle, FileText, Edit3, Trash2, AlertCircle } from 'lucide-react';
 import TicketModal from '@/components/TicketModal';
+import CustomerTicketDetailModal from '@/components/CustomerTicketDetailModal';
 import { AssignModal } from '@/components/CSModals';
 import { useAuth } from '@/context/AuthContext';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import {
   createInternalTicket,
   getInternalTickets,
@@ -18,6 +20,7 @@ import {
   assignTicketToEmployees,
   getTicketDrafts,
   deleteTicketDraft,
+  reopenTicket,
 } from '@/services/ticketService';
 import { statusColors } from '@/constants/employeeTickets';
 import { getMaxOpenTicketsLimit, OPEN_STATUS_SET } from '@/data/ticketLimitConfig';
@@ -27,6 +30,7 @@ import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
 import { DataTableSkeleton, DataTableEmptyState } from '@/components/ui/data-table';
 import { ConfirmationModal } from '@/components/ui/confirmation-modal';
+import Pagination from '@/components/Pagination';
 
 const STATUSES = ['Open', 'Pending Assignment', 'In Progress', 'Pending', 'Resolved', 'Closed', 'Discarded', 'On Hold'];
 const HISTORY_STATUSES = ['Resolved', 'Closed', 'Discarded by Customer', 'Discarded'];
@@ -54,6 +58,7 @@ export default function EmployeeMyTickets({ roleContext }) {
   const [confirmDiscard, setConfirmDiscard] = useState(null);
   const [loading, setLoading] = useState(true);
   const [modalLoading, setModalLoading] = useState(false);
+  useLockBodyScroll(Boolean(confirmCreated || modalLoading));
   const [loadingText, setLoadingText] = useState('Loading...');
   const [error, setError] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -65,6 +70,12 @@ export default function EmployeeMyTickets({ roleContext }) {
   const [loadingDrafts, setLoadingDrafts] = useState(false);
   const [formOptions, setFormOptions] = useState(() => getCachedTicketFormOptions() || {});
   const isHistory = false;
+
+  const isCsRole = useMemo(() => {
+    const role = String(user?.role || roleContext || '').toLowerCase();
+    return role.includes('cs') || role.includes('customer service') || role.includes('coordinator');
+  }, [user?.role, roleContext]);
+
   // CS delegation state
   const [csAssignTicket, setCsAssignTicket] = useState(null);
   const [csEmployees, setCsEmployees] = useState([]);
@@ -163,34 +174,6 @@ export default function EmployeeMyTickets({ roleContext }) {
     search: '',
   });
 
-  const [employees, setEmployees] = useState([]);
-  const [departments, setDepartments] = useState([]);
-  const [assignModalTicket, setAssignModalTicket] = useState(null);
-
-  useEffect(() => {
-    if (roleContext === 'cs') {
-      const loadAssignOptions = async () => {
-        try {
-          const [emps, depts] = await Promise.all([
-            getAssignableEmployees(),
-            getDepartments(),
-          ]);
-          setEmployees(emps.map(row => ({
-            id: Number(row.id ?? row.emp_id),
-            name: row.name || `${row.first_name || ''} ${row.last_name || ''}`.trim() || row.email,
-            status: row.is_active ? 'active' : 'inactive',
-            department: row.department?.trim() || 'Unassigned',
-          })));
-          const allowedDepts = ['Customer Service', 'IT', 'Service'];
-          const filteredDepts = (depts || []).filter(d => allowedDepts.includes(d.name));
-          setDepartments(filteredDepts);
-        } catch (err) {
-          console.error('Failed to load assign options for CS:', err);
-        }
-      };
-      loadAssignOptions();
-    }
-  }, [roleContext]);
 
   const loadTickets = useCallback(async ({ forceRefresh = false, source = 'manual' } = {}) => {
     // Realtime ticks (websocket/poll) refresh silently instead of flashing the skeleton.
@@ -212,12 +195,9 @@ export default function EmployeeMyTickets({ roleContext }) {
         }
       } catch (apiErr) {
         console.warn('API getInternalTickets failed, falling back to local storage:', apiErr);
-        if (roleContext === 'cs') {
-          throw apiErr;
-        }
       }
 
-      if (roleContext !== 'cs' && mapped.length === 0) {
+      if (mapped.length === 0) {
         let stored = JSON.parse(sessionStorage.getItem(storageKey) || '[]');
         let healed = false;
         mapped = stored.map(t => {
@@ -247,7 +227,7 @@ export default function EmployeeMyTickets({ roleContext }) {
 
   // Prefetch employees & departments for CS delegation
   useEffect(() => {
-    if (roleContext !== 'cs') return;
+    if (!isCsRole) return;
     Promise.all([
       getAssignableEmployees({ forceRefresh: false }).catch(() => []),
       getDepartments({ forceRefresh: false }).catch(() => []),
@@ -263,7 +243,7 @@ export default function EmployeeMyTickets({ roleContext }) {
       const allowedDepts = ['Customer Service', 'IT', 'Service'];
       setCsDepartments((deps || []).filter(d => allowedDepts.includes(d.name)).map(d => d.name));
     });
-  }, [roleContext]);
+  }, [isCsRole]);
 
   useEffect(() => {
     if (location.state?.openCreateModal) {
@@ -314,6 +294,18 @@ export default function EmployeeMyTickets({ roleContext }) {
       );
     });
   }, [filters, isHistory, tickets]);
+
+  const [page, setPage] = useState(1);
+  const itemsPerPage = 10;
+
+  useEffect(() => {
+    setPage(1);
+  }, [filters, isHistory, activeTab]);
+
+  const paginatedTickets = useMemo(() => {
+    const start = (page - 1) * itemsPerPage;
+    return visibleTickets.slice(start, start + itemsPerPage);
+  }, [visibleTickets, page, itemsPerPage]);
 
   const updateFilter = (key, value) => {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -385,17 +377,7 @@ export default function EmployeeMyTickets({ roleContext }) {
       setTickets(updatedList);
       setIsModalOpen(false);
 
-      // CS: immediately open delegation modal instead of success dialog
-      if (roleContext === 'cs') {
-        // Refresh employees list before showing modal
-        const emps = await getAssignableEmployees({ forceRefresh: true }).catch(() => csEmployees);
-        const mappedEmps = (emps || []).map((row) => ({
-          id: Number(row.id ?? row.emp_id),
-          name: row.name || `${row.first_name || ''} ${row.last_name || ''}`.trim() || row.email,
-          status: row.is_active ? 'active' : 'inactive',
-          department: row.department?.trim() || 'Unassigned',
-        }));
-        setCsEmployees(mappedEmps);
+      if (isCsRole) {
         setCsAssignTicket(newTicket);
       } else {
         setConfirmCreated(newTicket);
@@ -411,17 +393,38 @@ export default function EmployeeMyTickets({ roleContext }) {
   const handleCsAssignSave = async (updated) => {
     const priorityMap = { Low: 1, Medium: 2, High: 3, Critical: 4 };
     try {
+      const rawId = updated.ticket_ID || updated.id;
+      const numericId = Number(String(rawId).replace(/\D/g, ''));
       await assignTicketToEmployees({
-        ticketId: updated.ticket_ID,
+        ticketId: numericId,
         employeeIds: updated.assigned,
         assignedByEmail: user?.email,
         priorityId: priorityMap[updated.priority] ?? 1,
       });
       setCsAssignTicket(null);
-      setConfirmCreated(updated);
+      setTickets((prev) =>
+        prev.map((t) =>
+          t.id === updated.id || t.ticket_ID === numericId
+            ? {
+                ...t,
+                status: 'Assigned',
+                assigned_to: Array.isArray(updated.assigned) ? updated.assigned[0] : updated.assigned,
+                assigned: updated.assigned,
+                priority: updated.priority || t.priority,
+              }
+            : t
+        )
+      );
+      loadTickets({ forceRefresh: true });
+      setConfirmCreated({
+        ...updated,
+        assignedSuccess: true,
+      });
+      return true;
     } catch (err) {
       console.error('Failed to assign ticket:', err);
       window.alert(err?.response?.data?.message || 'Failed to assign ticket.');
+      throw err;
     }
   };
 
@@ -448,11 +451,47 @@ export default function EmployeeMyTickets({ roleContext }) {
     }
   };
 
-  const handleViewTicket = (t) => {
-    const ticketId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
-    const basePath = roleContext === 'cs' ? '/cs' : roleContext === 'cs_manager' ? '/cs-manager' : roleContext === 'service_manager' ? '/service-manager' : roleContext === 'it_manager' ? '/it-manager' : '/employee';
-    const backPath = roleContext === 'cs' ? '/cs/my-tickets' : roleContext === 'cs_manager' ? '/cs-manager/my-tickets' : roleContext === 'service_manager' ? '/service-manager/my-tickets' : roleContext === 'it_manager' ? '/it-manager/my-tickets' : '/employee/my-tickets';
-    navigate(`${basePath}/history/${ticketId}`, { state: { ticket: t, backPath } });
+  const handleViewTicket = async (t) => {
+    const isMock = !!t.isMock;
+    if (isMock) {
+      setSelectedTicket({
+        ...t,
+        description: t.description || '',
+        resolved_at: t.resolved_at || null,
+        proofAttachments: t.proofAttachments || [],
+        proofFiles: t.proofFiles || [],
+        can_discard: t.status === 'Open' && !t.assigned_to,
+      });
+      return;
+    }
+
+    setLoadingText('Loading ticket details...');
+    setModalLoading(true);
+    try {
+      const ticketId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
+      const fullTicket = await getTicketDetails(ticketId);
+      setSelectedTicket({
+        ...t,
+        ...fullTicket,
+        id: fullTicket.id || t.id || `TKT-${String(ticketId).padStart(4, '0')}`,
+        status: fullTicket.status || t.status,
+        description: fullTicket.description || t.description || '',
+        resolved_at: fullTicket.resolved_at || t.resolved_at || null,
+        closed_at: fullTicket.closed_at || t.closed_at || null,
+        proofAttachments: fullTicket.proofAttachments || [],
+        proofFiles: fullTicket.proofFiles || [],
+        attachments: fullTicket.attachments || fullTicket.ticket_attachments || t.attachments || [],
+        can_discard: (fullTicket.status || t.status) === 'Open' && !fullTicket.assigned_to,
+      });
+    } catch (err) {
+      console.warn('Could not load full ticket details, using row data:', err);
+      setSelectedTicket({
+        ...t,
+        can_discard: t.status === 'Open' && !t.assigned_to,
+      });
+    } finally {
+      setModalLoading(false);
+    }
   };
 
   const handleResolveTicket = async (ticketId) => {
@@ -630,7 +669,7 @@ export default function EmployeeMyTickets({ roleContext }) {
                 className="h-10 flex-1 sm:flex-initial min-w-[130px] rounded-xl border border-gray-200 bg-surface px-3 text-sm text-dark-slate outline-none focus:border-transparent focus:ring-2 focus:ring-brand-accent cursor-pointer"
               >
                 <option value="">All statuses</option>
-                {(roleContext === 'cs' ? STATUSES.filter(s => s !== 'Pending Assignment') : STATUSES).map((status) => (
+                {STATUSES.map((status) => (
                   <option key={status} value={status}>{status}</option>
                 ))}
               </select>
@@ -705,7 +744,7 @@ export default function EmployeeMyTickets({ roleContext }) {
                     description="No tickets match the current filters."
                   />
                 )}
-                {visibleTickets.map((ticket) => (
+                {paginatedTickets.map((ticket) => (
                   <TableRow
                     key={ticket.id}
                     onClick={() => handleViewTicket(ticket)}
@@ -750,6 +789,20 @@ export default function EmployeeMyTickets({ roleContext }) {
                 ))}
               </TableBody>
             </Table>
+            {!loading && visibleTickets.length > 0 && (
+              <div className="px-4 py-3 border-t border-slate-200 bg-surface flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-muted-slate">
+                <span>
+                  Showing {(page - 1) * itemsPerPage + 1} to{' '}
+                  {Math.min(page * itemsPerPage, visibleTickets.length)} of {visibleTickets.length} tickets
+                </span>
+                <Pagination
+                  totalItems={visibleTickets.length}
+                  itemsPerPage={itemsPerPage}
+                  currentPage={page}
+                  onPageChange={setPage}
+                />
+              </div>
+            )}
           </div>
         </>
       ) : (
@@ -890,40 +943,15 @@ export default function EmployeeMyTickets({ roleContext }) {
           loadDrafts();
         }}
       />
-      
-      {roleContext === 'cs' && assignModalTicket && (
-        <AssignModal
-          ticket={assignModalTicket}
-          employees={employees}
-          departments={departments}
-          priorityOptions={['Low', 'Medium', 'High', 'Critical']}
-          onClose={() => setAssignModalTicket(null)}
-          onSave={async (updated) => {
-            const priorityMap = {
-              Low: 1,
-              Medium: 2,
-              High: 3,
-              Critical: 4,
-            };
-            setModalLoading(true);
-            setLoadingText('Saving assignment...');
-            try {
-              await acceptTicket({
-                ticketId: updated.ticket_ID,
-                employeeIds: updated.assigned,
-                assignedByEmail: user?.email,
-                priorityId: priorityMap[updated.priority] ?? 1,
-              });
-              setAssignModalTicket(null);
-              window.alert('Ticket assigned successfully.');
-              loadTickets({ forceRefresh: true });
-            } catch (err) {
-              console.error('Failed to assign ticket:', err);
-              window.alert('Failed to assign ticket. Please try again.');
-            } finally {
-              setModalLoading(false);
-            }
-          }}
+
+      {/* Ticket Detail Summary Modal */}
+      {selectedTicket && (
+        <CustomerTicketDetailModal
+          ticket={selectedTicket}
+          onClose={() => setSelectedTicket(null)}
+          onDiscard={(ticket) => setConfirmDiscard(ticket)}
+          onReopen={(ticketId, reason) => handleReopenTicket(ticketId, reason)}
+          onResolve={(ticketId) => handleResolveTicket(ticketId)}
         />
       )}
 
@@ -945,21 +973,29 @@ export default function EmployeeMyTickets({ roleContext }) {
           employees={csEmployees}
           departments={csDepartments}
           priorityOptions={csPriorityOptions}
-          onClose={() => setCsAssignTicket(null)}
+          onClose={() => {
+            const t = csAssignTicket;
+            setCsAssignTicket(null);
+            setConfirmCreated(t);
+          }}
           onSave={handleCsAssignSave}
         />
       )}
 
       {confirmCreated && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] animate-in fade-in duration-200">
-          <div className="w-full max-w-md rounded-2xl bg-surface p-6 text-center shadow-level-4 border border-slate-200">
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none animate-in fade-in duration-200">
+          <div className="w-full max-w-md max-h-[90vh] overflow-y-auto overscroll-contain rounded-2xl bg-surface p-6 text-center shadow-level-4 border border-slate-200">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-700">
               <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <h2 className="mt-4 text-lg font-bold text-dark-slate">Ticket Submitted</h2>
-            <p className="mt-1.5 text-xs text-muted-slate">{confirmCreated.id} has been created successfully.</p>
+            <h2 className="mt-4 text-lg font-bold text-dark-slate">
+              {confirmCreated.assignedSuccess ? 'Ticket Created & Assigned' : 'Ticket Submitted'}
+            </h2>
+            <p className="mt-1.5 text-xs text-muted-slate">
+              {confirmCreated.id || (confirmCreated.ticket_ID ? `TKT-${String(confirmCreated.ticket_ID).padStart(4, '0')}` : 'Ticket')} has been created {confirmCreated.assignedSuccess ? 'and assigned to the technician' : 'successfully'}.
+            </p>
             <Button
               className="mt-6 w-full"
               onClick={() => {

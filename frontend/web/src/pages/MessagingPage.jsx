@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { downloadAttachment } from '@/utils/attachmentFiles';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
-import { MessageCircle, Send, Users, User, AlertCircle, MoreVertical, Edit2, Trash2, Archive, RotateCcw, X, Info, History, Sparkles, Bot, Clock, Paperclip, FileText, Download, ShieldAlert, Loader2 } from 'lucide-react';
+import { MessageCircle, Send, Users, User, AlertCircle, MoreVertical, Edit2, Trash2, Archive, RotateCcw, X, Info, History, Sparkles, Bot, Clock, Paperclip, FileText, Download, ShieldAlert, Loader2, Menu } from 'lucide-react';
 import {
   getTicketMessages,
   sendTicketMessage,
@@ -14,6 +14,7 @@ import {
 } from '@/services/messagingService';
 import { getMessagingEcho } from '@/services/messagingEcho';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import {
   getCustomerTickets,
   getCSIncomingTickets,
@@ -117,13 +118,17 @@ export default function MessagingPage() {
   const [editError, setEditError] = useState(null);
   const [activeHistoryMsgId, setActiveHistoryMsgId] = useState(null);
   const [historyModalData, setHistoryModalData] = useState(null);
+  useLockBodyScroll(Boolean(historyModalData));
   const [msgHistoryLoading, setMsgHistoryLoading] = useState(false);
   const [activeMenuMsgId, setActiveMenuMsgId] = useState(null);
 
   const location = useLocation();
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const initialTicketId = location.state?.selectedTicketId || searchParams.get('selectedTicketId') || searchParams.get('ticketId');
-  const [showDetailsSidebar, setShowDetailsSidebar] = useState(true);
+  const [showDetailsSidebar, setShowDetailsSidebar] = useState(() => (
+    typeof window !== 'undefined' ? window.innerWidth >= 1280 : false
+  ));
+  const [mobileListOpen, setMobileListOpen] = useState(false);
 
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -705,6 +710,7 @@ export default function MessagingPage() {
 
   const handleSelectContact = useCallback((contactId) => {
     setSelectedContactId(contactId);
+    setMobileListOpen(false);
   }, []);
 
   const handleFileSelect = useCallback((e) => {
@@ -995,9 +1001,27 @@ export default function MessagingPage() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)] w-full min-h-[500px]">
-      <div className="flex flex-1 bg-card rounded-xl shadow-xs border border-border overflow-hidden min-h-0">
+      <div className="relative flex flex-1 bg-card rounded-xl shadow-xs border border-border overflow-hidden min-h-0">
+        {/* Mobile backdrop for conversation list drawer */}
+        {mobileListOpen && (
+          <div
+            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-xs md:hidden"
+            onClick={() => setMobileListOpen(false)}
+            aria-hidden="true"
+            data-testid="mobile-contacts-backdrop"
+          />
+        )}
+
         {/* ── Left Panel ── */}
-        <div className="w-[360px] lg:w-[380px] border-r border-border flex flex-col shrink-0">
+        <div
+          className={`
+            ${selectedContact
+              ? 'fixed inset-y-0 left-0 z-50 w-[300px] sm:w-[360px] bg-card shadow-2xl transition-transform duration-200 ease-in-out ' + (mobileListOpen ? 'translate-x-0' : '-translate-x-full')
+              : 'w-full'
+            }
+            md:static md:z-auto md:w-[360px] lg:w-[380px] md:shadow-none md:translate-x-0 border-r border-border flex flex-col shrink-0
+          `}
+        >
           {/* Active / Archive Conversation Tabs */}
           <div className="flex items-center gap-1 p-2 bg-slate-50 border-b border-border shrink-0">
             <button
@@ -1032,6 +1056,18 @@ export default function MessagingPage() {
                 </span>
               )}
             </button>
+            {selectedContact && (
+              <button
+                type="button"
+                onClick={() => setMobileListOpen(false)}
+                className="p-1.5 text-slate-muted hover:text-slate-dark hover:bg-slate-200 rounded-lg transition-colors cursor-pointer md:hidden shrink-0"
+                title="Close"
+                aria-label="Close"
+                data-testid="close-contacts-drawer"
+              >
+                <X size={16} />
+              </button>
+            )}
           </div>
 
           {/* Filter bar — CS: External / Internal */}
@@ -1121,19 +1157,29 @@ export default function MessagingPage() {
             {/* Chat Area */}
             <div className="flex-1 flex flex-col min-w-0 border-r border-gray-100">
               {/* Conversation header */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-card shrink-0">
-                <div className="flex items-center gap-3">
+              <div className="flex items-center justify-between px-3 sm:px-6 py-3 sm:py-4 border-b border-border bg-card shrink-0 gap-2">
+                <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => setMobileListOpen(true)}
+                    className="p-1.5 -ml-1 text-slate-muted hover:text-slate-dark hover:bg-slate-100 rounded-lg transition-colors cursor-pointer md:hidden shrink-0"
+                    title="Open conversations"
+                    aria-label="Open conversations"
+                    data-testid="mobile-messages-toggle"
+                  >
+                    <Menu size={20} />
+                  </button>
                   <Avatar name={selectedContact.subtitle} />
-                  <div>
-                    <p className="font-semibold text-sm text-slate-dark">{selectedContact.displayTitle}</p>
-                    <p className="text-xs text-slate-muted">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-sm text-slate-dark truncate">{selectedContact.displayTitle}</p>
+                    <p className="text-xs text-slate-muted truncate">
                       {isCustomer ? `Ticket ${selectedContact.ticketNumber || `TKT-${String(selectedContact.ticket_ID || selectedContact.id).padStart(4, '0')}`}` : `Client: ${selectedContact.subtitle}`} • Status: {selectedContact.status}
                     </p>
                   </div>
                 </div>
                 <button
                   onClick={() => setShowDetailsSidebar(!showDetailsSidebar)}
-                  className={`px-3 py-1.5 rounded-lg border transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer ${
+                  className={`px-2.5 sm:px-3 py-1.5 rounded-lg border transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer shrink-0 ${
                     showDetailsSidebar
                       ? 'bg-primary text-primary-foreground border-primary shadow-xs'
                       : 'bg-card text-slate-dark border-border hover:bg-slate-50'
@@ -1141,13 +1187,13 @@ export default function MessagingPage() {
                   title="Toggle Ticket Details"
                 >
                   <AlertCircle size={14} />
-                  <span>Ticket Details</span>
+                  <span className="hidden sm:inline">Ticket Details</span>
                 </button>
               </div>
 
               {/* Archive Banner Notice */}
               {selectedContact.isArchived && (
-                <div className="bg-amber-50 border-b border-amber-300 px-6 py-3 flex items-center justify-between gap-4 select-none animate-in fade-in duration-200">
+                <div className="bg-amber-50 border-b border-amber-300 px-3 sm:px-6 py-3 flex items-center justify-between gap-4 select-none animate-in fade-in duration-200">
                   <div className="flex items-center gap-2 text-xs text-amber-950 font-semibold">
                     <Archive size={16} className="text-amber-800 shrink-0" />
                     <span>
@@ -1158,7 +1204,7 @@ export default function MessagingPage() {
               )}
 
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3 bg-page">
+              <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-3 bg-page">
                 {messagesLoading ? (
                   <div className="text-center py-8 text-slate-muted">Loading chat history...</div>
                 ) : currentTicketMessages.length === 0 ? (
@@ -1505,7 +1551,7 @@ export default function MessagingPage() {
                   </p>
                 </div>
               ) : (
-                <div className="px-6 py-4 border-t border-border bg-card shrink-0">
+                <div className="px-3 sm:px-6 py-3 sm:py-4 border-t border-border bg-card shrink-0">
                   {/* Inline upload error banner with retry guidance */}
                   {uploadError && (
                     <div className="flex items-start gap-2 mb-3 p-2.5 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl animate-in fade-in">
@@ -1600,13 +1646,25 @@ export default function MessagingPage() {
 
             {/* Collapsible details sidebar */}
             {showDetailsSidebar && (
-              <div className="w-[320px] xl:w-[360px] bg-card flex flex-col shrink-0 overflow-hidden border-l border-border select-none">
-                <div className="p-3 border-b border-border flex items-center justify-between">
-                  <h3 className="font-bold text-slate-dark text-sm">Ticket Details</h3>
-                  <button onClick={() => setShowDetailsSidebar(false)} className="text-slate-muted hover:text-slate-dark p-1 rounded-lg hover:bg-slate-100 cursor-pointer">
-                    <X size={16} />
-                  </button>
-                </div>
+              <>
+                <div
+                  className="fixed inset-0 z-40 bg-black/40 backdrop-blur-xs lg:hidden"
+                  onClick={() => setShowDetailsSidebar(false)}
+                  aria-hidden="true"
+                  data-testid="mobile-details-backdrop"
+                />
+                <div className="fixed inset-y-0 right-0 z-50 w-[300px] sm:w-[360px] lg:static lg:z-auto lg:w-[320px] xl:w-[360px] bg-card flex flex-col shrink-0 overflow-hidden border-l border-border select-none shadow-2xl lg:shadow-none">
+                  <div className="p-3 border-b border-border flex items-center justify-between">
+                    <h3 className="font-bold text-slate-dark text-sm">Ticket Details</h3>
+                    <button
+                      onClick={() => setShowDetailsSidebar(false)}
+                      className="text-slate-muted hover:text-slate-dark p-1 rounded-lg hover:bg-slate-100 cursor-pointer"
+                      title="Close Ticket Details"
+                      aria-label="Close Ticket Details"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
 
                 {/* Tab Navigation */}
                 <div className="flex border-b border-border bg-gray-50/70 p-1 gap-1 shrink-0">
@@ -1748,23 +1806,31 @@ export default function MessagingPage() {
                           No history events recorded for this ticket.
                         </div>
                       ) : (
-                        <div className="relative pl-4 space-y-4 before:absolute before:left-1.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-gray-200">
-                          {ticketHistory.map((evt, idx) => (
-                            <div key={evt.id || idx} className="relative text-left">
-                              <span className="absolute -left-[19px] top-1 w-2.5 h-2.5 rounded-full bg-[#252578] ring-4 ring-white" />
-                              <p className="text-xs font-semibold text-gray-800 leading-snug">
-                                {evt.text || evt.details || evt.action || 'Ticket updated'}
-                              </p>
-                              {evt.author && (
-                                <p className="text-[11px] text-gray-500 mt-0.5 font-medium">
-                                  By: {evt.author}
-                                </p>
-                              )}
-                              <p className="text-[10px] text-gray-400 mt-0.5">
-                                {formatDisplayDate(evt.timestamp || evt.created_at)}
-                              </p>
-                            </div>
-                          ))}
+                        <div className="space-y-0 ml-1">
+                          {ticketHistory.map((evt, idx) => {
+                            const isLast = idx === ticketHistory.length - 1;
+                            return (
+                              <div key={evt.id || idx} className="flex items-start gap-3 text-left text-xs">
+                                <div className="flex flex-col items-center self-stretch shrink-0 w-3">
+                                  <span className="w-2.5 h-2.5 rounded-full shrink-0 mt-1 bg-[#252578] ring-4 ring-white" />
+                                  {!isLast && <div className="w-[2px] bg-gray-200 flex-1 my-0.5" />}
+                                </div>
+                                <div className={`flex-1 min-w-0 ${!isLast ? 'pb-4' : 'pb-1'}`}>
+                                  <p className="text-xs font-semibold text-gray-800 leading-snug">
+                                    {evt.text || evt.details || evt.action || 'Ticket updated'}
+                                  </p>
+                                  {evt.author && (
+                                    <p className="text-[11px] text-gray-500 mt-0.5 font-medium">
+                                      By: {evt.author}
+                                    </p>
+                                  )}
+                                  <p className="text-[10px] text-gray-400 mt-0.5">
+                                    {formatDisplayDate(evt.timestamp || evt.created_at)}
+                                  </p>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -1842,6 +1908,7 @@ export default function MessagingPage() {
                   )}
                 </div>
               </div>
+              </>
             )}
           </div>
         ) : (
@@ -1857,7 +1924,7 @@ export default function MessagingPage() {
       {/* Edit History Modal */}
       {historyModalData && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-in fade-in duration-150"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs overscroll-none animate-in fade-in duration-150"
           onClick={handleCloseHistory}
         >
           <div
@@ -1895,7 +1962,7 @@ export default function MessagingPage() {
             </div>
 
             {/* Body */}
-            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+            <div className="flex-1 overflow-y-auto overscroll-contain p-5 space-y-4">
               {msgHistoryLoading ? (
                 <div className="flex flex-col items-center justify-center py-12 text-slate-muted gap-2">
                   <span className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>

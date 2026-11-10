@@ -7,6 +7,7 @@ import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { PageHeader } from '@/components/ui/page-header';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
 import { DataTableSkeleton, DataTableEmptyState } from '@/components/ui/data-table';
+import Pagination from '@/components/Pagination';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -170,6 +171,10 @@ export default function MyTickets({ mode = 'all' }) {
       try {
         const fullTicket = await getTicketDetails(Number(cleanId));
         if (isMounted && fullTicket) {
+          if (fullTicket.status === 'Resolved' || fullTicket.status === 'Closed') {
+            navigate(`/history/${cleanId}`, { state: { ticket: fullTicket, backPath: '/my-tickets' }, replace: true });
+            return;
+          }
           setSelectedTicket({
             ...fullTicket,
             id: fullTicket.id || `TKT-${String(cleanId).padStart(4, '0')}`,
@@ -456,6 +461,18 @@ export default function MyTickets({ mode = 'all' }) {
     });
   }, [filters, isHistory, tickets]);
 
+  const [page, setPage] = useState(1);
+  const itemsPerPage = 10;
+
+  useEffect(() => {
+    setPage(1);
+  }, [filters, isHistory, activeTab]);
+
+  const paginatedTickets = useMemo(() => {
+    const start = (page - 1) * itemsPerPage;
+    return visibleTickets.slice(start, start + itemsPerPage);
+  }, [visibleTickets, page, itemsPerPage]);
+
   const closeNotif = () => setNotification(null);
   const showSuccess = (title, message) => setNotification({ type: 'success', title, message });
   const showError = (title, message) => setNotification({ type: 'error', title, message });
@@ -582,6 +599,17 @@ export default function MyTickets({ mode = 'all' }) {
   };
 
   const handleViewTicket = async (t) => {
+    if (isHistory || t.status === 'Resolved' || t.status === 'Closed') {
+      const ticketId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
+      navigate(`/history/${ticketId}`, {
+        state: {
+          ticket: t,
+          backPath: isHistory ? '/history' : '/my-tickets',
+        },
+      });
+      return;
+    }
+
     const isMock = !!t.isMock;
     if (isMock) {
       setSelectedTicket({
@@ -1010,7 +1038,7 @@ export default function MyTickets({ mode = 'all' }) {
   };
 
   return (
-    <div className="flex flex-col gap-6 font-sans text-dark-slate">
+    <div className="flex flex-col gap-6 font-sans text-dark-slate w-full min-w-0 max-w-full">
       <PageHeader
         title={isHistory ? 'Ticket History' : 'My Tickets'}
         subtitle={isHistory ? 'Review completed and discarded tickets.' : 'Track and manage your submitted support tickets.'}
@@ -1228,7 +1256,7 @@ export default function MyTickets({ mode = 'all' }) {
                     }
                   />
                 )}
-                {visibleTickets.map((ticket, idx) => {
+                {paginatedTickets.map((ticket, idx) => {
                   const assignedEmpDisplay = getTicketAssignedEmployee(ticket);
 
                   return (
@@ -1262,25 +1290,9 @@ export default function MyTickets({ mode = 'all' }) {
                         </div>
                       </TableCell>
                       <TableCell className="text-muted-slate max-w-[200px]" title={assignedEmpDisplay}>
-                        <div className="flex items-center justify-between gap-2 text-xs">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <User size={13} className="text-muted-slate shrink-0" />
-                            <span className="truncate">{assignedEmpDisplay}</span>
-                          </div>
-                          {!isHistory && assignedEmpDisplay !== 'Unassigned' && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleViewTicket({ ...ticket, openDirectChat: true });
-                              }}
-                              className="inline-flex items-center gap-1 rounded-lg bg-[#252578]/10 hover:bg-[#252578] text-[#252578] hover:text-white px-2 py-0.5 text-[11px] font-semibold transition-all shrink-0 cursor-pointer"
-                              title={`Open message with ${assignedEmpDisplay}`}
-                            >
-                              <MessageCircle size={12} />
-                              <span>Message</span>
-                            </button>
-                          )}
+                        <div className="flex items-center gap-1.5 text-xs min-w-0">
+                          <User size={13} className="text-muted-slate shrink-0" />
+                          <span className="truncate">{assignedEmpDisplay}</span>
                         </div>
                       </TableCell>
                       <TableCell className="text-muted-slate text-xs whitespace-nowrap">
@@ -1336,6 +1348,20 @@ export default function MyTickets({ mode = 'all' }) {
                 })}
               </TableBody>
             </Table>
+            {!loading && visibleTickets.length > 0 && (
+              <div className="px-4 py-3 border-t border-slate-200 bg-surface flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-muted-slate">
+                <span>
+                  Showing {(page - 1) * itemsPerPage + 1} to{' '}
+                  {Math.min(page * itemsPerPage, visibleTickets.length)} of {visibleTickets.length} tickets
+                </span>
+                <Pagination
+                  totalItems={visibleTickets.length}
+                  itemsPerPage={itemsPerPage}
+                  currentPage={page}
+                  onPageChange={setPage}
+                />
+              </div>
+            )}
           </div>
         </>
       ) : (

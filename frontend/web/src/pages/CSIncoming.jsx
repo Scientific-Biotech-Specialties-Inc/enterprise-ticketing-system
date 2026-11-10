@@ -7,7 +7,9 @@ import SlaStatusBadge, { getTicketSlaStatus, getTicketSlaDueDate } from '@/compo
 import { formatDisplayDate, parseUTCDate } from '@/utils/dateUtils';
 import { useAuth } from '@/context/AuthContext';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import { PageHeader } from '@/components/ui/page-header';
+import { OriginPillToggle } from '@/components/ui/OriginPillToggle';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
@@ -180,6 +182,7 @@ export default function CSIncoming() {
   // modal state: null | { mode: 'assign'|'summary', ticket }
   const [modal, setModal] = useState(null);
   const [modalLoading, setModalLoading] = useState(false);
+  useLockBodyScroll(modalLoading);
 
   const resetFilters = useCallback(() => {
     setSearch('');
@@ -497,9 +500,15 @@ export default function CSIncoming() {
     all: tabCounts?.all ?? 0,
   };
 
-  // Spec 0037 (AC-15): render the server's rows as they are. Tab, filters, SLA filter,
-  // and sort were all applied on the server.
-  const filtered = tickets;
+  const EXCLUDED_STATUSES = useMemo(
+    () => ['in progress', 'resolved', 'closed', 'discarded', 'discarded by customer'],
+    []
+  );
+
+  // Filter out in progress, resolved, closed, and discarded tickets from the Incoming triage queue
+  const filtered = useMemo(() => {
+    return (tickets || []).filter((t) => !EXCLUDED_STATUSES.includes(String(t.status || '').trim().toLowerCase()));
+  }, [tickets, EXCLUDED_STATUSES]);
 
   const totalPages = lastPage;
 
@@ -656,22 +665,10 @@ export default function CSIncoming() {
         title="Incoming Tickets"
         subtitle="Triage and assign new support tickets"
         actions={
-          <div className="flex border border-border rounded-lg overflow-hidden bg-card shrink-0">
-            {['all', 'external', 'internal'].map((type) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => setTypeFilter(type)}
-                className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
-                  typeFilter === type
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-card hover:bg-muted text-muted-foreground'
-                }`}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
+          <OriginPillToggle
+            value={typeFilter}
+            onChange={(val) => setTypeFilter(val)}
+          />
         }
       />
 
@@ -681,78 +678,55 @@ export default function CSIncoming() {
         </div>
       )}
 
-      {/* SLA Compliance Summary Metrics Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 w-full shrink-0">
+      {/* Tabs placed at top, matching Assign Ticket page standard */}
+      <div className="flex border-b border-border gap-2 overflow-x-auto scrollbar-none shrink-0">
         <button
           type="button"
-          onClick={() => { setSlaFilter(slaFilter === 'Breached' ? 'All SLA Statuses' : 'Breached'); setPage(1); }}
-          className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-            slaFilter === 'Breached'
-              ? 'border-rose-400 bg-rose-50 shadow-xs ring-2 ring-rose-400/20'
-              : 'border-border bg-card hover:border-rose-200 hover:bg-rose-50/30'
+          onClick={() => { setIncomingTab('open'); setPage(1); }}
+          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
+            incomingTab === 'open'
+              ? 'border-primary text-primary'
+              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
           }`}
         >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-rose-600 flex items-center gap-1.5">
-              <AlertTriangle className="h-3.5 w-3.5 text-rose-600" /> Breached
-            </span>
-            <span className="text-xl font-bold text-rose-700">{slaSummary.breached}</span>
-          </div>
-          <p className="text-[11px] text-muted-foreground mt-1">Resolution overdue</p>
+          <span>Open / Unassigned</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+            incomingTab === 'open' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
+          }`}>
+            {counts.open}
+          </span>
         </button>
-
         <button
           type="button"
-          onClick={() => { setSlaFilter(slaFilter === 'At Risk' ? 'All SLA Statuses' : 'At Risk'); setPage(1); }}
-          className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-            slaFilter === 'At Risk'
-              ? 'border-amber-400 bg-amber-50 shadow-xs ring-2 ring-amber-400/20'
-              : 'border-border bg-card hover:border-amber-200 hover:bg-amber-50/30'
+          onClick={() => { setIncomingTab('pending_assignment'); setPage(1); }}
+          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
+            incomingTab === 'pending_assignment'
+              ? 'border-accent text-accent'
+              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
           }`}
         >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-amber-600 flex items-center gap-1.5">
-              <Clock className="h-3.5 w-3.5 text-amber-600" /> At Risk
-            </span>
-            <span className="text-xl font-bold text-amber-700">{slaSummary.at_risk}</span>
-          </div>
-          <p className="text-[11px] text-muted-foreground mt-1">Near threshold (&le;4h)</p>
+          <span>Pending Assignment</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+            incomingTab === 'pending_assignment' ? 'bg-accent/15 text-accent' : 'bg-muted text-muted-foreground'
+          }`}>
+            {counts.pending}
+          </span>
         </button>
-
         <button
           type="button"
-          onClick={() => { setSlaFilter(slaFilter === 'On Track' ? 'All SLA Statuses' : 'On Track'); setPage(1); }}
-          className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-            slaFilter === 'On Track'
-              ? 'border-emerald-400 bg-emerald-50 shadow-xs ring-2 ring-emerald-400/20'
-              : 'border-border bg-card hover:border-emerald-200 hover:bg-emerald-50/30'
+          onClick={() => { setIncomingTab('all'); setPage(1); }}
+          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
+            incomingTab === 'all'
+              ? 'border-primary text-primary'
+              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
           }`}
         >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-emerald-600 flex items-center gap-1.5">
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> On Track
-            </span>
-            <span className="text-xl font-bold text-emerald-700">{slaSummary.on_track}</span>
-          </div>
-          <p className="text-[11px] text-muted-foreground mt-1">Compliant with SLA</p>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => { setSlaFilter(slaFilter === 'Paused' ? 'All SLA Statuses' : 'Paused'); setPage(1); }}
-          className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-            slaFilter === 'Paused'
-              ? 'border-blue-400 bg-blue-50 shadow-xs ring-2 ring-blue-400/20'
-              : 'border-border bg-card hover:border-blue-200 hover:bg-blue-50/30'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-blue-600 flex items-center gap-1.5">
-              <PauseCircle className="h-3.5 w-3.5 text-blue-600" /> Paused
-            </span>
-            <span className="text-xl font-bold text-blue-700">{slaSummary.paused}</span>
-          </div>
-          <p className="text-[11px] text-muted-foreground mt-1">Clock paused on hold</p>
+          <span>All Incoming</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+            incomingTab === 'all' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
+          }`}>
+            {counts.all}
+          </span>
         </button>
       </div>
 
@@ -865,66 +839,12 @@ export default function CSIncoming() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex border-b border-border gap-2 overflow-x-auto scrollbar-none">
-        <button
-          type="button"
-          onClick={() => { setIncomingTab('open'); setPage(1); }}
-          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
-            incomingTab === 'open'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-          }`}
-        >
-          <span>Open / Unassigned</span>
-          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-            incomingTab === 'open' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
-          }`}>
-            {counts.open}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => { setIncomingTab('pending_assignment'); setPage(1); }}
-          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
-            incomingTab === 'pending_assignment'
-              ? 'border-accent text-accent'
-              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-          }`}
-        >
-          <span>Pending Assignment</span>
-          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-            incomingTab === 'pending_assignment' ? 'bg-accent/15 text-accent' : 'bg-muted text-muted-foreground'
-          }`}>
-            {counts.pending}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => { setIncomingTab('all'); setPage(1); }}
-          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
-            incomingTab === 'all'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-          }`}
-        >
-          <span>All Incoming</span>
-          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-            incomingTab === 'all' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
-          }`}>
-            {counts.all}
-          </span>
-        </button>
-      </div>
-
       {/* Table Card */}
       <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-xs w-full min-w-0 max-w-full">
         <Table className="min-w-[960px] w-full">
           <TableHeader>
             <TableRow>
               <TableHead className="w-[140px]">Ticket ID</TableHead>
-              <TableHead className="min-w-[140px]">Customer</TableHead>
-              <TableHead className="w-[90px]">Type</TableHead>
               <TableHead className="min-w-[200px]">Title</TableHead>
               <TableHead className="w-[100px]">Priority</TableHead>
               <TableHead className="w-[120px]">Category</TableHead>
@@ -939,7 +859,7 @@ export default function CSIncoming() {
                   className="inline-flex items-center gap-1.5 font-semibold hover:text-foreground transition-colors cursor-pointer"
                   title="Toggle SLA due sort"
                 >
-                  <span>SLA Target</span>
+                  <span>SLA Compliance</span>
                   <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />
                 </button>
               </TableHead>
@@ -948,20 +868,15 @@ export default function CSIncoming() {
           </TableHeader>
           <TableBody>
             {loading ? (
-              <DataTableSkeleton columns={9} rows={6} />
+              <DataTableSkeleton columns={7} rows={6} />
             ) : filtered.length === 0 ? (
               <DataTableEmptyState
-                colSpan={9}
+                colSpan={7}
                 message="No tickets match your search or filter criteria. Try adjusting your filters or resetting them to view the full queue."
               />
             ) : (
               paginated.map((t, idx) => {
                 const isNew = t.id === newTicketId || t.ticket_ID === newTicketId;
-                const isInternalTicket =
-                  t.title?.startsWith('[Internal]') ||
-                  t.is_internal ||
-                  t.ticket_type === 'Internal' ||
-                  t.type === 'Internal';
 
                 return (
                   <TableRow
@@ -988,14 +903,6 @@ export default function CSIncoming() {
                         )}
                       </div>
                     </TableCell>
-                    <TableCell className="text-muted-foreground truncate max-w-[12rem]">
-                      {t.customer}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={isInternalTicket ? 'secondary' : 'outline'}>
-                        {isInternalTicket ? 'Internal' : 'External'}
-                      </Badge>
-                    </TableCell>
                     <TableCell className="font-medium text-foreground max-w-[18rem] truncate">
                       {t.title}
                     </TableCell>
@@ -1013,7 +920,7 @@ export default function CSIncoming() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <SlaStatusBadge ticket={t} />
+                      <SlaStatusBadge ticket={t} showDueDate={false} />
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                       {formatDisplayDate(t.date || t.created_at)}

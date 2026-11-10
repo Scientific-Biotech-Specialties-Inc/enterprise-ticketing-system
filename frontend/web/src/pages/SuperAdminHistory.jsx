@@ -7,11 +7,14 @@ import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from '@
 import { DataTableSkeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import Pagination from '@/components/Pagination';
 
 export default function SuperAdminHistory() {
   const [search, setSearch] = useState('');
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const itemsPerPage = 10;
 
   const loadHistory = useCallback(async () => {
     setLoading(true);
@@ -48,8 +51,17 @@ export default function SuperAdminHistory() {
     );
   }, [history, search]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [search]);
+
+  const paginated = useMemo(() => {
+    const start = (page - 1) * itemsPerPage;
+    return filtered.slice(start, start + itemsPerPage);
+  }, [filtered, page, itemsPerPage]);
+
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-6 w-full min-w-0 max-w-full">
       <PageHeader
         pattern="B"
         title="Configuration History"
@@ -93,7 +105,7 @@ export default function SuperAdminHistory() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filtered.map((log) => (
+                  paginated.map((log) => (
                     <TableRow key={log.id}>
                       <TableCell className="text-slate-muted whitespace-nowrap text-xs font-mono py-2.5 px-3">{log.timestamp}</TableCell>
                       <TableCell className="font-semibold text-slate-dark whitespace-nowrap text-xs py-2.5 px-3">{log.user}</TableCell>
@@ -119,6 +131,20 @@ export default function SuperAdminHistory() {
                 )}
               </TableBody>
             </Table>
+          </div>
+        )}
+        {!loading && filtered.length > 0 && (
+          <div className="px-4 py-3 border-t border-border bg-card flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-muted-foreground">
+            <span>
+              Showing {(page - 1) * itemsPerPage + 1} to{' '}
+              {Math.min(page * itemsPerPage, filtered.length)} of {filtered.length} history records
+            </span>
+            <Pagination
+              totalItems={filtered.length}
+              itemsPerPage={itemsPerPage}
+              currentPage={page}
+              onPageChange={setPage}
+            />
           </div>
         )}
       </div>

@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import NotificationModal from '@/components/NotificationModal';
 import { PageHeader } from '@/components/ui/page-header';
 import { useAuth } from '@/context/AuthContext';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import {
   getSuperAdminConfig,
   createSuperAdminEquipment,
@@ -1669,6 +1670,19 @@ export default function SuperAdminTicketConfig() {
   const [editingSlaPolicy, setEditingSlaPolicy] = useState(null); // { isNew, categoryName, priorityName, resolutionTimeLimit, originalResolutionTimeLimit, sysDefaultResolution, priorityColor }
   const [slaPolicyModalError, setSlaPolicyModalError] = useState('');
   const [slaCategoryFilter, setSlaCategoryFilter] = useState('ALL');
+
+  const isAnyModalOpen = Boolean(
+    editingItem !== null ||
+    editingWorkflow !== null ||
+    editingEscalation !== null ||
+    editingQuestion !== null ||
+    editingBranchOverride ||
+    editingCategory ||
+    editingSlaPolicy ||
+    showTestEmailModal ||
+    showChangeApiKeyModal
+  );
+  useLockBodyScroll(isAnyModalOpen);
 
   const closeNotif = () => setNotification(null);
   const showError = (title, message) => setNotification({ type: 'error', title, message });
@@ -6755,8 +6769,8 @@ export default function SuperAdminTicketConfig() {
 
           {/* TS104 Create / Edit Question Modal */}
           {editingQuestion !== null && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-xs">
-              <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-xs overscroll-none">
+              <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto overscroll-contain">
                 <div className="flex items-start justify-between border-b border-gray-150 pb-4">
                   <div>
                     <h2 className="text-lg font-bold text-gray-900">
@@ -10042,8 +10056,8 @@ export default function SuperAdminTicketConfig() {
 
           {/* TS090: Add / Edit Category Modal */}
           {editingCategory && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] animate-fade-slide-in">
-              <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl flex flex-col gap-5">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none animate-fade-slide-in">
+              <div className="w-full max-w-md max-h-[90vh] overflow-y-auto overscroll-contain rounded-2xl bg-white p-6 shadow-2xl flex flex-col gap-5">
                 <div className="flex items-start justify-between border-b border-gray-100 pb-3">
                   <div>
                     <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md">
@@ -10123,8 +10137,8 @@ export default function SuperAdminTicketConfig() {
 
           {/* TS090: Set / Edit SLA Policy Modal */}
           {editingSlaPolicy && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] animate-fade-slide-in">
-              <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl flex flex-col gap-5">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none animate-fade-slide-in">
+              <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto overscroll-contain rounded-2xl bg-white p-6 shadow-2xl flex flex-col gap-5">
                 <div className="flex items-start justify-between border-b border-gray-100 pb-3">
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
@@ -10419,8 +10433,8 @@ export default function SuperAdminTicketConfig() {
 
           {/* TS092: Edit / Set Override Modal */}
           {editingBranchOverride && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] animate-fade-slide-in">
-              <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl flex flex-col gap-5">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none animate-fade-slide-in">
+              <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto overscroll-contain rounded-2xl bg-white p-6 shadow-2xl flex flex-col gap-5">
                 {/* Modal Header */}
                 <div className="flex items-start justify-between border-b border-gray-100 pb-4">
                   <div>
@@ -11106,9 +11120,9 @@ export default function SuperAdminTicketConfig() {
 
       {/* Equipment / Priority / Ticket Category Modal */}
       {editingItem !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-          <div className="w-full max-w-md rounded-xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+          <div className="w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-5 shrink-0">
               <h2 className="text-lg font-bold text-gray-900">{editingItem.id === null ? 'Add' : 'Edit'} {tab === TAB_TICKET_CATEGORIES ? 'Ticket Category' : tab === TAB_EQUIPMENT ? 'Category' : 'Priority'}</h2>
               <button type="button" onClick={() => setEditingItem(null)} className="p-2 text-gray-400 hover:text-gray-600">
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -11116,7 +11130,7 @@ export default function SuperAdminTicketConfig() {
                 </svg>
               </button>
             </div>
-            <div className="p-6 flex flex-col gap-5">
+            <div className="p-6 flex flex-col gap-5 overflow-y-auto overscroll-contain flex-1">
               <div>
                 <label className="mb-2 block text-sm font-medium text-gray-700">Name</label>
                 <input
@@ -11166,9 +11180,9 @@ export default function SuperAdminTicketConfig() {
 
       {/* Workflow Status Modal */}
       {editingWorkflow !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-          <div className="w-full max-w-md rounded-xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+          <div className="w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-5 shrink-0">
               <h2 className="text-lg font-bold text-gray-900">{editingWorkflow.id === null ? 'Add' : 'Edit'} Workflow Status</h2>
               <button type="button" onClick={() => setEditingWorkflow(null)} className="p-2 text-gray-400 hover:text-gray-600">
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -11176,7 +11190,7 @@ export default function SuperAdminTicketConfig() {
                 </svg>
               </button>
             </div>
-            <div className="p-6 flex flex-col gap-5">
+            <div className="p-6 flex flex-col gap-5 overflow-y-auto overscroll-contain flex-1">
               <div>
                 <label className="mb-2 block text-sm font-medium text-gray-700">Status Name</label>
                 <input
@@ -11284,9 +11298,9 @@ export default function SuperAdminTicketConfig() {
 
       {/* Escalation Rule Modal */}
       {editingEscalation !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-          <div className="w-full max-w-lg rounded-xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+          <div className="w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-5 shrink-0">
               <h2 className="text-lg font-bold text-gray-900">{editingEscalation.id === null ? 'Add' : 'Edit'} Escalation Rule</h2>
               <button type="button" onClick={() => setEditingEscalation(null)} className="p-2 text-gray-400 hover:text-gray-600">
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -11294,7 +11308,7 @@ export default function SuperAdminTicketConfig() {
                 </svg>
               </button>
             </div>
-            <div className="p-6 flex flex-col gap-5 max-h-[70vh] overflow-y-auto">
+            <div className="p-6 flex flex-col gap-5 max-h-[70vh] overflow-y-auto overscroll-contain flex-1">
               <div className="flex items-center justify-between">
                 <div className="flex-1">
                   <label className="mb-2 block text-sm font-medium text-gray-700">Rule Name</label>
@@ -11381,8 +11395,8 @@ export default function SuperAdminTicketConfig() {
 
       {/* Test Email Modal */}
       {showTestEmailModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl border border-gray-100 flex flex-col gap-5 animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs overscroll-none p-4">
+          <div className="w-full max-w-md max-h-[90vh] overflow-y-auto overscroll-contain rounded-2xl bg-white p-6 shadow-2xl border border-gray-100 flex flex-col gap-5 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#252578]/10 text-[#252578]">
@@ -11455,8 +11469,8 @@ export default function SuperAdminTicketConfig() {
 
       {/* Change API Key Modal */}
       {showChangeApiKeyModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl border border-gray-100 flex flex-col gap-5 animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs overscroll-none p-4">
+          <div className="w-full max-w-md max-h-[90vh] overflow-y-auto overscroll-contain rounded-2xl bg-white p-6 shadow-2xl border border-gray-100 flex flex-col gap-5 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#252578]/10 text-[#252578]">

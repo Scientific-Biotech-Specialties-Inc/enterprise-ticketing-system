@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, Users, BarChart3, Settings } from 'lucide-react';
+import { LayoutDashboard, BarChart3 } from 'lucide-react';
 import SidebarBase from './SidebarBase';
 
 export default function SidebarAdmin({ collapsed, onHoverChange }) {
@@ -8,9 +8,5 @@ export default function SidebarAdmin({ collapsed, onHoverChange }) {
     { name: 'Reports', path: '/admin/reports', icon: <BarChart3 size={20} /> },
   ];
 
-  const bottomItems = [
-    { name: 'Settings', path: '/admin/settings', icon: <Settings size={20} /> },
-  ];
-
-  return <SidebarBase navItems={navItems} bottomItems={bottomItems} collapsed={collapsed} onHoverChange={onHoverChange} />;
+  return <SidebarBase navItems={navItems} collapsed={collapsed} onHoverChange={onHoverChange} />;
 }

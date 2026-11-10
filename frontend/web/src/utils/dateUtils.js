@@ -62,3 +62,33 @@ export const formatRelativeTime = (dateStr) => {
 
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 };
+
+export const DATE_RANGE_ERROR_MESSAGE = 'End date cannot be earlier than start date.';
+
+/**
+ * Returns true if startDate and endDate form a valid range (missing either bound, or end >= start).
+ */
+export const isDateRangeValid = (startDate, endDate) => {
+  if (!startDate || !endDate) return true;
+  return String(endDate) >= String(startDate);
+};
+
+/**
+ * Resolves a Start Date input change so End Date never stays earlier than Start Date.
+ */
+export const resolveStartDateUpdate = (newStart, currentEnd) => {
+  if (newStart && currentEnd && String(newStart) > String(currentEnd)) {
+    return { startDate: newStart, endDate: newStart, error: '' };
+  }
+  return { startDate: newStart, endDate: currentEnd, error: '' };
+};
+
+/**
+ * Validates an End Date input change against Start Date; rejects dates earlier than Start Date.
+ */
+export const resolveEndDateUpdate = (currentStart, newEnd) => {
+  if (newEnd && currentStart && String(newEnd) < String(currentStart)) {
+    return { valid: false, error: DATE_RANGE_ERROR_MESSAGE };
+  }
+  return { valid: true, endDate: newEnd, error: '' };
+};

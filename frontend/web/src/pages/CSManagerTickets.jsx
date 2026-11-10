@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
 import { DataTableSkeleton, DataTableEmptyState } from '@/components/ui/data-table';
+import Pagination from '@/components/Pagination';
 import { useAuth } from '@/context/AuthContext';
 import SlaStatusBadge, { getTicketSlaDueDate, getTicketSlaStatus } from '@/components/sla/SlaStatusBadge';
 import { AssignModal } from '@/components/CSModals';
@@ -144,6 +145,8 @@ export default function CSManagerTickets() {
   const [statusFilter, setStatusFilter] = useState('All');
   const [priorityFilter, setPriorityFilter] = useState('All');
   const [assigneeFilter, setAssigneeFilter] = useState('All');
+  const [page, setPage] = useState(1);
+  const itemsPerPage = 10;
 
   // Modals state
   const [assignModalTicket, setAssignModalTicket] = useState(null);
@@ -308,6 +311,15 @@ export default function CSManagerTickets() {
     });
   }, [evaluatedTickets, search, statusFilter, priorityFilter, assigneeFilter]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [search, statusFilter, priorityFilter, assigneeFilter]);
+
+  const paginatedTickets = useMemo(() => {
+    const start = (page - 1) * itemsPerPage;
+    return filteredTickets.slice(start, start + itemsPerPage);
+  }, [filteredTickets, page, itemsPerPage]);
+
   const assigneeOptions = useMemo(() => {
     const names = new Set();
     evaluatedTickets.forEach((t) => {
@@ -367,7 +379,7 @@ export default function CSManagerTickets() {
         title="CS Ticket Queue & Assignment"
         subtitle="Manage assignments, triage incoming customer tickets, and track agent workload for Customer Support."
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -495,7 +507,7 @@ export default function CSManagerTickets() {
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredTickets.map((t) => (
+                paginatedTickets.map((t) => (
                   <TableRow
                     key={t.id || t.ticket_ID}
                     onClick={() => setDetailModalTicket(t)}
@@ -578,10 +590,20 @@ export default function CSManagerTickets() {
           </Table>
         </div>
 
-        <div className="px-4 py-3 border-t border-border bg-slate-50/50 flex items-center justify-between text-xs text-muted-foreground">
-          <span>Showing {filteredTickets.length} of {evaluatedTickets.length} tickets</span>
-          <span>Customer Service Department Queue</span>
-        </div>
+        {!loading && filteredTickets.length > 0 && (
+          <div className="px-4 py-3 border-t border-border bg-slate-50/50 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-muted-foreground">
+            <span>
+              Showing {(page - 1) * itemsPerPage + 1} to{' '}
+              {Math.min(page * itemsPerPage, filteredTickets.length)} of {filteredTickets.length} tickets
+            </span>
+            <Pagination
+              totalItems={filteredTickets.length}
+              itemsPerPage={itemsPerPage}
+              currentPage={page}
+              onPageChange={setPage}
+            />
+          </div>
+        )}
       </div>
 
       {/* Assignment Modal */}

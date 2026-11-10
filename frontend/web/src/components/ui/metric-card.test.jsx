@@ -33,4 +33,22 @@ describe('MetricCard KPI definition (spec 0028 AC-5)', () => {
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
     expect(container.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0);
   });
+
+  it('applies responsive font sizing and truncation to prevent overflow with long values like Unavailable and No data', () => {
+    const { container: unavailableContainer } = render(
+      <MetricCard title="CSAT Score" value="Unavailable" />
+    );
+    const unavailableEl = unavailableContainer.querySelector('p.font-bold');
+    expect(unavailableEl).toBeInTheDocument();
+    expect(unavailableEl.className).toContain('text-sm');
+    expect(unavailableEl.className).toContain('truncate');
+
+    const { container: noDataContainer } = render(
+      <MetricCard title="SLA Compliance" value="No data" />
+    );
+    const noDataEl = noDataContainer.querySelector('p.font-bold');
+    expect(noDataEl).toBeInTheDocument();
+    expect(noDataEl.className).toContain('text-base');
+    expect(noDataEl.className).toContain('truncate');
+  });
 });

@@ -261,7 +261,7 @@ describe('CSAssigned Component Tests (SLA Compliance Monitoring Acceptance Crite
     expect(screen.queryByText('Email client synchronization error')).not.toBeInTheDocument();
   });
 
-  it('covers AC-6: displays SLA due date or remaining time clearly per ticket', async () => {
+  it('covers AC-6: displays SLA status badge with accessible deadline tooltip per ticket', async () => {
     render(<CSAssigned />);
 
     await waitFor(() => {
@@ -270,27 +270,26 @@ describe('CSAssigned Component Tests (SLA Compliance Monitoring Acceptance Crite
 
     const table = screen.getByRole('table');
 
-    // At Risk ticket shows remaining time badge
-    expect(within(table).getByText('45m left')).toBeInTheDocument();
+    // At Risk ticket displays badge with deadline tooltip
+    const atRiskBadge = within(table).getByText('At Risk').parentElement;
+    expect(atRiskBadge).toHaveAttribute('title', expect.stringContaining('SLA Deadline approaching'));
   });
 
-  it('covers AC-7: displays at-a-glance summary counts (Breached, At Risk, On Track, Paused) to monitor workload risk', async () => {
+  it('covers AC-7: displays queue tab counts and filters by SLA status', async () => {
     render(<CSAssigned />);
 
     await waitFor(() => {
       expect(screen.getByText('Server cluster offline in Data Center 1')).toBeInTheDocument();
     });
 
-    // Summary cards exist
-    expect(screen.getByText('Resolution overdue')).toBeInTheDocument();
-    expect(screen.getByText(/Near threshold/)).toBeInTheDocument();
-    expect(screen.getByText('Compliant with SLA')).toBeInTheDocument();
-    expect(screen.getByText('Clock paused on hold')).toBeInTheDocument();
+    // Queue tabs exist with server counts
+    expect(screen.getByText('All Assigned')).toBeInTheDocument();
+    expect(screen.getByText('Pending Evaluation')).toBeInTheDocument();
+    expect(screen.getByText('Reassigned Tickets')).toBeInTheDocument();
 
-    // Clicking the "At Risk" summary card activates the At Risk filter
-    const atRiskCard = screen.getByText(/Near threshold/).closest('button');
-    expect(atRiskCard).toBeInTheDocument();
-    fireEvent.click(atRiskCard);
+    // Selecting "At Risk" from the SLA filter dropdown asks the server for At Risk tickets
+    const slaFilterSelect = screen.getByTitle('Filter by SLA status');
+    fireEvent.change(slaFilterSelect, { target: { value: 'At Risk' } });
 
     // List is filtered to At Risk ticket by the server
     await waitFor(() => {
@@ -309,11 +308,10 @@ describe('CSAssigned Component Tests (SLA Compliance Monitoring Acceptance Crite
 
     const table = screen.getByRole('table');
 
-    // Fallback badge is rendered cleanly as N/A with Standard subtitle
+    // Fallback badge is rendered cleanly as N/A with accessible tooltip
     const naBadge = within(table).getByText('N/A');
     expect(naBadge).toBeInTheDocument();
     expect(naBadge.parentElement).toHaveAttribute('title', 'No department SLA configured for this ticket category');
-    expect(within(table).getByText('Standard')).toBeInTheDocument();
   });
 
   it('covers AC-9: ensures accessibility and responsive controls across desktop and mobile', async () => {

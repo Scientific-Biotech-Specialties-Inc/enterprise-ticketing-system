@@ -24,8 +24,10 @@ import {
 } from 'lucide-react';
 import { formatDisplayDate } from '@/utils/dateUtils';
 import { getSecurityIncidentDetail } from '@/services/ticketService';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 
 export default function SecurityIncidentModal({ incident, onClose, onNavigateAuditLogs }) {
+  useLockBodyScroll(Boolean(incident));
   const [detailData, setDetailData] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [showTrace, setShowTrace] = useState(false);
@@ -166,7 +168,7 @@ export default function SecurityIncidentModal({ incident, onClose, onNavigateAud
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm overscroll-none animate-in fade-in duration-200"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -216,7 +218,7 @@ export default function SecurityIncidentModal({ incident, onClose, onNavigateAud
         </div>
 
         {/* Content Body */}
-        <div className="p-6 overflow-y-auto space-y-5 text-sm">
+        <div className="p-6 overflow-y-auto overscroll-contain space-y-5 text-sm">
           {/* Status or containment banner */}
           {isMalware ? (
             <div className="rounded-2xl bg-emerald-50/80 border border-emerald-200/80 p-4 flex items-start gap-3.5">

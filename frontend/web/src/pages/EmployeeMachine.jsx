@@ -11,11 +11,16 @@ import { getEmployeeAssignedTickets, clearEmployeeTicketsCache } from '@/service
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
 import { hasPendingReassignment } from '@/utils/reassignmentUtils';
 import { PageHeader } from '@/components/ui/page-header';
+import { OriginPillToggle } from '@/components/ui/OriginPillToggle';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
 import { DataTableSkeleton, DataTableEmptyState } from '@/components/ui/data-table';
+import Pagination from '@/components/Pagination';
 
-const CLOSED_STATUSES = ['Closed', 'Resolved'];
+const CLOSED_STATUSES = ['Closed', 'Resolved', 'Discarded', 'Discarded by Customer'];
+
+const isExcludedStatus = (status) =>
+  ['closed', 'resolved', 'discarded', 'discarded by customer'].includes(String(status || '').trim().toLowerCase());
 
 const isPendingEvaluationTicket = (ticket) => {
   if (!ticket) return false;
@@ -184,16 +189,8 @@ export default function EmployeeMachine() {
     return tickets.filter((t) => t.accepted && (hasPendingReassignment(t) || t.status === 'Pending Reassignment' || t.status === 'Pending Reassign')).length;
   }, [tickets]);
 
-  const resolvedAttentionCount = useMemo(() => {
-    return tickets.filter((t) => t.accepted && (t.status === 'Resolved' || t.status === 'resolved')).length;
-  }, [tickets]);
-
-  const closedAttentionCount = useMemo(() => {
-    return tickets.filter((t) => t.accepted && (t.status === 'Closed' || t.status === 'closed')).length;
-  }, [tickets]);
-
   const reopenedAttentionCount = useMemo(() => {
-    return tickets.filter((t) => t.accepted && (t.status === 'Reopened' || t.status === 'reopened')).length;
+    return tickets.filter((t) => t.accepted && !CLOSED_STATUSES.includes(t.status) && (t.status === 'Reopened' || t.status === 'reopened')).length;
   }, [tickets]);
 
   // Modal states
@@ -206,8 +203,8 @@ export default function EmployeeMachine() {
     setLoadError('');
     try {
       const list = await getEmployeeAssignedTickets({ employeeEmail: email, forceRefresh });
-      // Only show accepted & active (not closed/resolved) tickets
-      setTickets(list);
+      // Only show accepted & active (not closed, resolved, or discarded) tickets
+      setTickets(list.filter((t) => !isExcludedStatus(t.status)));
     } catch (err) {
       setLoadError('Unable to load active progress tickets.');
     } finally {
@@ -276,6 +273,7 @@ export default function EmployeeMachine() {
     const q = search.trim().toLowerCase();
     let list = tickets.filter((t) => {
       if (!t.accepted) return false;
+      if (CLOSED_STATUSES.includes(t.status) || isExcludedStatus(t.status)) return false;
 
       // Status filtering (Needs Attention pills)
       if (statusFilter !== 'All Status') {
@@ -283,10 +281,6 @@ export default function EmployeeMachine() {
           if (!hasPendingReassignment(t) && t.status !== 'Pending Reassignment' && t.status !== 'Pending Reassign') return false;
         } else if (statusFilter === 'Pending') {
           if (t.status !== 'Pending' && t.status !== 'pending') return false;
-        } else if (statusFilter === 'Resolved') {
-          if (t.status !== 'Resolved' && t.status !== 'resolved') return false;
-        } else if (statusFilter === 'Closed') {
-          if (t.status !== 'Closed' && t.status !== 'closed') return false;
         } else if (statusFilter === 'Reopened') {
           if (t.status !== 'Reopened' && t.status !== 'reopened') return false;
         } else if (statusFilter === 'Pending Evaluation') {
@@ -294,8 +288,6 @@ export default function EmployeeMachine() {
         } else if (t.status !== statusFilter) {
           return false;
         }
-      } else {
-        if (CLOSED_STATUSES.includes(t.status)) return false;
       }
 
       // Tab filtering (applied when not overriding with a specific attention status pill)
@@ -338,6 +330,18 @@ export default function EmployeeMachine() {
     list = sortTicketsByPriority(list, 'desc');
     return list;
   }, [tickets, search, assignedTab, statusFilter, slaFilter, categoryFilter, priorityFilter, typeFilter]);
+
+  const [page, setPage] = useState(1);
+  const itemsPerPage = 10;
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, assignedTab, statusFilter, slaFilter, categoryFilter, priorityFilter, typeFilter]);
+
+  const paginatedTickets = useMemo(() => {
+    const start = (page - 1) * itemsPerPage;
+    return filtered.slice(start, start + itemsPerPage);
+  }, [filtered, page, itemsPerPage]);
 
   const openTicketFlow = (t) => {
     setInfoTicket(t);
@@ -385,22 +389,10 @@ export default function EmployeeMachine() {
         title="Assigned Ticket"
         subtitle="Tickets assigned to you — work, update, and resolve."
         actions={
-          <div className="flex border border-border rounded-lg overflow-hidden bg-card shrink-0">
-            {['all', 'external', 'internal'].map((type) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => setTypeFilter(type)}
-                className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
-                  typeFilter === type
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-card hover:bg-muted text-muted-foreground'
-                }`}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
+          <OriginPillToggle
+            value={typeFilter}
+            onChange={(val) => setTypeFilter(val)}
+          />
         }
       />
 
@@ -563,40 +555,6 @@ export default function EmployeeMachine() {
 
         <button
           type="button"
-          onClick={() => setStatusFilter((prev) => (prev === 'Resolved' ? 'All Status' : 'Resolved'))}
-          className={`inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full text-xs font-semibold border transition-colors cursor-pointer ${
-            statusFilter === 'Resolved'
-              ? 'border-brand-primary bg-brand-primary/10 text-brand-primary shadow-xs'
-              : 'border-gray-200 bg-surface text-dark-slate hover:border-gray-300 hover:bg-page'
-          }`}
-        >
-          <span>Resolved</span>
-          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-            statusFilter === 'Resolved' ? 'bg-brand-primary text-white' : 'bg-gray-100 text-gray-600'
-          }`}>
-            {resolvedAttentionCount}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setStatusFilter((prev) => (prev === 'Closed' ? 'All Status' : 'Closed'))}
-          className={`inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full text-xs font-semibold border transition-colors cursor-pointer ${
-            statusFilter === 'Closed'
-              ? 'border-brand-primary bg-brand-primary/10 text-brand-primary shadow-xs'
-              : 'border-gray-200 bg-surface text-dark-slate hover:border-gray-300 hover:bg-page'
-          }`}
-        >
-          <span>Closed</span>
-          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-            statusFilter === 'Closed' ? 'bg-brand-primary text-white' : 'bg-gray-100 text-gray-600'
-          }`}>
-            {closedAttentionCount}
-          </span>
-        </button>
-
-        <button
-          type="button"
           onClick={() => setStatusFilter((prev) => (prev === 'Reopened' ? 'All Status' : 'Reopened'))}
           className={`inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full text-xs font-semibold border transition-colors cursor-pointer ${
             statusFilter === 'Reopened'
@@ -638,7 +596,7 @@ export default function EmployeeMachine() {
                 message="No active accepted tickets found in your progress queue."
               />
             ) : (
-              filtered.map((t) => {
+              paginatedTickets.map((t) => {
                 const displayStatus = hasPendingReassignment(t)
                   ? 'Pending Reassignment'
                   : isPendingEvaluationTicket(t)
@@ -714,10 +672,17 @@ export default function EmployeeMachine() {
           </TableBody>
         </Table>
         {!loading && filtered.length > 0 && (
-          <div className="px-4 py-3 border-t border-border bg-card">
-            <p className="text-xs text-muted-foreground">
-              Showing {filtered.length} of {totalAssignedCount} assigned tickets
+          <div className="px-4 py-3 border-t border-border bg-card flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-muted-foreground">
+            <p>
+              Showing {(page - 1) * itemsPerPage + 1} to{' '}
+              {Math.min(page * itemsPerPage, filtered.length)} of {filtered.length} assigned tickets
             </p>
+            <Pagination
+              totalItems={filtered.length}
+              itemsPerPage={itemsPerPage}
+              currentPage={page}
+              onPageChange={setPage}
+            />
           </div>
         )}
       </div>

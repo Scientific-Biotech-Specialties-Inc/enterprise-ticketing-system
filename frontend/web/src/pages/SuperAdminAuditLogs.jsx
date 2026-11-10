@@ -35,6 +35,7 @@ import {
   purgeAuditLogs,
 } from '@/services/ticketService';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import { PageHeader } from '@/components/ui/page-header';
 import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from '@/components/ui/table';
 import { DataTableSkeleton } from '@/components/ui/skeleton';
@@ -43,7 +44,14 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import SecurityIncidentModal from '@/components/security/SecurityIncidentModal';
 import SystemAlertModal from '@/components/security/SystemAlertModal';
-import { formatDisplayDate } from '@/utils/dateUtils';
+import {
+  formatDisplayDate,
+  DATE_RANGE_ERROR_MESSAGE,
+  isDateRangeValid,
+  resolveStartDateUpdate,
+  resolveEndDateUpdate,
+} from '@/utils/dateUtils';
+import Pagination from '@/components/Pagination';
 
 const DEFAULT_RETENTION_DAYS = 365;
 
@@ -73,6 +81,7 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
   const [datePreset, setDatePreset] = useState('all');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
+  const [dateRangeError, setDateRangeError] = useState('');
   const [filterAction, setFilterAction] = useState('');
   const [filterActor, setFilterActor] = useState('');
   const [filterModule, setFilterModule] = useState('');
@@ -130,6 +139,7 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
   const [filterOptions, setFilterOptions] = useState({ action_types: [], branches: [] });
   const [customRetentionDays, setCustomRetentionDays] = useState('');
   const [confirmModal, setConfirmModal] = useState(null); // { type: 'reduction' | 'purge', targetDays, affectedCount }
+  useLockBodyScroll(Boolean(confirmModal));
   const [retentionSuccessMsg, setRetentionSuccessMsg] = useState('');
   const [isPurging, setIsPurging] = useState(false);
 
@@ -221,7 +231,7 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
       } else if (datePreset === '30d') {
         const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
         result = result.filter((l) => new Date(l.timestamp) >= cutoff);
-      } else if (datePreset === 'custom') {
+      } else if (datePreset === 'custom' && isDateRangeValid(customStart, customEnd)) {
         if (customStart) {
           const start = new Date(customStart);
           result = result.filter((l) => new Date(l.timestamp) >= start);
@@ -260,7 +270,7 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
     if (search.trim()) list.push({ key: 'search', label: `Search: "${search}"`, clear: () => setSearch('') });
     if (datePreset !== 'all') {
       const label = datePreset === 'custom' ? `Date: ${customStart || '...'} to ${customEnd || '...'}` : `Date: ${datePreset.toUpperCase()}`;
-      list.push({ key: 'date', label, clear: () => { setDatePreset('all'); setCustomStart(''); setCustomEnd(''); } });
+      list.push({ key: 'date', label, clear: () => { setDatePreset('all'); setCustomStart(''); setCustomEnd(''); setDateRangeError(''); } });
     }
     if (filterAction) list.push({ key: 'action', label: `Action: ${humanize(filterAction)}`, clear: () => setFilterAction('') });
     if (filterActor) list.push({ key: 'actor', label: `Actor: ${filterActor}`, clear: () => setFilterActor('') });
@@ -274,6 +284,7 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
     setDatePreset('all');
     setCustomStart('');
     setCustomEnd('');
+    setDateRangeError('');
     setFilterAction('');
     setFilterActor('');
     setFilterModule('');
@@ -406,7 +417,7 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
             : "System-wide forensic activity trail, filterable investigations, and branch-level log inspection."
         }
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="bg-primary/5 text-primary border-primary/20 text-xs">
               <Shield className="w-3.5 h-3.5 mr-1 text-primary" />
               Super Admin Unrestricted Scope
@@ -452,7 +463,7 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
       {activeTab === 'logs' && (
         <div className="space-y-4">
           {/* Filter Bar Controls */}
-          <div className="bg-card rounded-xl border border-border p-4 shadow-xs space-y-3">
+          <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2.5">
               {/* Free-text search */}
               <div className="relative flex-1 min-w-[220px]">
@@ -462,15 +473,18 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
                   placeholder="Search by user, action, target, details, before/after..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  className="pl-9 h-9 text-xs"
+                  className="pl-9 h-9 text-xs bg-card"
                 />
               </div>
 
               {/* Date Preset Filter */}
               <select
                 value={datePreset}
-                onChange={(e) => setDatePreset(e.target.value)}
-                className="h-9 rounded-lg border border-border bg-page px-3 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                onChange={(e) => {
+                  setDatePreset(e.target.value);
+                  setDateRangeError('');
+                }}
+                className="h-9 rounded-lg border border-border bg-card px-3 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary cursor-pointer"
               >
                 <option value="all">All Dates</option>
                 <option value="today">Today</option>
@@ -483,7 +497,7 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
               <select
                 value={filterAction}
                 onChange={(e) => setFilterAction(e.target.value)}
-                className="h-9 rounded-lg border border-border bg-page px-3 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                className="h-9 rounded-lg border border-border bg-card px-3 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary cursor-pointer"
               >
                 <option value="">All Actions</option>
                 {actionOptions.map((a) => (
@@ -495,7 +509,7 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
               <select
                 value={filterActor}
                 onChange={(e) => setFilterActor(e.target.value)}
-                className="h-9 rounded-lg border border-border bg-page px-3 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                className="h-9 rounded-lg border border-border bg-card px-3 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary cursor-pointer"
               >
                 <option value="">All Actors</option>
                 {actorOptions.map((act) => (
@@ -507,7 +521,7 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
               <select
                 value={filterModule}
                 onChange={(e) => setFilterModule(e.target.value)}
-                className="h-9 rounded-lg border border-border bg-page px-3 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                className="h-9 rounded-lg border border-border bg-card px-3 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary cursor-pointer"
               >
                 <option value="">All Modules</option>
                 {moduleOptions.map((m) => (
@@ -519,7 +533,7 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
               <select
                 value={filterBranch}
                 onChange={(e) => setFilterBranch(e.target.value)}
-                className="h-9 rounded-lg border border-border bg-page px-3 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                className="h-9 rounded-lg border border-border bg-card px-3 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary cursor-pointer"
               >
                 <option value="">All Branches</option>
                 {branchOptions.map((b) => (
@@ -543,21 +557,44 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
 
             {/* Custom Date Pickers if 'custom' is active */}
             {datePreset === 'custom' && (
-              <div className="flex items-center gap-2 pt-2 border-t border-border/60 text-xs">
-                <span className="text-muted-foreground font-medium">Date Range:</span>
-                <input
-                  type="date"
-                  value={customStart}
-                  onChange={(e) => setCustomStart(e.target.value)}
-                  className="h-8 rounded border border-border px-2 text-xs bg-page"
-                />
-                <span className="text-muted-foreground">to</span>
-                <input
-                  type="date"
-                  value={customEnd}
-                  onChange={(e) => setCustomEnd(e.target.value)}
-                  className="h-8 rounded border border-border px-2 text-xs bg-page"
-                />
+              <div className="space-y-1.5 pt-2 border-t border-border/60 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-muted-foreground font-medium">Date Range:</span>
+                  <input
+                    type="date"
+                    aria-label="Start date"
+                    value={customStart}
+                    onChange={(e) => {
+                      const next = resolveStartDateUpdate(e.target.value, customEnd);
+                      setCustomStart(next.startDate);
+                      setCustomEnd(next.endDate);
+                      setDateRangeError(next.error);
+                    }}
+                    className="h-8 rounded border border-border px-2 text-xs bg-card"
+                  />
+                  <span className="text-muted-foreground">to</span>
+                  <input
+                    type="date"
+                    aria-label="End date"
+                    min={customStart || undefined}
+                    value={customEnd}
+                    onChange={(e) => {
+                      const next = resolveEndDateUpdate(customStart, e.target.value);
+                      if (!next.valid) {
+                        setDateRangeError(next.error);
+                        return;
+                      }
+                      setCustomEnd(next.endDate);
+                      setDateRangeError('');
+                    }}
+                    className="h-8 rounded border border-border px-2 text-xs bg-card"
+                  />
+                </div>
+                {dateRangeError && (
+                  <p role="alert" className="text-xs text-destructive font-medium">
+                    {dateRangeError}
+                  </p>
+                )}
               </div>
             )}
 
@@ -804,31 +841,12 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1.5 justify-end">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={currentPage <= 1}
-                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    className="h-8 w-8 p-0"
-                    title="Previous Page"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </Button>
-                  <span className="px-3 py-1 font-semibold text-foreground">
-                    Page {currentPage} of {totalPages}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={currentPage >= totalPages}
-                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    className="h-8 w-8 p-0"
-                    title="Next Page"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </Button>
-                </div>
+                <Pagination
+                  totalItems={totalEntries}
+                  itemsPerPage={pageSize}
+                  currentPage={currentPage}
+                  onPageChange={setCurrentPage}
+                />
               </div>
             )}
           </div>
@@ -983,8 +1001,8 @@ export default function SuperAdminAuditLogs({ defaultTab = 'logs' }) {
 
       {/* ─── CONFIRMATION MODALS (TS088 Criteria) ────────────────────────────── */}
       {confirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
-          <div className="bg-card border border-destructive/20 rounded-2xl p-6 shadow-2xl max-w-md w-full space-y-4 animate-scale-up">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs overscroll-none p-4">
+          <div className="bg-card border border-destructive/20 rounded-2xl p-6 shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto overscroll-contain space-y-4 animate-scale-up">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-destructive/10 text-destructive flex items-center justify-center shrink-0">
                 <AlertTriangle className="w-5 h-5 text-destructive" />

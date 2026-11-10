@@ -18,11 +18,24 @@ export function toAttachmentPath(input) {
   if (!input) return '';
   let cleaned = String(input).trim().replace(/^https?:\/\/[^/]+/, '');
   const markers = [STORAGE_PREFIX, DOWNLOAD_PREFIX, '/storage/', '/download/'];
-  const marker = markers.find((m) => cleaned.includes(m));
-  if (marker) {
-    cleaned = cleaned.substring(cleaned.indexOf(marker) + marker.length);
-  } else if (cleaned.startsWith('storage/')) {
-    cleaned = cleaned.substring('storage/'.length);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const marker of markers) {
+      if (cleaned.includes(marker)) {
+        cleaned = cleaned.substring(cleaned.indexOf(marker) + marker.length);
+        changed = true;
+        break;
+      }
+    }
+    if (cleaned.startsWith('storage/')) {
+      cleaned = cleaned.substring('storage/'.length);
+      changed = true;
+    }
+    if (cleaned.startsWith('download/')) {
+      cleaned = cleaned.substring('download/'.length);
+      changed = true;
+    }
   }
   return cleaned.split('?')[0].split('#')[0].replace(/^\/+/, '');
 }

@@ -78,7 +78,7 @@ describe('AdminReports Component Tests', () => {
           preset: 'Last 30 Days',
         })
       );
-      expect(screen.getAllByText('Generate & Preview Report').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Generate & Preview Report')).toHaveLength(1);
     });
   });
 
@@ -227,5 +227,31 @@ describe('AdminReports Component Tests', () => {
     await waitFor(() => {
       expect(screen.getByText('The export could not be generated. Please try again.')).toBeInTheDocument();
     });
+  });
+
+  it('rejects End date earlier than Start date under Custom Range', async () => {
+    ticketService.getAdminReports.mockResolvedValue(sampleTicketVolumeResponse);
+
+    render(<AdminReports />);
+    await waitFor(() => expect(ticketService.getAdminReports).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByLabelText('Date Range'), { target: { value: 'Custom Range' } });
+    await waitFor(() => expect(ticketService.getAdminReports).toHaveBeenCalledTimes(2));
+
+    const startInput = screen.getByLabelText('Start date');
+    const endInput = screen.getByLabelText('End date');
+
+    fireEvent.change(startInput, { target: { value: '2026-11-10' } });
+    fireEvent.change(endInput, { target: { value: '2026-11-12' } });
+    await waitFor(() => expect(endInput.value).toBe('2026-11-12'));
+
+    const callsBeforeInvalid = ticketService.getAdminReports.mock.calls.length;
+
+    // Attempt to set an End date earlier than Start date
+    fireEvent.change(endInput, { target: { value: '2026-11-05' } });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('End date cannot be earlier than start date.');
+    expect(endInput.value).toBe('2026-11-12');
+    expect(ticketService.getAdminReports).toHaveBeenCalledTimes(callsBeforeInvalid);
   });
 });

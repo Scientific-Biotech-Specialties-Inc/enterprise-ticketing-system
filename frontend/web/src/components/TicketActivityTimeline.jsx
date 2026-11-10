@@ -282,8 +282,8 @@ export default function TicketActivityTimeline({
               : 'No loaded activity matches the selected category. Load more to look further back.'}
           </div>
         ) : (
-          <div className={`relative pl-6 space-y-3.5 border-l-2 border-border ml-3 py-1 ${collapsible ? 'max-h-72 overflow-y-auto pr-1' : ''}`}>
-            {visibleEvents.map((evt) => {
+          <div className={`space-y-0 ml-1 py-1 ${collapsible ? 'max-h-72 overflow-y-auto pr-1' : ''}`}>
+            {visibleEvents.map((evt, idx) => {
               const dotColor = evt.isSystem
                 ? 'bg-slate-700 ring-2 ring-slate-200'
                 : evt.category === 'notes'
@@ -291,10 +291,16 @@ export default function TicketActivityTimeline({
                 : evt.category === 'assign'
                 ? 'bg-accent ring-2 ring-blue-100'
                 : 'bg-primary ring-2 ring-indigo-100';
+              const isLast = idx === visibleEvents.length - 1;
 
               return (
-                <div key={evt.id} className="relative text-xs group">
-                  <div className={`absolute -left-[31px] top-1.5 w-3 h-3 rounded-full border-2 border-card shadow-xs ${dotColor}`} />
+                <div key={evt.id} className="flex items-start gap-3.5 text-xs group">
+                  <div className="flex flex-col items-center self-stretch shrink-0 w-3.5">
+                    <div className={`w-3 h-3 rounded-full shrink-0 mt-1 border-2 border-card shadow-xs ${dotColor}`} />
+                    {!isLast && <div className="w-[2px] bg-border flex-1 my-0.5" />}
+                  </div>
+
+                  <div className={`flex-1 min-w-0 ${!isLast ? 'pb-4' : 'pb-1'}`}>
 
                   <div className="flex flex-wrap items-center justify-between gap-1.5 mb-1.5 text-muted-foreground">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -346,7 +352,8 @@ export default function TicketActivityTimeline({
                     )}
                   </div>
                 </div>
-              );
+              </div>
+            );
             })}
           </div>
         )}

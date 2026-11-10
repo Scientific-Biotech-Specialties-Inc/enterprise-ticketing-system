@@ -40,6 +40,28 @@ function useLiveClock() {
 }
 
 /**
+ * Shared live clock + date display used in DashboardHeader and pattern="A" PageHeader.
+ */
+export function LiveClock({ align = "md:text-right", className }) {
+  const { timeString, dateString } = useLiveClock();
+
+  return (
+    <div
+      className={cn(
+        "text-left shrink-0 bg-surface md:bg-transparent p-3 md:p-0 rounded-xl md:rounded-none border md:border-0 border-slate-100 shadow-sm md:shadow-none",
+        align,
+        className
+      )}
+    >
+      <div className="text-lg md:text-xl font-bold text-dark-slate tabular-nums">
+        {timeString}
+      </div>
+      <div className="text-xs text-eyebrow mt-0.5">{dateString}</div>
+    </div>
+  );
+}
+
+/**
  * Pattern A: Dashboard Page Header (Home / Executive Views)
  */
 export function DashboardHeader({
@@ -48,7 +70,6 @@ export function DashboardHeader({
   subtitle = "Here is your operational overview for today.",
   className,
 }) {
-  const { timeString, dateString } = useLiveClock();
   const greeting = getTimeOfDayGreeting();
 
   return (
@@ -72,12 +93,7 @@ export function DashboardHeader({
         )}
       </div>
 
-      <div className="text-left md:text-right shrink-0 bg-surface md:bg-transparent p-3 md:p-0 rounded-xl md:rounded-none border md:border-0 border-slate-100 shadow-sm md:shadow-none">
-        <div className="text-lg md:text-xl font-bold text-dark-slate tabular-nums">
-          {timeString}
-        </div>
-        <div className="text-xs text-eyebrow mt-0.5">{dateString}</div>
-      </div>
+      <LiveClock />
     </div>
   );
 }
@@ -89,8 +105,12 @@ export function PageHeader({
   title,
   subtitle,
   actions,
+  pattern,
+  showClock,
   className,
 }) {
+  const shouldShowClock = showClock ?? pattern === "A";
+
   return (
     <div
       className={cn(
@@ -98,7 +118,7 @@ export function PageHeader({
         className
       )}
     >
-      <div>
+      <div className="min-w-0">
         <h1 className="text-2xl font-bold text-dark-slate tracking-tight">
           {title}
         </h1>
@@ -107,8 +127,20 @@ export function PageHeader({
         )}
       </div>
 
-      {actions && (
-        <div className="flex items-center gap-2.5 flex-wrap">{actions}</div>
+      {(shouldShowClock || actions) && (
+        <div
+          className={cn(
+            "flex flex-col items-start sm:items-end gap-2.5 min-w-0",
+            !shouldShowClock && "sm:flex-row sm:items-center"
+          )}
+        >
+          {shouldShowClock && <LiveClock align="sm:text-right" />}
+          {actions && (
+            <div className="flex items-center gap-2.5 flex-wrap min-w-0">
+              {actions}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

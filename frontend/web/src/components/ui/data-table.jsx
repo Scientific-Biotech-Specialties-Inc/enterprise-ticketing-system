@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Search, Filter, Plus, ChevronLeft, ChevronRight, Inbox } from "lucide-react";
 import { cn } from "@/lib/utils";
+import Pagination from "@/components/Pagination";
 
 export function DataTableSkeleton({ columns = 5, rows = 5 }) {
   return (
@@ -128,33 +129,13 @@ export function DataTablePagination({
         )}
       </div>
 
-      <div className="flex items-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={currentPage <= 1}
-          onClick={() => onPageChange(currentPage - 1)}
-          className="h-8 px-2.5"
-        >
-          <ChevronLeft className="h-4 w-4 mr-1" />
-          Previous
-        </Button>
-        <span className="px-2 font-semibold text-dark-slate">
-          {currentPage} / {totalPages || 1}
-        </span>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={currentPage >= totalPages}
-          onClick={() => onPageChange(currentPage + 1)}
-          className="h-8 px-2.5"
-        >
-          Next
-          <ChevronRight className="h-4 w-4 ml-1" />
-        </Button>
-      </div>
+      <Pagination
+        currentPage={currentPage}
+        totalPages={totalPages}
+        totalItems={totalItems}
+        itemsPerPage={pageSize}
+        onPageChange={onPageChange}
+      />
     </div>
   );
 }

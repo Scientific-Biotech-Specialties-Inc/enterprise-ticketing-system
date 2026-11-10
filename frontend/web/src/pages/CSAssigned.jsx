@@ -4,6 +4,7 @@ import { Search, Loader2, Filter, RotateCcw, X, AlertTriangle, Clock, CheckCircl
 import Pagination from '@/components/Pagination';
 import { useAuth } from '@/context/AuthContext';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import {
   getCSQueuePage,
   getAssignableEmployees,
@@ -18,8 +19,8 @@ import {
 import { TicketSummary, AssignModal } from '@/components/CSModals';
 import SlaStatusBadge from '@/components/sla/SlaStatusBadge';
 import { formatDisplayDate, parseUTCDate } from '@/utils/dateUtils';
-import { formatProperSentenceCase } from '@/utils/titleCaseUtils';
 import { PageHeader } from '@/components/ui/page-header';
+import { OriginPillToggle } from '@/components/ui/OriginPillToggle';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
@@ -91,7 +92,7 @@ const buildTicketSearchString = (t) => {
     .toLowerCase();
 };
 
-const renderSlaBadge = (ticket) => <SlaStatusBadge ticket={ticket} />;
+const renderSlaBadge = (ticket) => <SlaStatusBadge ticket={ticket} showDueDate={false} />;
 
 export default function CSAssigned() {
   const { user } = useAuth();
@@ -102,6 +103,7 @@ export default function CSAssigned() {
   const [priorityOptions, setPriorityOptions] = useState(['Low','Medium','High','Critical']);
   const [loading, setLoading] = useState(true);
   const [modalLoading, setModalLoading] = useState(false);
+  useLockBodyScroll(modalLoading);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [slaFilter, setSlaFilter] = useState('All SLA Statuses');
@@ -124,7 +126,6 @@ export default function CSAssigned() {
     machines: [],
     categories: [],
   });
-  const [notificationBanner, setNotificationBanner] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
   const [typeFilter, setTypeFilter] = useState('all');
   const [assignedTab, setAssignedTab] = useState('all'); // 'all' | 'in_progress' | 'pending_evaluation' | 'on_hold' | 'reassigned' | 'resolved_closed'
@@ -323,12 +324,6 @@ export default function CSAssigned() {
   useRealtimeRefresh({
     refresh: (context) => {
       loadLiveData({ ...context, forceRefresh: true });
-      if (context && context.source === 'websocket') {
-        setNotificationBanner('Ticket list automatically updated via real-time sync');
-        setTimeout(() => {
-          setNotificationBanner(null);
-        }, 4000);
-      }
     },
     channels: [
       { name: 'ticket-updates', event: 'ticket.changed' },
@@ -350,8 +345,10 @@ export default function CSAssigned() {
   }, [tickets, csFilterOptions.machines]);
 
   const statuses = useMemo(() => {
-    const defaultStatuses = ['In Progress', 'Pending Evaluation', 'On Hold', 'Pending Assignment', 'Resolved', 'Closed', 'Reopened'];
-    const fromBackend = (csFilterOptions.statuses || []).map((s) => s.status_name || s.name || s);
+    const defaultStatuses = ['In Progress', 'Pending Evaluation', 'On Hold', 'Pending Assignment', 'Reopened'];
+    const fromBackend = (csFilterOptions.statuses || [])
+      .map((s) => s.status_name || s.name || s)
+      .filter((s) => !['resolved', 'closed', 'discarded', 'discarded by customer'].includes(String(s).trim().toLowerCase()));
     return ['All Statuses', ...Array.from(new Set([...defaultStatuses, ...fromBackend]))];
   }, [csFilterOptions.statuses]);
 
@@ -383,9 +380,12 @@ export default function CSAssigned() {
     resolvedClosed: tabCounts?.resolvedClosed ?? 0,
   };
 
-  // Spec 0037 (AC-15): render the server's rows as they are. Tab, filters, SLA filter,
-  // and sort were all applied on the server.
-  const filtered = tickets;
+  const EXCLUDED_STATUSES = useMemo(() => ['resolved', 'closed', 'discarded', 'discarded by customer'], []);
+
+  // Filter out resolved, closed, and discarded tickets - they only belong on the Ticket History page
+  const filtered = useMemo(() => {
+    return (tickets || []).filter((t) => !EXCLUDED_STATUSES.includes(String(t.status || '').trim().toLowerCase()));
+  }, [tickets, EXCLUDED_STATUSES]);
 
   const totalPages = lastPage;
 
@@ -479,22 +479,10 @@ export default function CSAssigned() {
         title="Assigned Tickets"
         subtitle="Manage and track ongoing assigned support tickets"
         actions={
-          <div className="flex border border-border rounded-lg overflow-hidden bg-card shrink-0">
-            {['all', 'external', 'internal'].map((type) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => setTypeFilter(type)}
-                className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
-                  typeFilter === type
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-card hover:bg-muted text-muted-foreground'
-                }`}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
+          <OriginPillToggle
+            value={typeFilter}
+            onChange={(val) => setTypeFilter(val)}
+          />
         }
       />
 
@@ -504,88 +492,71 @@ export default function CSAssigned() {
         </div>
       )}
 
-      {notificationBanner && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 bg-primary text-primary-foreground px-6 py-3 rounded-full shadow-xl flex items-center gap-3 border border-primary-foreground/20">
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+      {/* Assigned Tabs placed at top */}
+      <div className="flex border-b border-border gap-2 overflow-x-auto shrink-0">
+        <button
+          type="button"
+          onClick={() => { setAssignedTab('all'); setPage(1); }}
+          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
+            assignedTab === 'all'
+              ? 'border-primary text-primary'
+              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+          }`}
+        >
+          <span>All Assigned</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+            assignedTab === 'all' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
+          }`}>
+            {counts.all}
           </span>
-          <span className="text-sm font-semibold tracking-wide">{notificationBanner}</span>
-        </div>
-      )}
-
-      {/* SLA Compliance Summary Metrics Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 w-full shrink-0">
-        <button
-          type="button"
-          onClick={() => { setSlaFilter(slaFilter === 'Breached' ? 'All SLA Statuses' : 'Breached'); setPage(1); }}
-          className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-            slaFilter === 'Breached'
-              ? 'border-rose-400 bg-rose-50 shadow-xs ring-2 ring-rose-400/20'
-              : 'border-border bg-card hover:border-rose-200 hover:bg-rose-50/30'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-rose-600 flex items-center gap-1.5">
-              <AlertTriangle className="h-3.5 w-3.5 text-rose-600" /> Breached
-            </span>
-            <span className="text-xl font-bold text-rose-700">{slaSummary.breached}</span>
-          </div>
-          <p className="text-[11px] text-muted-foreground mt-1">Resolution overdue</p>
         </button>
-
         <button
           type="button"
-          onClick={() => { setSlaFilter(slaFilter === 'At Risk' ? 'All SLA Statuses' : 'At Risk'); setPage(1); }}
-          className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-            slaFilter === 'At Risk'
-              ? 'border-amber-400 bg-amber-50 shadow-xs ring-2 ring-amber-400/20'
-              : 'border-border bg-card hover:border-amber-200 hover:bg-amber-50/30'
+          onClick={() => { setAssignedTab('in_progress'); setPage(1); }}
+          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
+            assignedTab === 'in_progress'
+              ? 'border-primary text-primary'
+              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
           }`}
         >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-amber-600 flex items-center gap-1.5">
-              <Clock className="h-3.5 w-3.5 text-amber-600" /> At Risk
-            </span>
-            <span className="text-xl font-bold text-amber-700">{slaSummary.at_risk}</span>
-          </div>
-          <p className="text-[11px] text-muted-foreground mt-1">Near threshold (&le;4h)</p>
+          <span>In Progress</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+            assignedTab === 'in_progress' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
+          }`}>
+            {counts.inProgress}
+          </span>
         </button>
-
         <button
           type="button"
-          onClick={() => { setSlaFilter(slaFilter === 'On Track' ? 'All SLA Statuses' : 'On Track'); setPage(1); }}
-          className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-            slaFilter === 'On Track'
-              ? 'border-emerald-400 bg-emerald-50 shadow-xs ring-2 ring-emerald-400/20'
-              : 'border-border bg-card hover:border-emerald-200 hover:bg-emerald-50/30'
+          onClick={() => { setAssignedTab('pending_evaluation'); setPage(1); }}
+          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
+            assignedTab === 'pending_evaluation'
+              ? 'border-accent text-accent'
+              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
           }`}
         >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-emerald-600 flex items-center gap-1.5">
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> On Track
-            </span>
-            <span className="text-xl font-bold text-emerald-700">{slaSummary.on_track}</span>
-          </div>
-          <p className="text-[11px] text-muted-foreground mt-1">Compliant with SLA</p>
+          <span>Pending Evaluation</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+            assignedTab === 'pending_evaluation' ? 'bg-accent/15 text-accent' : 'bg-muted text-muted-foreground'
+          }`}>
+            {counts.pendingEval}
+          </span>
         </button>
-
         <button
           type="button"
-          onClick={() => { setSlaFilter(slaFilter === 'Paused' ? 'All SLA Statuses' : 'Paused'); setPage(1); }}
-          className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-            slaFilter === 'Paused'
-              ? 'border-blue-400 bg-blue-50 shadow-xs ring-2 ring-blue-400/20'
-              : 'border-border bg-card hover:border-blue-200 hover:bg-blue-50/30'
+          onClick={() => { setAssignedTab('reassigned'); setPage(1); }}
+          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
+            assignedTab === 'reassigned'
+              ? 'border-warning text-warning'
+              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
           }`}
         >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-blue-600 flex items-center gap-1.5">
-              <PauseCircle className="h-3.5 w-3.5 text-blue-600" /> Paused
-            </span>
-            <span className="text-xl font-bold text-blue-700">{slaSummary.paused}</span>
-          </div>
-          <p className="text-[11px] text-muted-foreground mt-1">Clock paused on hold</p>
+          <span>Reassigned Tickets</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+            assignedTab === 'reassigned' ? 'bg-warning/15 text-warning' : 'bg-muted text-muted-foreground'
+          }`}>
+            {counts.reassigned}
+          </span>
         </button>
       </div>
 
@@ -687,98 +658,12 @@ export default function CSAssigned() {
         </div>
       </div>
 
-      {/* Assigned Tabs */}
-      <div className="flex border-b border-border gap-2 overflow-x-auto">
-        <button
-          type="button"
-          onClick={() => { setAssignedTab('all'); setPage(1); }}
-          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
-            assignedTab === 'all'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-          }`}
-        >
-          <span>All Assigned</span>
-          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-            assignedTab === 'all' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
-          }`}>
-            {counts.all}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => { setAssignedTab('in_progress'); setPage(1); }}
-          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
-            assignedTab === 'in_progress'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-          }`}
-        >
-          <span>In Progress</span>
-          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-            assignedTab === 'in_progress' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
-          }`}>
-            {counts.inProgress}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => { setAssignedTab('pending_evaluation'); setPage(1); }}
-          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
-            assignedTab === 'pending_evaluation'
-              ? 'border-accent text-accent'
-              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-          }`}
-        >
-          <span>Pending Evaluation</span>
-          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-            assignedTab === 'pending_evaluation' ? 'bg-accent/15 text-accent' : 'bg-muted text-muted-foreground'
-          }`}>
-            {counts.pendingEval}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => { setAssignedTab('reassigned'); setPage(1); }}
-          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
-            assignedTab === 'reassigned'
-              ? 'border-warning text-warning'
-              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-          }`}
-        >
-          <span>Reassigned Tickets</span>
-          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-            assignedTab === 'reassigned' ? 'bg-warning/15 text-warning' : 'bg-muted text-muted-foreground'
-          }`}>
-            {counts.reassigned}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => { setAssignedTab('resolved_closed'); setPage(1); }}
-          className={`pb-3 px-4 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
-            assignedTab === 'resolved_closed'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-          }`}
-        >
-          <span>Resolved / Closed</span>
-          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-            assignedTab === 'resolved_closed' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
-          }`}>
-            {counts.resolvedClosed}
-          </span>
-        </button>
-      </div>
-
       {/* Table Card */}
       <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-xs w-full min-w-0 max-w-full">
         <Table className="min-w-[960px] w-full">
           <TableHeader>
             <TableRow>
               <TableHead className="w-[140px]">Ticket ID</TableHead>
-              <TableHead>Customer</TableHead>
-              <TableHead>Type</TableHead>
               <TableHead>Title</TableHead>
               <TableHead>Category</TableHead>
               <TableHead>Status</TableHead>
@@ -806,20 +691,15 @@ export default function CSAssigned() {
           </TableHeader>
           <TableBody>
             {loading ? (
-              <DataTableSkeleton columns={9} rows={6} />
+              <DataTableSkeleton columns={7} rows={6} />
             ) : filtered.length === 0 ? (
               <DataTableEmptyState
-                colSpan={9}
+                colSpan={7}
                 message="No tickets found in this assigned queue."
               />
             ) : (
               paginated.map((t, idx) => {
                 const isReassignmentReq = t.reassignmentRequested;
-                const isInternalTicket =
-                  t.title?.startsWith('[Internal]') ||
-                  t.is_internal ||
-                  t.ticket_type === 'Internal' ||
-                  t.type === 'Internal';
 
                 return (
                   <TableRow
@@ -851,37 +731,9 @@ export default function CSAssigned() {
                         )}
                       </div>
                     </TableCell>
-                    <TableCell className="text-muted-foreground truncate max-w-[12rem]">
-                      {t.customer}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={isInternalTicket ? 'secondary' : 'outline'}>
-                        {isInternalTicket ? 'Internal' : 'External'}
-                      </Badge>
-                    </TableCell>
                     <TableCell className="font-medium text-foreground max-w-[18rem]">
                       <div className="flex flex-col gap-1">
                         <span className="truncate">{t.title}</span>
-                        {isReassignmentReq && (
-                          <div className="text-xs text-warning bg-warning/10 p-1.5 rounded border border-warning/20">
-                            <p className="font-semibold">
-                              Req: {(() => {
-                                const rawReq = t.reassignmentRequestedBy;
-                                if (rawReq) {
-                                  const emp = employees.find(e => Number(e.id) === Number(rawReq));
-                                  if (emp?.name) return emp.name;
-                                  if (typeof rawReq === 'string' && isNaN(Number(rawReq))) return rawReq.replace(/^Employee ID:\s*/i, '').trim();
-                                }
-                                return t.assigned_employee || (Array.isArray(t.assigned) && employees.find(e => Number(e.id) === Number(t.assigned[0]))?.name) || 'Assigned Employee';
-                              })()} {t.reassignmentDepartment ? `• ${t.reassignmentDepartment}` : ''}
-                            </p>
-                            {t.reassignmentReason && (
-                              <p className="text-muted-foreground italic truncate max-w-xs">
-                                &quot;{formatProperSentenceCase(t.reassignmentReason)}&quot;
-                              </p>
-                            )}
-                          </div>
-                        )}
                         {t.status === 'Pending Evaluation' && !isReassignmentReq && (
                           <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-accent/15 text-accent w-fit">
                             Pending Evaluation
@@ -940,10 +792,7 @@ export default function CSAssigned() {
                                         isAcc ? 'bg-emerald-500' : isReassign ? 'bg-amber-500' : 'bg-slate-400'
                                       }`}
                                     />
-                                    <span className="truncate max-w-[90px]">{emp.name}</span>
-                                    <span className="text-[9px] font-semibold opacity-80">
-                                      ({isAcc ? 'Accepted' : isReassign ? 'Reassign' : 'Pending'})
-                                    </span>
+                                    <span className="truncate max-w-[130px]">{emp.name}</span>
                                   </span>
                                 );
                               })}

@@ -81,20 +81,20 @@ describe('CSIncoming server driven queue (spec 0037)', () => {
       expect.objectContaining({ scope: 'incoming', tab: 'open', page: 1, limit: 10 })
     );
 
-    // Summary card and tab badge counts come from the server, not from the 3 rows on screen.
-    expect(screen.getByText('42')).toBeInTheDocument();
+    // Tab badge counts and list total come from the server, not from the 3 rows on screen.
     expect(screen.getByText('70')).toBeInTheDocument();
+    expect(screen.getByText('60')).toBeInTheDocument();
     expect(screen.getByText(/of 130 tickets/)).toBeInTheDocument();
   });
 
-  it('clicking the Breached card asks the server and shows every page of breached tickets', async () => {
+  it('filtering by Breached asks the server and shows every page of breached tickets', async () => {
     render(<CSIncoming />);
 
     await waitFor(() => {
       expect(screen.getByText('Monitor screen flicker')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText('Resolution overdue').closest('button'));
+    fireEvent.change(screen.getByTitle('Filter by SLA status'), { target: { value: 'Breached' } });
 
     await waitFor(() => {
       expect(ticketService.getCSQueuePage).toHaveBeenLastCalledWith(
@@ -104,7 +104,6 @@ describe('CSIncoming server driven queue (spec 0037)', () => {
     });
 
     expect(screen.getByText('Ventilator alarm fault')).toBeInTheDocument();
-    // The card said 42, and the list total says 42 across its pages.
     expect(screen.getByText(/of 42 tickets/)).toBeInTheDocument();
   });
 
@@ -122,5 +121,27 @@ describe('CSIncoming server driven queue (spec 0037)', () => {
         expect.objectContaining({ tab: 'pending_assignment', page: 1 })
       );
     });
+  });
+
+  it('never displays In Progress tickets in the incoming ticket queue', async () => {
+    ticketService.getCSQueuePage.mockResolvedValueOnce({
+      tickets: [
+        row(301, 'Open triage issue', 'On Track'),
+        { ...row(302, 'Already working issue', 'On Track'), status: 'In Progress' },
+      ],
+      total: 1,
+      page: 1,
+      perPage: 10,
+      lastPage: 1,
+      slaSummary: { breached: 0, at_risk: 0, on_track: 1, paused: 0, compliant: 0, no_sla: 0 },
+      tabCounts: { open: 1, pending: 0, all: 1 },
+    });
+
+    render(<CSIncoming />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Open triage issue')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Already working issue')).not.toBeInTheDocument();
   });
 });

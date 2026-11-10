@@ -41,6 +41,7 @@ import {
 } from 'lucide-react';
 
 import { PageHeader } from '@/components/ui/page-header';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import { MetricCard } from '@/components/ui/metric-card';
 import { Button } from '@/components/ui/button';
 import {
@@ -58,7 +59,14 @@ import {
   METRIC_DEFINITIONS,
 } from '@/services/dashboardAnalyticsService';
 import { getSystemDashboard, triggerEtlSync } from '@/services/ticketService';
-import { formatRelativeTime, formatDisplayDate } from '@/utils/dateUtils';
+import {
+  formatRelativeTime,
+  formatDisplayDate,
+  DATE_RANGE_ERROR_MESSAGE,
+  isDateRangeValid,
+  resolveStartDateUpdate,
+  resolveEndDateUpdate,
+} from '@/utils/dateUtils';
 import { cn } from '@/lib/utils';
 
 ChartJS.register(
@@ -81,6 +89,7 @@ export default function SuperAdminDashboard() {
   const [selectedPeriod, setSelectedPeriod] = useState('Last 7 Days');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
+  const [dateRangeError, setDateRangeError] = useState('');
   const [branchSearch, setBranchSearch] = useState('');
   const [sortField, setSortField] = useState('totalTickets');
   const [sortDirection, setSortDirection] = useState('desc');
@@ -89,6 +98,8 @@ export default function SuperAdminDashboard() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatusMsg, setSyncStatusMsg] = useState('');
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+
+  useLockBodyScroll(Boolean(selectedTicket));
 
   const handleRunEtl = async (fullSync = false) => {
     setIsSyncing(true);
@@ -142,7 +153,13 @@ export default function SuperAdminDashboard() {
   // Loads real figures from the ticket service. A failed request marks every section unavailable
   // but keeps the last good data on screen.
   const loadData = useCallback(async () => {
-    if (selectedPeriod === 'Custom Range' && (!customStart || !customEnd)) return;
+    if (selectedPeriod === 'Custom Range') {
+      if (!customStart || !customEnd) return;
+      if (!isDateRangeValid(customStart, customEnd)) {
+        setDateRangeError(DATE_RANGE_ERROR_MESSAGE);
+        return;
+      }
+    }
     setIsRefreshing(true);
     try {
       const params = { preset: selectedPeriod };
@@ -254,20 +271,13 @@ export default function SuperAdminDashboard() {
     };
   }, [dashboardData]);
 
-  const dateStr = new Intl.DateTimeFormat('en-US', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  }).format(new Date());
-
   return (
     <div id="superadmin-system-dashboard" className="space-y-6">
       {/* Page Header (Pattern A) */}
       <PageHeader
         pattern="A"
         title="System-wide Support Ecosystem Dashboard"
-        subtitle={`Organization-wide monitoring across all branches — Refreshed: ${dateStr}`}
+        subtitle="Organization-wide monitoring across all branches"
         actions={
           <div className="flex flex-wrap items-center gap-2 print:hidden">
             {syncStatusMsg && (
@@ -387,37 +397,61 @@ export default function SuperAdminDashboard() {
         </div>
 
         {/* Date Period Selector */}
-        <div className="flex items-center gap-2 flex-wrap justify-end">
-          <div className="flex items-center gap-1 bg-page rounded-lg p-1 border border-border">
-            {FILTER_OPTIONS.map((opt) => (
-              <Button
-                key={opt}
-                variant={selectedPeriod === opt ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setSelectedPeriod(opt)}
-                className="text-xs h-7 px-2.5 font-medium"
-              >
-                {opt}
-              </Button>
-            ))}
-          </div>
+        <div className="flex items-center gap-1.5 flex-wrap w-full lg:w-auto justify-start lg:justify-end">
+          {FILTER_OPTIONS.map((opt) => (
+            <Button
+              key={opt}
+              variant={selectedPeriod === opt ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => {
+                setSelectedPeriod(opt);
+                setDateRangeError('');
+              }}
+              className="text-xs h-7 px-2.5 font-medium shrink-0 whitespace-nowrap"
+            >
+              {opt}
+            </Button>
+          ))}
 
           {selectedPeriod === 'Custom Range' && (
-            <div className="flex items-center gap-2 bg-page border border-border rounded-lg px-2.5 py-1 text-xs">
-              <Calendar className="w-3.5 h-3.5 text-slate-muted" />
-              <input
-                type="date"
-                value={customStart}
-                onChange={(e) => setCustomStart(e.target.value)}
-                className="bg-card border border-border rounded px-2 py-0.5 text-xs text-slate-dark focus:outline-none"
-              />
-              <span className="text-slate-muted font-medium">to</span>
-              <input
-                type="date"
-                value={customEnd}
-                onChange={(e) => setCustomEnd(e.target.value)}
-                className="bg-card border border-border rounded px-2 py-0.5 text-xs text-slate-dark focus:outline-none"
-              />
+            <div className="flex flex-col gap-1 max-w-full">
+              <div className="flex items-center gap-2 bg-page border border-border rounded-lg px-2.5 py-1 text-xs max-w-full overflow-x-auto flex-wrap">
+                <Calendar className="w-3.5 h-3.5 text-slate-muted shrink-0" />
+                <input
+                  type="date"
+                  aria-label="Start date"
+                  value={customStart}
+                  onChange={(e) => {
+                    const next = resolveStartDateUpdate(e.target.value, customEnd);
+                    setCustomStart(next.startDate);
+                    setCustomEnd(next.endDate);
+                    setDateRangeError(next.error);
+                  }}
+                  className="bg-card border border-border rounded px-2 py-0.5 text-xs text-slate-dark focus:outline-none"
+                />
+                <span className="text-slate-muted font-medium">to</span>
+                <input
+                  type="date"
+                  aria-label="End date"
+                  min={customStart || undefined}
+                  value={customEnd}
+                  onChange={(e) => {
+                    const next = resolveEndDateUpdate(customStart, e.target.value);
+                    if (!next.valid) {
+                      setDateRangeError(next.error);
+                      return;
+                    }
+                    setCustomEnd(next.endDate);
+                    setDateRangeError('');
+                  }}
+                  className="bg-card border border-border rounded px-2 py-0.5 text-xs text-slate-dark focus:outline-none"
+                />
+              </div>
+              {dateRangeError && (
+                <p role="alert" className="text-[11px] text-destructive font-medium">
+                  {dateRangeError}
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -430,36 +464,36 @@ export default function SuperAdminDashboard() {
           <Button size="sm" variant="outline" onClick={loadData}>Retry</Button>
         </div>
       ) : !isLoaded ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4" aria-busy="true" aria-label="Loading system KPIs">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4" aria-busy="true" aria-label="Loading system KPIs">
           {[0, 1, 2, 3, 4].map((i) => (
             <div key={i} className="h-[120px] rounded-[14px] bg-slate-100 animate-pulse" />
           ))}
         </div>
       ) : (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
             {/* Total Users (broken down by role) */}
-            <div className="p-5 rounded-[14px] bg-surface shadow-sm border border-slate-100/50 font-sans flex flex-col justify-between">
-              <div>
+            <div className="p-3.5 sm:p-5 rounded-[14px] bg-surface shadow-sm border border-slate-100/50 font-sans flex flex-col justify-between min-w-0">
+              <div className="min-w-0">
                 <div className="flex items-center justify-between gap-1 mb-1.5">
-                  <p className="text-xs font-semibold text-eyebrow uppercase tracking-wider">
+                  <p className="text-xs font-semibold text-eyebrow uppercase tracking-wider truncate">
                     Total Users
                   </p>
                 </div>
-                <div className="flex items-center justify-between">
-                  <p className="text-3xl font-bold text-dark-slate font-sans tracking-tight">
+                <div className="flex items-center justify-between gap-2 min-w-0">
+                  <p className="text-2xl sm:text-3xl font-bold text-dark-slate font-sans tracking-tight min-w-0 flex-1 truncate">
                     {dashboardData.totalUsers.total}
                   </p>
-                  <div className="h-10 w-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
-                    <Users className="w-5 h-5" />
+                  <div className="h-8 w-8 sm:h-10 sm:w-10 rounded-lg sm:rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                    <Users className="w-4 h-4 sm:w-5 sm:h-5" />
                   </div>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-1 mt-3 pt-2 border-t border-slate-100 text-[10px] text-slate-muted font-medium">
-                <span>Customer: <strong className="text-slate-dark">{dashboardData.totalUsers.customer}</strong></span>
-                <span>Employee: <strong className="text-slate-dark">{dashboardData.totalUsers.employee}</strong></span>
-                <span>CS Agent: <strong className="text-slate-dark">{dashboardData.totalUsers.cs}</strong></span>
-                <span>Admin/SA: <strong className="text-slate-dark">{dashboardData.totalUsers.admin + dashboardData.totalUsers.superAdmin}</strong></span>
+                <span className="truncate">Customer: <strong className="text-slate-dark">{dashboardData.totalUsers.customer}</strong></span>
+                <span className="truncate">Employee: <strong className="text-slate-dark">{dashboardData.totalUsers.employee}</strong></span>
+                <span className="truncate">CS Agent: <strong className="text-slate-dark">{dashboardData.totalUsers.cs}</strong></span>
+                <span className="truncate">Admin/SA: <strong className="text-slate-dark">{dashboardData.totalUsers.admin + dashboardData.totalUsers.superAdmin}</strong></span>
               </div>
             </div>
 
@@ -470,7 +504,7 @@ export default function SuperAdminDashboard() {
               subtitle={`Logged in ${selectedPeriod}`}
               icon={<Inbox className="w-5 h-5 text-accent" />}
               iconBg="bg-blue-50 text-accent"
-              calculationBasis={METRIC_DEFINITIONS.totalTickets}
+              showTooltip={false}
             />
 
             {/* Active & Escalated Tickets */}
@@ -481,7 +515,7 @@ export default function SuperAdminDashboard() {
               icon={<AlertTriangle className="w-5 h-5 text-amber-600" />}
               iconBg="bg-amber-50 text-amber-600"
               variant="warning"
-              calculationBasis={METRIC_DEFINITIONS.activeEscalated}
+              showTooltip={false}
             />
 
             {/* SLA Breaches */}
@@ -492,7 +526,7 @@ export default function SuperAdminDashboard() {
               icon={<ShieldAlert className="w-5 h-5 text-rose-600" />}
               iconBg="bg-rose-50 text-rose-600"
               variant="destructive"
-              calculationBasis={METRIC_DEFINITIONS.overdueTickets}
+              showTooltip={false}
             />
 
             {/* Tickets Created Today (strictly excluded from date range filter) */}
@@ -503,12 +537,12 @@ export default function SuperAdminDashboard() {
               icon={<Activity className="w-5 h-5 text-emerald-600" />}
               iconBg="bg-emerald-50 text-emerald-600"
               variant="success"
-              calculationBasis={METRIC_DEFINITIONS.ticketsToday}
+              showTooltip={false}
             />
           </div>
 
           {/* Secondary System KPI Strip (Overall SLA, CSAT, Resolution Time) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4">
             <MetricCard
               title="Overall SLA Compliance"
               value={dashboardData.systemKpis.overallSlaCompliance != null ? `${dashboardData.systemKpis.overallSlaCompliance}%` : 'Unavailable'}
@@ -517,7 +551,7 @@ export default function SuperAdminDashboard() {
               iconBg="bg-emerald-50 text-emerald-600"
               trend="+1.6%"
               trendPositive={true}
-              calculationBasis={METRIC_DEFINITIONS.slaCompliance}
+              showTooltip={false}
             />
 
             <MetricCard
@@ -529,7 +563,7 @@ export default function SuperAdminDashboard() {
               trend="+0.12"
               trendPositive={true}
               variant="amber"
-              calculationBasis={METRIC_DEFINITIONS.avgCsat}
+              showTooltip={false}
             />
 
             <MetricCard
@@ -540,7 +574,7 @@ export default function SuperAdminDashboard() {
               iconBg="bg-blue-50 text-accent"
               trend="-0.4h"
               trendPositive={true}
-              calculationBasis={METRIC_DEFINITIONS.avgResolutionTime}
+              showTooltip={false}
             />
           </div>
         </div>
@@ -834,8 +868,8 @@ export default function SuperAdminDashboard() {
 
       {/* Ticket Inspection Modal */}
       {selectedTicket && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-card rounded-2xl border border-border shadow-2xl max-w-lg w-full p-6 space-y-4 font-sans animate-in fade-in-0 zoom-in-95">
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 overscroll-none">
+          <div className="bg-card rounded-2xl border border-border shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto overscroll-contain p-6 space-y-4 font-sans animate-in fade-in-0 zoom-in-95">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <div className="flex items-center gap-2">
                 <Building2 className="w-4 h-4 text-accent" />

@@ -26,16 +26,18 @@ export default function FilePreviewModal({ file, onClose }) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [actionError, setActionError] = useState('');
 
+  const mimeType = String(file?.file_type || file?.type || file?.mime_type || '').toLowerCase();
+
   const getExt = (filename) => {
     if (!filename) return '';
     const clean = String(filename).split('?')[0].split('#')[0];
-    return clean.split('.').pop().toLowerCase();
+    return clean.includes('.') ? clean.split('.').pop().toLowerCase() : '';
   };
 
-  const ext = getExt(fileName) || getExt(rawUrl) || '';
-  const isImg = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].includes(ext);
-  const isPdf = ext === 'pdf';
-  const isDocx = ['docx', 'doc'].includes(ext);
+  const ext = getExt(fileName) || getExt(rawUrl) || (mimeType.startsWith('image/') ? 'png' : mimeType.includes('pdf') ? 'pdf' : '');
+  const isImg = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].includes(ext) || mimeType.startsWith('image/');
+  const isPdf = ext === 'pdf' || mimeType.includes('pdf');
+  const isDocx = ['docx', 'doc'].includes(ext) || mimeType.includes('word') || mimeType.includes('officedocument');
 
   let typeHint;
   if (isPdf) typeHint = 'application/pdf';
