@@ -111,10 +111,6 @@ class AdminReportController extends Controller
             'branch_id' => $request->query('branch_id'),
         ];
 
-        if ($dateErr = $this->validateDateRange($filters['date_from'], $filters['date_to'])) {
-            return $dateErr;
-        }
-
         $forceRefresh = filter_var($request->query('forceRefresh', $request->query('force_refresh', false)), FILTER_VALIDATE_BOOLEAN);
 
         $data = $this->performanceService->getEmployeePerformanceMetrics($user, $filters, $forceRefresh);
@@ -146,10 +142,6 @@ class AdminReportController extends Controller
             'branch' => $request->query('branch'),
             'branch_id' => $request->query('branch_id'),
         ];
-
-        if ($dateErr = $this->validateDateRange($filters['date_from'], $filters['date_to'])) {
-            return $dateErr;
-        }
 
         $forceRefresh = filter_var($request->query('forceRefresh', $request->query('force_refresh', false)), FILTER_VALIDATE_BOOLEAN);
 

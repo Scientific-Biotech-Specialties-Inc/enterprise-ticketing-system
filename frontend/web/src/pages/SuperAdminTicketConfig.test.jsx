@@ -110,8 +110,8 @@ describe('SuperAdminTicketConfig Messaging Subtabs & Internal Configuration Test
     render(<SuperAdminTicketConfig />);
 
     expect(await screen.findByText('Ticket Messaging Configuration')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /External Tickets/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Internal Tickets/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /External Customer Tickets/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Internal Employee Tickets/i })).toBeInTheDocument();
   });
 
   it('switches between External and Internal ticket configurations', async () => {
@@ -124,8 +124,8 @@ describe('SuperAdminTicketConfig Messaging Subtabs & Internal Configuration Test
     // Default is external
     expect(screen.getByText('Baseline Participants')).toBeInTheDocument();
 
-    // Click Internal Tickets segmented sub-tab
-    const internalTabButton = screen.getByRole('button', { name: /Internal Tickets/i });
+    // Click Internal Employee Tickets segmented sub-tab
+    const internalTabButton = screen.getByRole('button', { name: /Internal Employee Tickets/i });
     fireEvent.click(internalTabButton);
 
     // Should now display internal configuration cards
@@ -152,8 +152,8 @@ describe('SuperAdminTicketConfig Messaging Subtabs & Internal Configuration Test
 
     await screen.findByText('Ticket Messaging Configuration');
 
-    // Switch to Internal Tickets
-    fireEvent.click(screen.getByRole('button', { name: /Internal Tickets/i }));
+    // Switch to Internal Employee Tickets
+    fireEvent.click(screen.getByRole('button', { name: /Internal Employee Tickets/i }));
 
     // Select Requestor -> CS Only mode radio
     const csOnlyRadio = screen.getByDisplayValue('requestor_cs_only');

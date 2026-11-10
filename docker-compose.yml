@@ -460,7 +460,7 @@ services:
       REDIS_PORT: 6379
       AUTH_SERVICE_URL: http://auth-service:8000
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
-      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-${INTERNAL_TOKEN}}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
     networks:
       - default
       - shared-capstone-network

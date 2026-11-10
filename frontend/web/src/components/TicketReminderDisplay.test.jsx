@@ -140,7 +140,7 @@ describe('Ticket Reminder Visual Displays across CS and Employee Modals', () => 
     expect(screen.getByText(/A reminder prompt was dispatched on/i)).toBeInTheDocument();
   });
 
-  it('renders Last Reminder Sent details card and timeline entry in CustomerTicketDetailModal', async () => {
+  it('shows the reminder from the server timeline under Latest Updates in CustomerTicketDetailModal', async () => {
     render(
       <CustomerTicketDetailModal
         ticket={sampleTicketWithReminder}
@@ -148,7 +148,7 @@ describe('Ticket Reminder Visual Displays across CS and Employee Modals', () => 
       />
     );
 
-    expect(screen.getByText('Last Reminder Sent')).toBeInTheDocument();
-    expect(await screen.findByText('CS Reminder')).toBeInTheDocument();
+    expect(screen.getByText('LATEST UPDATES')).toBeInTheDocument();
+    expect(await screen.findByText('Reminder sent')).toBeInTheDocument();
   });
 });

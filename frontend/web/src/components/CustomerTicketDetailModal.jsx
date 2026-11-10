@@ -34,6 +34,7 @@ import { getTicketTimeline } from '@/services/ticketService';
 import { getTicketMessages } from '@/services/messagingService';
 import { useAuth } from '@/context/AuthContext';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
+import useLiveTicket from '@/hooks/useLiveTicket';
 
 export default function CustomerTicketDetailModal({
   ticket,
@@ -107,7 +108,10 @@ export default function CustomerTicketDetailModal({
     setReopenSuccessNotice('');
   }, [ticket]);
 
-  const effectiveTicket = currentTicket || ticket;
+  // Follow the backend while the modal is open so assignment/status changes (e.g. CS assigns the
+  // ticket) update the stepper circle and assignee row without closing and reopening the modal.
+  const { ticket: liveTicket, refresh: refreshLiveTicket } = useLiveTicket(currentTicket || ticket);
+  const effectiveTicket = liveTicket;
 
   // Window Configuration for Reopening
   const [windowConfig, setWindowConfig] = useState(() => {
@@ -284,6 +288,7 @@ export default function CustomerTicketDetailModal({
       setReopenReason('');
       setReopenSuccessNotice('Ticket successfully reopened.');
       setCurrentTicket((prev) => ({ ...prev, status: 'Reopened' }));
+      refreshLiveTicket();
       loadTimeline();
     } catch (err) {
       setReopenError(err?.response?.data?.message || err?.message || 'Failed to reopen ticket.');
@@ -291,6 +296,10 @@ export default function CustomerTicketDetailModal({
       setReopenSubmitting(false);
     }
   };
+
+  const hasAssignment =
+    assignee.isAssigned ||
+    (Array.isArray(effectiveTicket?.assigned) && effectiveTicket.assigned.length > 0);
 
   if (!effectiveTicket) return null;
 
@@ -390,7 +399,7 @@ export default function CustomerTicketDetailModal({
           {/* Stepper */}
           <StatusStepper
             status={effectiveTicket.status}
-            isAssigned={assignee.isAssigned}
+            isAssigned={hasAssignment}
           />
 
           {/* Plain-Language Status Alert Banner */}
@@ -479,6 +488,11 @@ export default function CustomerTicketDetailModal({
                         <p className="font-bold text-[#1B2033]">
                           {title}
                         </p>
+                        {evt.description && evt.description !== title && (
+                          <p className="text-[11px] text-[#5A6178]">
+                            {evt.description}
+                          </p>
+                        )}
                         <span className="text-[11px] text-[#5A6178]">
                           {formatPHT(evt.created_at || evt.timestamp)}
                         </span>

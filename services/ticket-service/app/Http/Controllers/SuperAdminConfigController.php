@@ -517,10 +517,6 @@ class SuperAdminConfigController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Invalid audit log filter.', 'errors' => $validator->errors()], 422);
         }
 
-        if ($dateErr = $this->validateDateRange($request->query('date_from'), $request->query('date_to'))) {
-            return $dateErr;
-        }
-
         $query = DB::table('ticket_audit_logs as tal')
             ->leftJoin('employees as e', function ($join) {
                 $join->on('e.emp_id', '=', 'tal.action_by_ID')

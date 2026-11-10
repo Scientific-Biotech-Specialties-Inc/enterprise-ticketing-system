@@ -60,7 +60,7 @@ describe('CS ticket reclassification flow', () => {
     const ticket = { id: 'TKT-31', ticket_ID: 31, title: 'Monitor alarm', category: 'Service', priority: 'High', status: 'In Progress', assigned: [], timeline: [] };
     render(<TicketSummary ticket={ticket} employees={[]} onClose={vi.fn()} onEdit={vi.fn()} onStatusUpdate={vi.fn()} />);
 
-    fireEvent.click(screen.getByText('Edit Priority'));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit priority' }));
     await screen.findByText('Edit Category & Priority');
     await waitFor(() => expect(screen.getByRole('option', { name: 'Low' })).toBeInTheDocument());
 

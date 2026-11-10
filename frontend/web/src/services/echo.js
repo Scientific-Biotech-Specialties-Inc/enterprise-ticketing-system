@@ -31,19 +31,26 @@ const createEcho = () => {
   }
 
   window.Pusher = PusherClient
-  return new Echo({
-    broadcaster: 'pusher',
-    // Pass the constructor via `Pusher`; `client` expects a ready Pusher instance.
-    Pusher: PusherClient,
-    key: appKey,
-    wsHost,
-    wsPort,
-    wssPort: wsPort,
-    forceTLS: isHttps,
-    disableStats: true,
-    enabledTransports: ['ws', 'wss'],
-    cluster: import.meta.env.VITE_PUSHER_APP_CLUSTER || 'mt1'
-  })
+  try {
+    return new Echo({
+      broadcaster: 'pusher',
+      // Pass the constructor via `Pusher`; `client` expects a ready Pusher instance.
+      Pusher: PusherClient,
+      key: appKey,
+      wsHost,
+      wsPort,
+      wssPort: wsPort,
+      forceTLS: isHttps,
+      disableStats: true,
+      enabledTransports: ['ws', 'wss'],
+      cluster: import.meta.env.VITE_PUSHER_APP_CLUSTER || 'mt1'
+    })
+  } catch (err) {
+    // A failing socket client must never take down module load (and with it every page that
+    // imports this file). Degrade to the no-op client; callers fall back to fetch/polling.
+    console.warn('[Echo] Could not create the real-time client; real-time updates disabled.', err)
+    return createNoopEcho()
+  }
 }
 
 const echo = createEcho()

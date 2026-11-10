@@ -42,10 +42,6 @@ class SuperAdminDashboardController extends Controller
             'date_to' => $request->query('date_to'),
         ];
 
-        if ($dateErr = $this->validateDateRange($filters['date_from'], $filters['date_to'])) {
-            return $dateErr;
-        }
-
         $sortBy = (string) $request->query('sort_by', 'total_tickets');
         $sortDir = (string) $request->query('sort_dir', 'desc');
         $activityLimit = (int) $request->query('activity_limit', 15);

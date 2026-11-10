@@ -72,6 +72,7 @@ vi.mock('@/data/mockFeedbackData', () => ({
   fetchFeedbackForTicket: vi.fn().mockResolvedValue(null),
   hasFeedbackBeenSubmitted: vi.fn().mockReturnValue(false),
   isFeedbackFormEnabled: vi.fn().mockReturnValue(true),
+  feedbackTicketId: vi.fn((ticket) => ticket?.ticket_ID ?? ticket?.id),
 }));
 
 describe('Customer Ticket History Detail View (/history/:ticketId)', () => {

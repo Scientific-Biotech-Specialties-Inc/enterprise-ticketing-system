@@ -52,10 +52,6 @@ class ReportExportController extends Controller
             'branch_id' => $input['branch_id'] ?? null,
         ];
 
-        if ($dateErr = $this->validateDateRange($filters['date_from'], $filters['date_to'])) {
-            return $dateErr;
-        }
-
         // Same call the preview makes, so branch scoping (403) and the row snapshot are identical.
         $report = $this->dashboardService->getAdminReports($user, $filters, true);
 

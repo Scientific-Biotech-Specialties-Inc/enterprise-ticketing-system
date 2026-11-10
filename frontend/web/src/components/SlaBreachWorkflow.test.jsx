@@ -80,10 +80,10 @@ describe('SLA Breach Alert & Status Workflow Tests', () => {
       />
     );
 
-    // Verify SLA Breached badge
-    expect(screen.getByText('SLA Breached')).toBeInTheDocument();
-    // Verify SLA Target Resolution date display
-    expect(screen.getByText('SLA Target Resolution')).toBeInTheDocument();
+    // The customer modal states a breach in plain language, with the missed target date.
+    expect(screen.getByText("We're running behind our target")).toBeInTheDocument();
+    expect(screen.getByText(/Expected fix was/i)).toBeInTheDocument();
+    expect(screen.queryByText(/On track/i)).not.toBeInTheDocument();
   });
 
   it('covers AC-12: displays prominent Breached badge and resolution target in Employee TicketInfoModal', () => {
@@ -174,7 +174,7 @@ describe('SLA Breach Alert & Status Workflow Tests', () => {
       />
     );
 
-    expect(screen.getByText('SLA Breached')).toBeInTheDocument();
+    expect(screen.getByText("We're running behind our target")).toBeInTheDocument();
   });
 
   it('covers AC-10 & AC-12: ensures accessibility attributes on mobile and desktop viewports', () => {
@@ -188,12 +188,10 @@ describe('SLA Breach Alert & Status Workflow Tests', () => {
     );
 
     // Dialog elements should have proper accessible roles
-    const closeButtons = screen.getAllByRole('button');
-    expect(closeButtons.length).toBeGreaterThan(0);
+    expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'true');
 
-    // Closing modal invokes onClose callback
-    const closeTrigger = closeButtons[0];
-    fireEvent.click(closeTrigger);
+    // The close control is found by its accessible name, not its position (Copy ID comes first).
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalled();
   });
 });

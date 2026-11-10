@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Pencil, X, Clock, CheckCircle2, Star, HelpCircle } from 'lucide-react';
 import EmployeeFeedbackCard from './EmployeeFeedbackCard';
-import { getTicketFeedback, getTicketEmployees, fetchFeedbackForTicket } from '@/data/mockFeedbackData';
+import { getTicketFeedback, getTicketEmployees, fetchFeedbackForTicket, feedbackTicketId } from '@/data/mockFeedbackData';
 
 export default function TicketFeedbackSection({ ticket, onLeaveFeedback, onEditFeedback, readOnly = false }) {
-  const ticketId = ticket?.id || ticket?.ticket_ID;
+  const ticketId = feedbackTicketId(ticket);
   const [feedback, setFeedback] = useState(() => getTicketFeedback(ticketId));
   const [isDismissed, setIsDismissed] = useState(false);
 

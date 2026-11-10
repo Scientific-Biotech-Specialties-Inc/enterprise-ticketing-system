@@ -755,13 +755,13 @@ class TicketDashboardService
     /**
      * Spec 0037: the Incoming tab's membership, formerly computed in CSIncoming.jsx.
      * Excludes tickets with a pending reassignment, accepted tickets unless Reopened,
-     * Pending Evaluation tickets, and In Progress tickets.
+     * and Pending Evaluation tickets unless Reopened.
      */
     public function applyIncomingScope($query): void
     {
         $query->whereRaw("NOT {$this->pendingReassignSql()}")
             ->whereRaw("NOT ({$this->acceptedAssignmentSql()} AND ts.status_name NOT IN ('Reopened', 'Reopen'))")
-            ->whereNotIn('ts.status_name', ['Pending Evaluation', 'In Progress']);
+            ->where('ts.status_name', '!=', 'Pending Evaluation');
     }
 
     /**

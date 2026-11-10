@@ -954,8 +954,6 @@ export default function EmployeeMyTickets({ roleContext }) {
           onResolve={(ticketId) => handleResolveTicket(ticketId)}
         />
       )}
-      
-
 
       {confirmDiscard && (
         <ConfirmationModal

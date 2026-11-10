@@ -537,4 +537,27 @@ class AiChatController extends Controller
             'data' => $classification,
         ]);
     }
+
+    /**
+     * Suggest a problem category from the list the caller supplies.
+     * The caller owns the category list, so ai-service never reads another service's tables.
+     */
+    public function classifyCategory(Request $request)
+    {
+        $validated = $request->validate([
+            'title' => 'nullable|string|max:255',
+            'description' => 'required|string|max:5000',
+            'categories' => 'required|array|min:1|max:100',
+            'categories.*.id' => 'required',
+            'categories.*.name' => 'required|string|max:255',
+        ]);
+
+        $result = $this->geminiService->classifyCategory(
+            (string) ($validated['title'] ?? ''),
+            $validated['description'],
+            $validated['categories']
+        );
+
+        return response()->json(['success' => true, 'data' => $result]);
+    }
 }

@@ -31,6 +31,12 @@ class FeedbackController extends Controller
     /** Fetch a ticket from ticket-service as the caller. Returns [httpStatus, ticketArray|null]. */
     private function fetchTicketAsCaller(Request $request, string $ticketId, int $timeout = 3): array
     {
+        // ticket-service resolves tickets by numeric primary key only. A display number such as
+        // "TKT-0012" would raise a type error there and surface as a misleading 503.
+        if (!ctype_digit($ticketId)) {
+            return [404, null];
+        }
+
         $ticketServiceUrl = env('TICKET_SERVICE_URL', 'http://ticket-service:8000');
         $http = Http::timeout($timeout)->acceptJson();
         if ($token = $this->callerToken($request)) {

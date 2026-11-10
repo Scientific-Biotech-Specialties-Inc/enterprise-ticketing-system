@@ -12,6 +12,7 @@ import {
   uploadAttachments,
   getEscalateHandoff,
   classifyDepartment,
+  suggestProblemCategory,
 } from '@/services/ticketService';
 import { getSystemStatus, getFileLimitsConfig } from '@/services/configurationService';
 import { normalizeCasing } from '@/utils/normalizeCasing';
@@ -173,6 +174,9 @@ export default function TicketCreation() {
   const [customerOpenCount, setCustomerOpenCount] = useState(0);
   const [systemStatus, setSystemStatus] = useState('Operational');
 
+  // AI problem category suggestion (pre-selects the dropdown; the customer can always change it)
+  const [aiCategoryHint, setAiCategoryHint] = useState(null);
+
   // AI Department Triage State
   const [selectedDepartment, setSelectedDepartment] = useState('IT');
   const [departmentConfirmed, setDepartmentConfirmed] = useState(false);
@@ -325,6 +329,7 @@ export default function TicketCreation() {
     setFormData((prev) => ({ ...prev, [name]: value }));
 
     if (name === 'problem_category_ID') {
+      setAiCategoryHint(null); // a manual choice replaces the AI suggestion
       const selectedCat = (options.problem_categories || []).find(
         (c) => String(c.problem_category_ID) === String(value)
       );
@@ -355,6 +360,22 @@ export default function TicketCreation() {
     const trimmed = normalized.trim();
     if (trimmed.length >= 20 && trimmed !== lastClassifiedText) {
       setLastClassifiedText(trimmed);
+
+      // Suggest a category in parallel, but only fill the dropdown if the customer has not chosen one.
+      if (!formData.problem_category_ID) {
+        suggestProblemCategory(formData.title || '', trimmed, options.problem_categories || [])
+          .then((suggestion) => {
+            if (!suggestion?.category_id) return;
+            setFormData((prev) => (
+              prev.problem_category_ID
+                ? prev
+                : { ...prev, problem_category_ID: suggestion.category_id }
+            ));
+            setAiCategoryHint(suggestion);
+          })
+          .catch(() => {});
+      }
+
       try {
         setIsClassifying(true);
         const classification = await classifyDepartment(formData.title || '', trimmed);
@@ -933,6 +954,11 @@ export default function TicketCreation() {
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
                   ))}
                 </select>
+                {aiCategoryHint && String(aiCategoryHint.category_id) === String(formData.problem_category_ID) && (
+                  <p className="text-xs text-muted-slate" data-testid="ai-category-hint">
+                    Suggested by AI based on your description. You can change it.
+                  </p>
+                )}
               </div>
             </div>
 

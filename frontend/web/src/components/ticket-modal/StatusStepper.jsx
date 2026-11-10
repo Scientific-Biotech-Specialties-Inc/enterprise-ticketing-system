@@ -45,6 +45,8 @@ export default function StatusStepper({
                       ? 'border-[3px] border-[#1E2A78] bg-white text-transparent shadow-xs'
                       : 'border-2 border-[#D5D9E4] bg-white text-transparent'
                   }`}
+                  data-step={step.id}
+                  data-state={showCheck ? 'complete' : 'pending'}
                   aria-current={isCurrent ? 'step' : undefined}
                 >
                   {showCheck ? (

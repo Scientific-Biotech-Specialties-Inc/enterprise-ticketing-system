@@ -81,20 +81,20 @@ describe('CSIncoming server driven queue (spec 0037)', () => {
       expect.objectContaining({ scope: 'incoming', tab: 'open', page: 1, limit: 10 })
     );
 
-    // Summary card and tab badge counts come from the server, not from the 3 rows on screen.
-    expect(screen.getByText('42')).toBeInTheDocument();
+    // Tab badge counts and list total come from the server, not from the 3 rows on screen.
     expect(screen.getByText('70')).toBeInTheDocument();
+    expect(screen.getByText('60')).toBeInTheDocument();
     expect(screen.getByText(/of 130 tickets/)).toBeInTheDocument();
   });
 
-  it('clicking the Breached card asks the server and shows every page of breached tickets', async () => {
+  it('filtering by Breached asks the server and shows every page of breached tickets', async () => {
     render(<CSIncoming />);
 
     await waitFor(() => {
       expect(screen.getByText('Monitor screen flicker')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText('Resolution overdue').closest('button'));
+    fireEvent.change(screen.getByTitle('Filter by SLA status'), { target: { value: 'Breached' } });
 
     await waitFor(() => {
       expect(ticketService.getCSQueuePage).toHaveBeenLastCalledWith(
@@ -104,7 +104,6 @@ describe('CSIncoming server driven queue (spec 0037)', () => {
     });
 
     expect(screen.getByText('Ventilator alarm fault')).toBeInTheDocument();
-    // The card said 42, and the list total says 42 across its pages.
     expect(screen.getByText(/of 42 tickets/)).toBeInTheDocument();
   });
 

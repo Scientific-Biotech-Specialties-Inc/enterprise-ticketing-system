@@ -61,10 +61,10 @@ export default function FieldGrid({
               <button
                 type="button"
                 onClick={onEditPriority}
-                aria-label="Edit Priority"
+                aria-label="Edit priority"
                 className="min-h-[44px] min-w-[44px] -my-2 -mr-2 px-2 inline-flex items-center justify-center text-xs font-semibold text-[#1E2A78] hover:underline cursor-pointer"
               >
-                <span className="sr-only">Edit Priority</span>
+                <span className="sr-only">Edit priority</span>
                 <span aria-hidden="true">Edit</span>
               </button>
             )}
@@ -86,10 +86,10 @@ export default function FieldGrid({
               <button
                 type="button"
                 onClick={onEditCategory}
-                aria-label="Edit Category"
+                aria-label="Edit category"
                 className="min-h-[44px] min-w-[44px] -my-2 -mr-2 px-2 inline-flex items-center justify-center text-xs font-semibold text-[#1E2A78] hover:underline cursor-pointer"
               >
-                <span className="sr-only">Edit Category</span>
+                <span className="sr-only">Edit category</span>
                 <span aria-hidden="true">Edit</span>
               </button>
             )}
@@ -124,6 +124,17 @@ export default function FieldGrid({
             <span className="text-[14px] font-medium text-[#1B2033] leading-snug">
               {slaDueDate}
             </span>
+          </div>
+        </div>
+      )}
+
+      {/* SLA Status */}
+      {slaStatusBadge && (
+        <div className="rounded-xl border border-[#D5D9E4] bg-white p-3.5 flex flex-col justify-between">
+          <span className="text-[12px] font-bold text-[#5A6178] uppercase tracking-wide">
+            SLA Status
+          </span>
+          <div className="mt-1 flex items-center justify-between gap-2">
             {slaStatusBadge}
           </div>
         </div>
