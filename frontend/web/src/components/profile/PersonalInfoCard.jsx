@@ -20,6 +20,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 
@@ -31,6 +32,7 @@ export default function PersonalInfoCard({ profile, onProfileUpdated }) {
   const [success, setSuccess] = useState('');
   const [validationErrors, setValidationErrors] = useState({});
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  useLockBodyScroll(showConfirmModal);
 
   const isEmployeeRole = (profile.role || '').toLowerCase() !== 'customer';
 
@@ -628,8 +630,8 @@ export default function PersonalInfoCard({ profile, onProfileUpdated }) {
 
       {/* Confirmation Modal for Contact Updates */}
       {showConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-fade-in">
-          <div className="bg-card rounded-xl max-w-md w-full p-6 shadow-2xl border border-border animate-scale-in">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs overscroll-none animate-fade-in">
+          <div className="bg-card rounded-xl max-w-md w-full max-h-[90vh] overflow-y-auto overscroll-contain p-6 shadow-2xl border border-border animate-scale-in">
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-blue-50 text-primary flex items-center justify-center">

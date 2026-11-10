@@ -201,4 +201,30 @@ describe('PredictiveAnalytics Component Tests', () => {
     fireEvent.click(retryBtn);
     expect(onRetryMock).toHaveBeenCalledTimes(1);
   });
+
+  it('uses live recurring issue categories and equipment when provided by analyticsData', () => {
+    const livePayload = {
+      predictive: {
+        status: 'success',
+        historical_basis: { days_used: 30, minimum_days_required: 14 },
+        volume_forecast: [],
+        recurring_issues: {
+          categories: [{ item_name: 'Analyzer Calibration', recent_frequency: 19, change_percentage: 25 }],
+          machines: [{ item_name: 'Sysmex CA-660', recent_frequency: 42 }],
+        },
+      },
+    };
+
+    render(
+      <PredictiveAnalytics
+        selectedPreset="Last 7 Days"
+        analyticsData={livePayload}
+        branch={mockBranch}
+      />
+    );
+
+    expect(screen.getByText('+25% Frequency Growth')).toBeInTheDocument();
+    expect(screen.getByText(/Analyzer Calibration issues have the highest statistical recurrence rate/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sysmex CA-660 exhibits the highest recurrence or failure indicator/i)).toBeInTheDocument();
+  });
 });

@@ -380,7 +380,7 @@ export default function ServiceManagerTickets() {
         title="Service Ticket Queue & Assignment"
         subtitle="Manage assignments, triage incoming equipment service requests, and track technician workload."
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
               size="sm"

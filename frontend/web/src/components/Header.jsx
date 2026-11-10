@@ -4,6 +4,7 @@ import { Home, User, Bell, PanelLeft, ChevronDown } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { getNotifications, markNotificationRead, markNotificationsRead, getTicketDetails, getAssignableEmployees, getDepartments, respondReassignment } from '@/services/ticketService';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import NotificationDropdown from '@/components/notifications/NotificationDropdown';
 import CustomerTicketDetailModal from '@/components/CustomerTicketDetailModal';
 import { TicketSummary } from '@/components/CSModals';
@@ -23,6 +24,7 @@ export default function Header({ sidebarHovered }) {
   const [activeNotificationId, setActiveNotificationId] = useState(null);
   const [activeEmployees, setActiveEmployees] = useState([]);
   const [activeTicketLoading, setActiveTicketLoading] = useState(false);
+  useLockBodyScroll(activeTicketLoading);
   const [systemStatus, setSystemStatus] = useState('Operational');
 
   useEffect(() => {

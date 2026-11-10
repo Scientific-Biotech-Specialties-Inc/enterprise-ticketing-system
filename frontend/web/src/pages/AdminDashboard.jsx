@@ -29,6 +29,7 @@ import {
   Download,
   Printer,
   Calendar,
+  Repeat,
 } from 'lucide-react';
 import {
   exportAnalyticsToCsv,
@@ -54,6 +55,12 @@ import { PageHeader } from '@/components/ui/page-header';
 import { MetricCard } from '@/components/ui/metric-card';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import {
+  DATE_RANGE_ERROR_MESSAGE,
+  isDateRangeValid,
+  resolveStartDateUpdate,
+  resolveEndDateUpdate,
+} from '@/utils/dateUtils';
 import {
   getAdminDashboard,
   getAdminEmployeePerformance,
@@ -199,20 +206,20 @@ function ChartViewDropdown({ value, onChange, options }) {
 
 function SectionCard({ icon, title, instruction, subInstruction, children, viewOptions, currentView, onViewChange }) {
   return (
-    <div className="bg-card rounded-xl shadow-xs border border-border p-5 space-y-3 transition-all duration-200 hover:shadow-card">
+    <div className="bg-card rounded-xl shadow-xs border border-border p-3.5 sm:p-5 space-y-3 transition-all duration-200 hover:shadow-card">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border/60 pb-3">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
             {icon}
           </div>
-          <div>
+          <div className="min-w-0 flex-1">
             <h3 className="text-sm font-bold text-slate-dark leading-tight truncate">{title}</h3>
             {instruction && (
-              <p className="text-[11px] text-slate-muted leading-tight">{instruction}</p>
+              <p className="text-[11px] text-slate-muted leading-tight truncate sm:whitespace-normal">{instruction}</p>
             )}
             {subInstruction && (
-              <p className="text-[11px] text-slate-muted leading-tight">{subInstruction}</p>
+              <p className="text-[11px] text-slate-muted leading-tight truncate sm:whitespace-normal">{subInstruction}</p>
             )}
           </div>
         </div>
@@ -223,7 +230,7 @@ function SectionCard({ icon, title, instruction, subInstruction, children, viewO
         </div>
       </div>
       {/* Chart Content */}
-      <div className="relative">{children}</div>
+      <div className="relative overflow-x-auto">{children}</div>
     </div>
   );
 }
@@ -287,6 +294,7 @@ export default function AdminDashboard() {
   const [selectedPreset, setSelectedPreset] = useState('Last 7 Days');
   const [customStartDate, setCustomStartDate] = useState(default7DaysAgo);
   const [customEndDate, setCustomEndDate] = useState(todayStr);
+  const [dateRangeError, setDateRangeError] = useState('');
 
   const globalDateFrom = useMemo(() => {
     if (selectedPreset === 'Custom Range') return customStartDate;
@@ -314,6 +322,7 @@ export default function AdminDashboard() {
   const [slaView, setSlaView] = useState('Compliance');
   const [empView, setEmpView] = useState('Tickets Resolved');
   const [workloadView, setWorkloadView] = useState('By Employee');
+  const [recurringView, setRecurringView] = useState('Top Categories');
 
   // Live Analytics Data State (AC-4, AC-5)
   const [dashboardData, setDashboardData] = useState(null);
@@ -333,6 +342,10 @@ export default function AdminDashboard() {
 
   // Fetch live operational and performance records in a single unified request
   const fetchAnalytics = async (fromDate = globalDateFrom, toDate = globalDateTo) => {
+    if (selectedPreset === 'Custom Range' && !isDateRangeValid(fromDate, toDate)) {
+      setDateRangeError(DATE_RANGE_ERROR_MESSAGE);
+      return;
+    }
     const seq = ++analyticsRequestSeq.current;
     setIsLoading(true);
     try {
@@ -956,15 +969,84 @@ export default function AdminDashboard() {
     }
   }, [hasData, dashboardData, analyticsData.departments, workloadView]);
 
+  // ─── Section 6: Recurring Issues Breakdown ──────────────────────────────
+  const recurringIssuesChart = useMemo(() => {
+    const recurring = dashboardData?.recurring_issues || {};
+    const rawList =
+      recurringView === 'Top Categories'
+        ? (Array.isArray(recurring.top_categories) ? recurring.top_categories : [])
+        : (Array.isArray(recurring.top_equipment) ? recurring.top_equipment : []);
+
+    if (!hasData || rawList.length === 0) {
+      return (
+        <EmptyStateCard
+          title="No recurring issues recorded"
+          description={
+            recurringView === 'Top Categories'
+              ? 'No repeated problem categories were logged for this branch and period.'
+              : 'No repeated machine or equipment issues were logged for this branch and period.'
+          }
+        />
+      );
+    }
+
+    const labels = rawList.map((item) => item.label || item.name || 'Unspecified');
+    const counts = rawList.map((item) => Number(item.count ?? 0));
+    const topItem = rawList[0];
+
+    return (
+      <div className="space-y-3">
+        <div className="h-[220px]">
+          <Bar
+            options={defaultHorizontalBarOptions(
+              recurringView === 'Top Categories'
+                ? 'Recurring Problem Categories'
+                : 'Recurring Equipment Issues'
+            )}
+            data={{
+              labels,
+              datasets: [{
+                label: 'Tickets',
+                data: counts,
+                backgroundColor: BAR_PALETTE.slice(0, Math.max(1, labels.length)),
+                borderRadius: 6,
+                barThickness: 16,
+              }],
+            }}
+          />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {rawList.slice(0, 4).map((item) => {
+            const label = item.label || item.name || 'Unspecified';
+            return (
+              <div
+                key={label}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/40 px-2.5 py-1 text-[11px]"
+              >
+                <span className="font-semibold text-foreground">{label}</span>
+                <span className="text-muted-foreground">
+                  {item.count ?? 0} ({item.percentage ?? 0}%)
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <p className="text-[11px] text-gray-500">
+          Most frequent: {topItem.label || topItem.name} ({topItem.count ?? 0} tickets, {topItem.percentage ?? 0}% of period volume).
+        </p>
+      </div>
+    );
+  }, [hasData, dashboardData?.recurring_issues, recurringView]);
+
   // KPI cards
   const kpis = useMemo(() => {
     const k = dashboardData?.kpis || {};
     return [
-      { label: 'Total Tickets', value: k.total_tickets ?? 0, icon: Inbox, definition: 'Tickets created in the selected period for the branch in view.' },
-      { label: 'SLA Compliance', value: k.sla_compliance_rate == null ? 'No data' : `${k.sla_compliance_rate}%`, icon: ShieldCheck, definition: 'Tickets that met their SLA target divided by all tickets with an SLA outcome in the selected period.' },
-      { label: 'Active Employees', value: k.active_employees_count ?? analyticsData.performance?.active_employees_count ?? 0, icon: Users, definition: 'Active staff members in the branch directory. This count does not change with the period.' },
-      { label: 'CSAT Score', value: k.csat_available === false ? 'Unavailable' : (k.csat_score != null ? Number(k.csat_score).toFixed(1) : 'No data'), icon: Smile, definition: 'Average customer rating from feedback on tickets in the selected period, out of 5.' },
-      { label: 'Avg Resolution', value: k.avg_resolution_hours == null ? 'No data' : `${k.avg_resolution_hours}h`, icon: Clock, definition: 'Average hours from ticket creation to resolution, not counting time on hold, for tickets resolved in the selected period.' },
+      { label: 'Total Tickets', value: k.total_tickets ?? 0, icon: Inbox },
+      { label: 'SLA Compliance', value: k.sla_compliance_rate == null ? 'No data' : `${k.sla_compliance_rate}%`, icon: ShieldCheck },
+      { label: 'Active Employees', value: k.active_employees_count ?? analyticsData.performance?.active_employees_count ?? 0, icon: Users },
+      { label: 'CSAT Score', value: k.csat_available === false ? 'Unavailable' : (k.csat_score != null ? Number(k.csat_score).toFixed(1) : 'No data'), icon: Smile },
+      { label: 'Avg Resolution', value: k.avg_resolution_hours == null ? 'No data' : `${k.avg_resolution_hours}h`, icon: Clock },
     ];
   }, [dashboardData, analyticsData.performance]);
 
@@ -989,17 +1071,13 @@ export default function AdminDashboard() {
     }
   };
 
-  const dateStr = new Intl.DateTimeFormat('en-US', {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-  }).format(new Date());
-
   return (
     <div id="admin-analytics-report" className="space-y-6">
       {/* Page Header (Pattern A) */}
       <PageHeader
         pattern="A"
         title="Admin Dashboard"
-        subtitle={dateStr}
+        subtitle="Operational analytics, SLA performance, and recurring issue insights"
         actions={
           <div className="flex flex-wrap items-center gap-2 print:hidden">
             {syncStatusMsg && (
@@ -1098,17 +1176,17 @@ export default function AdminDashboard() {
       />
 
       {/* Top Navigation & Toolbar Bar: Left Tabs (Overview / Predictive) & Right Controls (Branch + Date Range) */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-200 mb-5 print:hidden">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-200 mb-5 pb-2 sm:pb-0 print:hidden">
         {/* Left: Tab Switcher */}
-        <div className="flex items-center gap-6 sm:gap-8 shrink-0 -mb-px">
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-8 w-full lg:w-auto -mb-px">
           <button
             type="button"
             onClick={() => setActiveTab('overview')}
             className={cn(
-              "pb-3 pt-1 text-xs sm:text-sm transition-all relative cursor-pointer border-b-2 font-medium",
+              "px-3 py-1.5 sm:px-0 sm:pb-3 sm:pt-1 rounded-lg sm:rounded-none text-xs sm:text-sm transition-all relative cursor-pointer border sm:border-0 sm:border-b-2 font-medium shrink-0 whitespace-nowrap",
               activeTab === 'overview'
-                ? "text-[#252578] border-[#252578] font-semibold"
-                : "text-slate-500 hover:text-slate-800 border-transparent"
+                ? "bg-[#252578]/10 text-[#252578] border-[#252578]/20 sm:bg-transparent sm:border-[#252578] font-semibold"
+                : "bg-slate-50 text-slate-600 border-slate-200/80 hover:bg-slate-100 sm:bg-transparent sm:text-slate-500 hover:text-slate-800 sm:border-transparent"
             )}
           >
             Overview
@@ -1117,10 +1195,10 @@ export default function AdminDashboard() {
             type="button"
             onClick={() => setActiveTab('predictive')}
             className={cn(
-              "pb-3 pt-1 text-xs sm:text-sm transition-all relative cursor-pointer border-b-2 font-medium",
+              "px-3 py-1.5 sm:px-0 sm:pb-3 sm:pt-1 rounded-lg sm:rounded-none text-xs sm:text-sm transition-all relative cursor-pointer border sm:border-0 sm:border-b-2 font-medium shrink-0 whitespace-nowrap",
               activeTab === 'predictive'
-                ? "text-[#252578] border-[#252578] font-semibold"
-                : "text-slate-500 hover:text-slate-800 border-transparent"
+                ? "bg-[#252578]/10 text-[#252578] border-[#252578]/20 sm:bg-transparent sm:border-[#252578] font-semibold"
+                : "bg-slate-50 text-slate-600 border-slate-200/80 hover:bg-slate-100 sm:bg-transparent sm:text-slate-500 hover:text-slate-800 sm:border-transparent"
             )}
           >
             Predictive Analytics
@@ -1129,10 +1207,10 @@ export default function AdminDashboard() {
             type="button"
             onClick={() => setActiveTab('departments')}
             className={cn(
-              "pb-3 pt-1 text-xs sm:text-sm transition-all relative cursor-pointer border-b-2 font-medium",
+              "px-3 py-1.5 sm:px-0 sm:pb-3 sm:pt-1 rounded-lg sm:rounded-none text-xs sm:text-sm transition-all relative cursor-pointer border sm:border-0 sm:border-b-2 font-medium shrink-0 whitespace-nowrap",
               activeTab === 'departments'
-                ? "text-[#252578] border-[#252578] font-semibold"
-                : "text-slate-500 hover:text-slate-800 border-transparent"
+                ? "bg-[#252578]/10 text-[#252578] border-[#252578]/20 sm:bg-transparent sm:border-[#252578] font-semibold"
+                : "bg-slate-50 text-slate-600 border-slate-200/80 hover:bg-slate-100 sm:bg-transparent sm:text-slate-500 hover:text-slate-800 sm:border-transparent"
             )}
           >
             Departments
@@ -1141,10 +1219,10 @@ export default function AdminDashboard() {
             type="button"
             onClick={() => setActiveTab('employees')}
             className={cn(
-              "pb-3 pt-1 text-xs sm:text-sm transition-all relative cursor-pointer border-b-2 font-medium",
+              "px-3 py-1.5 sm:px-0 sm:pb-3 sm:pt-1 rounded-lg sm:rounded-none text-xs sm:text-sm transition-all relative cursor-pointer border sm:border-0 sm:border-b-2 font-medium shrink-0 whitespace-nowrap",
               activeTab === 'employees'
-                ? "text-[#252578] border-[#252578] font-semibold"
-                : "text-slate-500 hover:text-slate-800 border-transparent"
+                ? "bg-[#252578]/10 text-[#252578] border-[#252578]/20 sm:bg-transparent sm:border-[#252578] font-semibold"
+                : "bg-slate-50 text-slate-600 border-slate-200/80 hover:bg-slate-100 sm:bg-transparent sm:text-slate-500 hover:text-slate-800 sm:border-transparent"
             )}
           >
             Employees
@@ -1152,22 +1230,25 @@ export default function AdminDashboard() {
         </div>
 
         {/* Right: Active Branch Selector & Date Range Preset Filters side-by-side */}
-        <div className="flex items-center gap-3 shrink-0 flex-wrap justify-end pb-2">
+        <div className="flex items-center gap-2 sm:gap-3 w-full lg:w-auto flex-wrap lg:flex-nowrap justify-start lg:justify-end pb-2">
           {/* Branch Selector Pill */}
           <BranchSelector variant="inline" />
 
-          {/* Segmented Date Range Pill */}
-          <div className="flex items-center gap-0.5 bg-slate-100/90 p-1 rounded-xl border border-slate-200/50">
+          {/* Date Range Filter Buttons */}
+          <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
             {FILTER_OPTIONS.map((opt) => (
               <button
                 key={opt}
                 type="button"
-                onClick={() => setSelectedPreset(opt)}
+                onClick={() => {
+                  setSelectedPreset(opt);
+                  setDateRangeError('');
+                }}
                 className={cn(
-                  "text-xs px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer",
+                  "text-xs px-2.5 sm:px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer shrink-0 whitespace-nowrap border",
                   selectedPreset === opt
-                    ? "bg-[#252578] text-white font-semibold shadow-xs"
-                    : "text-slate-600 hover:text-slate-900"
+                    ? "bg-[#252578] text-white border-[#252578] font-semibold shadow-xs"
+                    : "bg-white text-slate-600 border-slate-200 hover:text-slate-900 hover:border-slate-300"
                 )}
               >
                 {opt}
@@ -1177,21 +1258,44 @@ export default function AdminDashboard() {
 
           {/* Custom Date Range Popover / Pickers if Custom Range is selected */}
           {selectedPreset === 'Custom Range' && (
-            <div className="flex items-center gap-2 bg-white border border-slate-200/80 rounded-xl px-3 py-1.5 text-xs shadow-xs">
-              <Calendar className="w-3.5 h-3.5 text-slate-500" />
-              <input
-                type="date"
-                value={customStartDate}
-                onChange={(e) => setCustomStartDate(e.target.value)}
-                className="bg-transparent text-xs text-slate-800 focus:outline-none"
-              />
-              <span className="text-slate-400 font-medium">to</span>
-              <input
-                type="date"
-                value={customEndDate}
-                onChange={(e) => setCustomEndDate(e.target.value)}
-                className="bg-transparent text-xs text-slate-800 focus:outline-none"
-              />
+            <div className="flex flex-col gap-1 max-w-full">
+              <div className="flex items-center gap-2 bg-white border border-slate-200/80 rounded-xl px-3 py-1.5 text-xs shadow-xs max-w-full overflow-x-auto flex-wrap">
+                <Calendar className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                <input
+                  type="date"
+                  aria-label="Start date"
+                  value={customStartDate}
+                  onChange={(e) => {
+                    const next = resolveStartDateUpdate(e.target.value, customEndDate);
+                    setCustomStartDate(next.startDate);
+                    setCustomEndDate(next.endDate);
+                    setDateRangeError(next.error);
+                  }}
+                  className="bg-transparent text-xs text-slate-800 focus:outline-none"
+                />
+                <span className="text-slate-400 font-medium">to</span>
+                <input
+                  type="date"
+                  aria-label="End date"
+                  min={customStartDate || undefined}
+                  value={customEndDate}
+                  onChange={(e) => {
+                    const next = resolveEndDateUpdate(customStartDate, e.target.value);
+                    if (!next.valid) {
+                      setDateRangeError(next.error);
+                      return;
+                    }
+                    setCustomEndDate(next.endDate);
+                    setDateRangeError('');
+                  }}
+                  className="bg-transparent text-xs text-slate-800 focus:outline-none"
+                />
+              </div>
+              {dateRangeError && (
+                <p role="alert" className="text-[11px] text-red-600 font-medium">
+                  {dateRangeError}
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -1201,7 +1305,7 @@ export default function AdminDashboard() {
       {activeTab === 'overview' ? (
         <div className="space-y-6">
           {/* KPI Cards Strip */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
             {kpis.map((k) => {
               const Icon = k.icon;
               return (
@@ -1209,7 +1313,7 @@ export default function AdminDashboard() {
                   key={k.label}
                   title={k.label}
                   value={k.value}
-                  definition={k.definition}
+                  showTooltip={false}
                   icon={<Icon className="w-5 h-5" />}
                   iconBg="bg-primary/10 text-primary"
                 />
@@ -1279,7 +1383,21 @@ export default function AdminDashboard() {
               </SectionCard>
             </div>
 
-            {/* Section 6: Cross-Branch Performance Comparison (SuperAdmin Global View) */}
+            {/* Section 6: Recurring Issues — Full Width */}
+            <div className="lg:col-span-2">
+              <SectionCard
+                icon={<Repeat className="w-4 h-4 text-primary" />}
+                title="Recurring Issues"
+                instruction="Most frequent problem categories and affected equipment for this period."
+                viewOptions={['Top Categories', 'Top Equipment']}
+                currentView={recurringView}
+                onViewChange={setRecurringView}
+              >
+                {recurringIssuesChart}
+              </SectionCard>
+            </div>
+
+            {/* Section 7: Cross-Branch Performance Comparison (SuperAdmin Global View) */}
             {isSuperAdmin && sortedBranchComparisons.length > 0 && (
               <div className="lg:col-span-2">
                 <div className="p-4 bg-white border border-gray-200 rounded-xl shadow-xs">

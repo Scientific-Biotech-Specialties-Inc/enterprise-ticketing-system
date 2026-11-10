@@ -725,7 +725,18 @@ class TicketService
                 ->where('employee_ID', $user->emp_id)
                 ->first();
         }
-        $accepted = $assignment && $assignment->assignment_status === 'accepted';
+        $statusLower = strtolower(trim((string) ($ticket->status_name ?? '')));
+        $isAcceptedStatus = in_array($statusLower, [
+            'in progress',
+            'on hold',
+            'pending evaluation',
+            'pending',
+            'resolved',
+            'closed',
+            'discarded',
+            'discarded by customer',
+        ], true);
+        $accepted = ($assignment && $assignment->assignment_status === 'accepted') || $isAcceptedStatus;
 
         $pendingReassign = DB::table('reassignment_requests as rr')
             ->leftJoin('employees as e', 'e.emp_id', '=', 'rr.employee_id')

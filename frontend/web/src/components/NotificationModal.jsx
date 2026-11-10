@@ -50,8 +50,8 @@ export default function NotificationModal({ isOpen, type, title, message, onConf
   const effectiveType = isConfirm ? 'confirm' : (isError ? 'error' : (isWarning ? 'warning' : (type === 'error' ? 'error' : (type || 'success'))));
 
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]" onClick={() => { if (!isConfirm) onClose?.(); }}>
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl text-center" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none" onClick={() => { if (!isConfirm) onClose?.(); }}>
+      <div className="w-full max-w-md max-h-[90vh] overflow-y-auto overscroll-contain rounded-xl bg-white p-6 shadow-2xl text-center" onClick={(e) => e.stopPropagation()}>
         {icons[effectiveType] || (isError ? icons.error : icons.success)}
         <h2 className="mt-4 text-lg font-bold text-gray-900">{title}</h2>
         <p className="mt-2 text-sm text-gray-600">{message}</p>

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, Loader2, AlertCircle } from 'lucide-react';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 
 /**
  * RejectReasonModal component
@@ -12,6 +13,7 @@ export default function RejectReasonModal({
   technicianName = 'technician',
   isSubmitting = false,
 }) {
+  useLockBodyScroll(isOpen);
   const [reason, setReason] = useState('');
   const [validationError, setValidationError] = useState('');
 
@@ -33,9 +35,9 @@ export default function RejectReasonModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="reject-dialog-title"
-      className="fixed inset-0 z-[65] flex items-center justify-center bg-black/60 p-4 backdrop-blur-[2px] animate-in fade-in duration-150"
+      className="fixed inset-0 z-[65] flex items-center justify-center bg-black/60 p-4 backdrop-blur-[2px] overscroll-none animate-in fade-in duration-150"
     >
-      <div className="w-full max-w-md rounded-2xl bg-white p-5 sm:p-6 shadow-2xl border border-[#D5D9E4] space-y-4 animate-in zoom-in-95 duration-150">
+      <div className="w-full max-w-md max-h-[90vh] overflow-y-auto overscroll-contain rounded-2xl bg-white p-5 sm:p-6 shadow-2xl border border-[#D5D9E4] space-y-4 animate-in zoom-in-95 duration-150">
         <div className="flex items-center justify-between border-b border-[#D5D9E4] pb-3">
           <h3 id="reject-dialog-title" className="text-base font-bold text-[#1B2033]">
             Reject Reassignment Request

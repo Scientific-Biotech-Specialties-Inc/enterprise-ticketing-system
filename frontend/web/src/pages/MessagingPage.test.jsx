@@ -644,4 +644,25 @@ describe('MessagingPage Component Tests (Acceptance Criteria)', () => {
       expect(screen.queryByText(/Active ongoing ticket/i)).not.toBeInTheDocument();
     });
   });
+
+  it('renders mobile hamburger menu to toggle conversation drawer and closes on close button or selection', async () => {
+    render(<MessagingPage />);
+
+    const hamburgerBtn = await screen.findByTestId('mobile-messages-toggle');
+    expect(hamburgerBtn).toBeInTheDocument();
+    expect(hamburgerBtn.getAttribute('aria-label')).toBe('Open conversations');
+
+    // Open mobile contacts drawer
+    fireEvent.click(hamburgerBtn);
+
+    const backdrop = screen.getByTestId('mobile-contacts-backdrop');
+    expect(backdrop).toBeInTheDocument();
+
+    const closeBtn = screen.getByTestId('close-contacts-drawer');
+    expect(closeBtn).toBeInTheDocument();
+
+    // Close drawer via close button
+    fireEvent.click(closeBtn);
+    expect(screen.queryByTestId('mobile-contacts-backdrop')).not.toBeInTheDocument();
+  });
 });

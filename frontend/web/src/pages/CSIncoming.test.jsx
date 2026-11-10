@@ -123,4 +123,26 @@ describe('CSIncoming server driven queue (spec 0037)', () => {
       );
     });
   });
+
+  it('never displays In Progress tickets in the incoming ticket queue', async () => {
+    ticketService.getCSQueuePage.mockResolvedValueOnce({
+      tickets: [
+        row(301, 'Open triage issue', 'On Track'),
+        { ...row(302, 'Already working issue', 'On Track'), status: 'In Progress' },
+      ],
+      total: 1,
+      page: 1,
+      perPage: 10,
+      lastPage: 1,
+      slaSummary: { breached: 0, at_risk: 0, on_track: 1, paused: 0, compliant: 0, no_sla: 0 },
+      tabCounts: { open: 1, pending: 0, all: 1 },
+    });
+
+    render(<CSIncoming />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Open triage issue')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Already working issue')).not.toBeInTheDocument();
+  });
 });

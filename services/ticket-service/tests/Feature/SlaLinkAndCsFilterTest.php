@@ -377,6 +377,10 @@ class SlaLinkAndCsFilterTest extends TestCase
         $this->assertSame([$t['pending']], $this->ids(['scope' => 'incoming', 'tab' => 'pending_assignment']));
         $this->assertSame([$t['reassign']], $this->ids(['scope' => 'assigned', 'tab' => 'reassigned']));
         $this->assertSame([$t['closed']], $this->ids(['scope' => 'assigned', 'tab' => 'resolved_closed']));
+
+        // An In Progress ticket must never appear in Incoming even if it has no accepted assignment row.
+        $orphanInProgress = $this->ticket(['ticket_status_ID' => $this->statusId('In Progress')]);
+        $this->assertNotContains($orphanInProgress, $this->ids(['scope' => 'incoming']));
     }
 
     /** AC-15: each card equals its rows. AC-16: Incoming's Paused count only covers Incoming tickets. */

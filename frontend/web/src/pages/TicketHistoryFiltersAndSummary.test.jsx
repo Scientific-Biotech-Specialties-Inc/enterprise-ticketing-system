@@ -429,7 +429,7 @@ describe('Ticket History Filters & Internal Summary Modal', () => {
     expect(screen.queryByText('Message the assigned employee')).toBeNull();
   });
 
-  it('renders "Message the assigned employee" in CSModals TicketSummary', () => {
+  it('does not render "Message the assigned employee" in CSModals TicketSummary footer', () => {
     authContextModule.useAuth.mockReturnValue({
       user: { id: 2, name: 'Alice CS', role: 'cs' },
       isAuthenticated: true,
@@ -456,8 +456,8 @@ describe('Ticket History Filters & Internal Summary Modal', () => {
       />
     );
 
-    // Both the footer button and the AssigneeRow message button should be present
-    expect(screen.getByText('Message the assigned employee')).toBeInTheDocument();
+    expect(screen.queryByText('Message the assigned employee')).toBeNull();
+    expect(screen.getByText('Message the customer')).toBeInTheDocument();
     expect(screen.getByText('Message Tech')).toBeInTheDocument();
   });
 

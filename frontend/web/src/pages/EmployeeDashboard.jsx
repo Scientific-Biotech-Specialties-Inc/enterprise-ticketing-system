@@ -159,6 +159,23 @@ export default function EmployeeDashboard() {
     deferRefresh: false,
   });
 
+  // Tickets already in active work, hold, evaluation, or terminal states are never awaiting acceptance.
+  const isTicketAccepted = useCallback((ticket) => {
+    if (!ticket) return false;
+    if (ticket.accepted === true) return true;
+    const normalizedStatus = String(ticket.status || '').trim().toLowerCase();
+    return [
+      'in progress',
+      'on hold',
+      'pending evaluation',
+      'pending',
+      'resolved',
+      'closed',
+      'discarded',
+      'discarded by customer',
+    ].includes(normalizedStatus);
+  }, []);
+
   // ─── Assigned Workload Metrics (TS060 Criteria) ───────────────────────────
   const assignedMetrics = useMemo(() => {
     let openCount = 0;
@@ -174,7 +191,7 @@ export default function EmployeeDashboard() {
       if (t.status === 'In Progress') inProgressCount++;
       if (t.status === 'On Hold') onHoldCount++;
       if (t.status === 'Resolved' || t.status === 'Closed') resolvedCount++;
-      if (!t.accepted && t.status !== 'Resolved' && t.status !== 'Closed') awaitingAcceptCount++;
+      if (!isTicketAccepted(t)) awaitingAcceptCount++;
 
       const risk = evaluateSlaRisk(t);
       if (risk === 'breached') breachedCount++;
@@ -191,7 +208,7 @@ export default function EmployeeDashboard() {
       awaitingAccept: awaitingAcceptCount,
       totalActive: assignedTickets.filter((t) => !['Resolved', 'Closed'].includes(t.status)).length,
     };
-  }, [assignedTickets, evaluateSlaRisk]);
+  }, [assignedTickets, evaluateSlaRisk, isTicketAccepted]);
 
   // ─── Requestor Activity Metrics (TS060 Criteria) ──────────────────────────
   const requestorMetrics = useMemo(() => {
@@ -241,10 +258,11 @@ export default function EmployeeDashboard() {
   const assignedAttentionItems = useMemo(() => {
     return assignedTickets.filter((t) => {
       const risk = evaluateSlaRisk(t);
-      const isUrgent = risk === 'breached' || risk === 'at_risk' || !t.accepted || t.status === 'Escalated';
-      return isUrgent && !['Resolved', 'Closed'].includes(t.status);
+      const needsAccept = !isTicketAccepted(t);
+      const isUrgent = risk === 'breached' || risk === 'at_risk' || needsAccept || t.status === 'Escalated';
+      return isUrgent && !['Resolved', 'Closed', 'Discarded', 'Discarded by Customer'].includes(t.status);
     }).slice(0, 4);
-  }, [assignedTickets, evaluateSlaRisk]);
+  }, [assignedTickets, evaluateSlaRisk, isTicketAccepted]);
 
   // Attention-needed items for Requestor section
   const requestorAttentionItems = useMemo(() => {
@@ -266,12 +284,12 @@ export default function EmployeeDashboard() {
       setModalLoading(false);
     }
 
-    if (!fullTicket.accepted) {
+    if (!isTicketAccepted(fullTicket)) {
       setPendingTicket(fullTicket);
     } else {
       setInfoTicket(fullTicket);
     }
-  }, []);
+  }, [isTicketAccepted]);
 
   const openRequestorModal = useCallback(async (t) => {
     setModalLoading(true);
@@ -563,7 +581,7 @@ export default function EmployeeDashboard() {
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="font-bold text-xs text-primary">{t.id}</span>
-                            {!t.accepted ? (
+                            {!isTicketAccepted(t) ? (
                               <Badge variant="warning" className="text-[10px]">Awaiting Review &amp; Accept</Badge>
                             ) : (
                               <Badge variant="destructive" className="text-[10px]">SLA Critical</Badge>
@@ -581,7 +599,7 @@ export default function EmployeeDashboard() {
                           }}
                           className="text-xs shrink-0"
                         >
-                          {!t.accepted ? 'Accept / Review' : 'Update Ticket'}
+                          {!isTicketAccepted(t) ? 'Accept / Review' : 'Update Ticket'}
                         </Button>
                       </div>
                     ))}

@@ -7,6 +7,7 @@ import SlaStatusBadge, { getTicketSlaStatus, getTicketSlaDueDate } from '@/compo
 import { formatDisplayDate, parseUTCDate } from '@/utils/dateUtils';
 import { useAuth } from '@/context/AuthContext';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import { PageHeader } from '@/components/ui/page-header';
 import { OriginPillToggle } from '@/components/ui/OriginPillToggle';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
@@ -181,6 +182,7 @@ export default function CSIncoming() {
   // modal state: null | { mode: 'assign'|'summary', ticket }
   const [modal, setModal] = useState(null);
   const [modalLoading, setModalLoading] = useState(false);
+  useLockBodyScroll(modalLoading);
 
   const resetFilters = useCallback(() => {
     setSearch('');
@@ -498,9 +500,12 @@ export default function CSIncoming() {
     all: tabCounts?.all ?? 0,
   };
 
-  const EXCLUDED_STATUSES = useMemo(() => ['resolved', 'closed', 'discarded', 'discarded by customer'], []);
+  const EXCLUDED_STATUSES = useMemo(
+    () => ['in progress', 'resolved', 'closed', 'discarded', 'discarded by customer'],
+    []
+  );
 
-  // Filter out resolved, closed, and discarded tickets - they only belong on the Ticket History page
+  // Filter out in progress, resolved, closed, and discarded tickets from the Incoming triage queue
   const filtered = useMemo(() => {
     return (tickets || []).filter((t) => !EXCLUDED_STATUSES.includes(String(t.status || '').trim().toLowerCase()));
   }, [tickets, EXCLUDED_STATUSES]);

@@ -85,4 +85,47 @@ describe('SuperAdminDashboard (spec 0028 AC-8 to AC-11)', () => {
     await waitFor(() => expect(screen.getAllByText(/Data unavailable/i).length).toBeGreaterThanOrEqual(3));
     expect(screen.getAllByRole('button', { name: 'Retry' }).length).toBeGreaterThanOrEqual(3);
   });
+
+  it('rejects End date earlier than Start date under Custom Range', async () => {
+    ticketService.getSystemDashboard.mockResolvedValue(apiPayload);
+    render(<SuperAdminDashboard />);
+    await waitFor(() => expect(ticketService.getSystemDashboard).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Custom Range' }));
+    const startInput = screen.getByLabelText('Start date');
+    const endInput = screen.getByLabelText('End date');
+
+    fireEvent.change(startInput, { target: { value: '2026-11-10' } });
+    fireEvent.change(endInput, { target: { value: '2026-11-12' } });
+    await waitFor(() => expect(ticketService.getSystemDashboard).toHaveBeenCalledTimes(2));
+
+    fireEvent.change(endInput, { target: { value: '2026-11-05' } });
+    expect(screen.getByRole('alert')).toHaveTextContent('End date cannot be earlier than start date.');
+    expect(endInput.value).toBe('2026-11-12');
+    expect(ticketService.getSystemDashboard).toHaveBeenCalledTimes(2);
+  });
+
+  it('displays live time and date in header and locks background scroll when inspection modal is open', async () => {
+    ticketService.getSystemDashboard.mockResolvedValue(apiPayload);
+    render(<SuperAdminDashboard />);
+
+    await waitFor(() => expect(screen.getByText('TKTS-00015:')).toBeInTheDocument());
+    expect(screen.getByText(/\d{1,2}:\d{2}:\d{2}\s?(AM|PM)/i)).toBeInTheDocument();
+
+    expect(document.body.style.overflow).toBe('');
+    fireEvent.click(screen.getByTitle('Inspect details for TKTS-00015'));
+
+    await waitFor(() => expect(screen.getByText('Ticket Activity Detail')).toBeInTheDocument());
+    expect(document.body.style.overflow).toBe('hidden');
+    expect(document.body.style.position).toBe('fixed');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close Inspection' }));
+    await waitFor(() => expect(screen.queryByText('Ticket Activity Detail')).not.toBeInTheDocument());
+    expect(document.body.style.overflow).toBe('');
+    expect(document.body.style.position).toBe('');
+
+    // KPI cards render without hover value tooltips
+    expect(screen.getByText('16')).not.toHaveAttribute('title');
+    expect(screen.getByText('62.5%')).not.toHaveAttribute('title');
+  });
 });

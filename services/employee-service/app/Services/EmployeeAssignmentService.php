@@ -1581,6 +1581,17 @@ class EmployeeAssignmentService
             $createdAtObj = is_string($row->created_at) ? Carbon::parse($row->created_at) : $row->created_at;
             $updatedAtObj = is_string($row->updated_at) ? Carbon::parse($row->updated_at) : $row->updated_at;
             $slaMetrics = $this->computeSlaMetrics($row);
+            $statusLower = strtolower(trim((string) ($row->status_name ?? '')));
+            $isAcceptedStatus = in_array($statusLower, [
+                'in progress',
+                'on hold',
+                'pending evaluation',
+                'pending',
+                'resolved',
+                'closed',
+                'discarded',
+                'discarded by customer',
+            ], true);
 
             return [
                 'id' => 'TKT-' . str_pad((string) $row->ticket_ID, 4, '0', STR_PAD_LEFT),
@@ -1602,7 +1613,7 @@ class EmployeeAssignmentService
                 'is_at_risk' => $slaMetrics['is_at_risk'],
                 'is_paused' => $slaMetrics['is_paused'],
                 'lastUpdate' => ($updatedAtObj ?: $createdAtObj ?: now())->toIso8601String(),
-                'accepted' => $row->assignment_status === 'accepted',
+                'accepted' => $row->assignment_status === 'accepted' || $isAcceptedStatus,
                 'escalated' => (strtolower((string)($row->status_name ?? '')) === 'escalated'),
                 'escalation_reason' => $row->escalation_reason ?? null,
                 'hold_reason' => $row->hold_reason ?? null,

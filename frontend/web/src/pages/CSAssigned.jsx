@@ -4,6 +4,7 @@ import { Search, Loader2, Filter, RotateCcw, X, AlertTriangle, Clock, CheckCircl
 import Pagination from '@/components/Pagination';
 import { useAuth } from '@/context/AuthContext';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import {
   getCSQueuePage,
   getAssignableEmployees,
@@ -102,6 +103,7 @@ export default function CSAssigned() {
   const [priorityOptions, setPriorityOptions] = useState(['Low','Medium','High','Critical']);
   const [loading, setLoading] = useState(true);
   const [modalLoading, setModalLoading] = useState(false);
+  useLockBodyScroll(modalLoading);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [slaFilter, setSlaFilter] = useState('All SLA Statuses');

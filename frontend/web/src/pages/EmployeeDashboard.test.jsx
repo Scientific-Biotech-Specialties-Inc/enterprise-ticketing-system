@@ -276,5 +276,56 @@ describe('EmployeeDashboard dual panel workspace (AC-13, AC-14, AC-15, AC-20)', 
       expect(screen.queryByRole('button', { name: /^accept$/i })).toBeNull();
       expect(ticketService.acceptTicket).not.toHaveBeenCalled();
     });
+
+    it('never displays In Progress tickets as pending acceptance even when accepted flag is false', async () => {
+      ticketService.getEmployeeAssignedTickets.mockResolvedValue([
+        {
+          id: 'TKT-701',
+          ticket_ID: 701,
+          title: 'Active Centrifuge Repair',
+          customer: 'St Luke Hospital',
+          status: 'In Progress',
+          priority: 'Medium',
+          sla_breached: false,
+          accepted: false,
+          updated_at: '2026-11-03T10:30:00Z',
+        },
+        {
+          id: 'TKT-702',
+          ticket_ID: 702,
+          title: 'Breached MRI Cooling Task',
+          customer: 'Metro Medical',
+          status: 'In Progress',
+          priority: 'Critical',
+          sla_breached: true,
+          accepted: false,
+          updated_at: '2026-11-03T10:30:00Z',
+        },
+      ]);
+      ticketService.getTicketDetails.mockImplementation(async (id) => ({
+        ticket_ID: id,
+        status: 'In Progress',
+        accepted: false,
+      }));
+
+      render(
+        <MemoryRouter>
+          <EmployeeDashboard />
+        </MemoryRouter>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('Assigned Items Needing Immediate Action (1)')).toBeInTheDocument();
+      });
+
+      expect(screen.queryByText(/Awaiting Review & Accept/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Accept / Review' })).not.toBeInTheDocument();
+      expect(screen.getByText(/SLA Critical/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Update Ticket' })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Update Ticket' }));
+      await waitFor(() => expect(ticketService.getTicketDetails).toHaveBeenCalledWith(702));
+      expect(screen.queryByRole('button', { name: /^accept$/i })).toBeNull();
+    });
   });
 });

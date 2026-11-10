@@ -72,18 +72,19 @@ export default function BranchSelector({
   const branchList = [GLOBAL_BRANCH, ...branches.filter((b) => b.id !== null && b.slug !== 'all')];
 
   if (variant === 'inline') {
+    const branchDisplayName = selectedBranch?.name || activeBranch.name || '';
+    const showBranchLabel = !branchDisplayName.toLowerCase().includes('branch');
+    const branchRegion = selectedBranch?.region || activeBranch.region || '';
+
     if (!isSuperAdminUser) {
       return (
         <div
-          className={`inline-flex items-center gap-2 rounded-xl border border-slate-200/90 bg-slate-50 px-3 py-1.5 text-xs text-slate-700 shadow-xs cursor-default ${className}`}
-          title={`Assigned Facility: ${selectedBranch?.name || activeBranch.name} (${selectedBranch?.region || activeBranch.region || ''})`}
+          className={`inline-flex items-center gap-1.5 px-1 text-xs text-slate-600 cursor-default ${className}`}
+          title={`Assigned Facility: ${branchDisplayName}${branchRegion ? ` (${branchRegion})` : ''}`}
         >
           <Building2 size={14} className="text-slate-500 shrink-0" />
-          <span className="text-slate-400 font-normal">Branch</span>
-          <span className="font-semibold text-slate-800">{selectedBranch?.name || activeBranch.name}</span>
-          <span className="rounded-md bg-slate-200/80 px-1.5 py-0.5 text-[10px] font-bold text-slate-700">
-            {selectedBranch?.code || activeBranch.code}
-          </span>
+          {showBranchLabel && <span className="text-slate-400 font-normal">Branch:</span>}
+          <span className="font-semibold text-slate-800">{branchDisplayName}</span>
         </div>
       );
     }
@@ -96,14 +97,11 @@ export default function BranchSelector({
           aria-haspopup="listbox"
           aria-expanded={isOpen}
           className="inline-flex items-center gap-2 rounded-xl border border-slate-200/90 bg-white px-3 py-1.5 text-xs text-slate-700 shadow-xs hover:border-slate-300 transition-all cursor-pointer"
-          title={`Active Branch: ${selectedBranch?.name || activeBranch.name} (${selectedBranch?.region || activeBranch.region || ''})`}
+          title={`Active Branch: ${branchDisplayName}${branchRegion ? ` (${branchRegion})` : ''}`}
         >
           <Building2 size={14} className="text-slate-700 shrink-0" />
-          <span className="text-slate-500 font-normal">Branch</span>
-          <span className="font-semibold text-slate-900">{selectedBranch?.name || activeBranch.name}</span>
-          <span className="rounded-md bg-indigo-100/80 px-1.5 py-0.5 text-[10px] font-bold text-indigo-800">
-            {selectedBranch?.code || activeBranch.code}
-          </span>
+          {showBranchLabel && <span className="text-slate-500 font-normal">Branch:</span>}
+          <span className="font-semibold text-slate-900">{branchDisplayName}</span>
           <ChevronDown
             size={14}
             className={`text-slate-400 transition-transform duration-150 ${

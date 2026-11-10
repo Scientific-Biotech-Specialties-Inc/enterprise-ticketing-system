@@ -33,6 +33,7 @@ import { getWindowConfiguration, getCachedWindowConfiguration } from '@/services
 import { getTicketTimeline } from '@/services/ticketService';
 import { getTicketMessages } from '@/services/messagingService';
 import { useAuth } from '@/context/AuthContext';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 
 export default function CustomerTicketDetailModal({
   ticket,
@@ -89,6 +90,7 @@ export default function CustomerTicketDetailModal({
 
   // Reopen Modal State
   const [showReopenModal, setShowReopenModal] = useState(false);
+  useLockBodyScroll(showReopenModal);
   const [reopenReason, setReopenReason] = useState('');
   const [reopenValidationError, setReopenValidationError] = useState('');
   const [reopenError, setReopenError] = useState('');
@@ -559,8 +561,8 @@ export default function CustomerTicketDetailModal({
 
       {/* ─── Reopen Modal ─── */}
       {showReopenModal && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-[1px] animate-in fade-in duration-150">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl border border-[#D5D9E4] space-y-4">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-[1px] overscroll-none animate-in fade-in duration-150">
+          <div className="w-full max-w-md max-h-[90vh] overflow-y-auto overscroll-contain rounded-2xl bg-white p-6 shadow-xl border border-[#D5D9E4] space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-[#1B2033]">Reopen Support Ticket</h3>
               <button

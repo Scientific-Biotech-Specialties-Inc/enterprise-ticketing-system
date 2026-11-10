@@ -379,7 +379,7 @@ export default function CSManagerTickets() {
         title="CS Ticket Queue & Assignment"
         subtitle="Manage assignments, triage incoming customer tickets, and track agent workload for Customer Support."
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
               size="sm"

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
-import { Bot, Send, Paperclip, ChevronDown, ChevronUp, X, CheckCircle, CheckCircle2, AlertTriangle, Plus, MessageSquare, Trash2, ArrowLeft, Clock } from 'lucide-react';
+import { Bot, Send, Paperclip, ChevronDown, ChevronUp, X, CheckCircle, CheckCircle2, AlertTriangle, Plus, MessageSquare, Trash2, ArrowLeft, Clock, Menu } from 'lucide-react';
 import axiosInstance from '@/api/axiosInstance';
 import { AI_API_URL } from '@/config/api.config';
 import { getTicketFormOptions, createTicket, getCustomerTickets, saveTicketDraft } from '@/services/ticketService';
@@ -30,10 +30,18 @@ const formatShortTime = (iso) => {
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 };
 
-function FormattedText({ text }) {
+function FormattedText({ text, isUser = false }) {
   const [completedSteps, setCompletedSteps] = useState({});
 
   if (typeof text !== 'string') return text;
+
+  if (isUser) {
+    return (
+      <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+        {text}
+      </p>
+    );
+  }
 
   const lines = text.split('\n');
   const stepRegex = /^(?:\*\*step\s*(\d+)[:\.\-]?\*\*|step\s*(\d+)[:\.\-]|(\d+)[\.\)])\s*(.*)$/i;
@@ -749,7 +757,22 @@ function AISupportPage() {
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth >= 768;
+    }
+    return true;
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth >= 768) {
+        setSidebarOpen(true);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
   const [conversations, setConversations] = useState([]);
   const [activeConversationId, setActiveConversationId] = useState('');
   const [messages, setMessages] = useState([welcomeMessage, gatherDetailsMessage]);
@@ -1804,110 +1827,158 @@ function AISupportPage() {
   }, [navigate, user]);
 
   return (
-    <div className="flex flex-col h-screen p-4 bg-page">
-      <div className="flex flex-1 bg-card rounded-xl shadow-xs border border-border overflow-hidden min-h-0">
+    <div className="flex flex-col h-screen p-2 sm:p-4 bg-page">
+      <div className="relative flex flex-1 bg-card rounded-xl shadow-xs border border-border overflow-hidden min-h-0">
+        {/* Mobile Backdrop */}
         {sidebarOpen && (
-          <div className="w-[280px] lg:w-[300px] border-r border-border flex flex-col shrink-0 bg-slate-50/50">
-            <div className="px-3 pt-6 pb-3 border-b border-border shrink-0 space-y-4">
+          <div
+            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-xs md:hidden"
+            onClick={() => setSidebarOpen(false)}
+            aria-hidden="true"
+            data-testid="mobile-sidebar-backdrop"
+          />
+        )}
+
+        {/* Conversation sidebar */}
+        <div
+          className={`
+            fixed inset-y-0 left-0 z-50 w-[280px] sm:w-[300px] border-r border-border flex flex-col shrink-0 bg-slate-50 shadow-2xl transition-transform duration-200 ease-in-out
+            md:static md:z-auto md:shadow-none md:bg-slate-50/50 md:translate-x-0
+            ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+          `}
+        >
+          <div className="px-3 pt-4 sm:pt-6 pb-3 border-b border-border shrink-0 space-y-4">
+            <div className="flex items-center justify-between gap-2">
               <button
                 onClick={handleBack}
-                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-muted hover:text-primary hover:bg-slate-100 rounded-lg transition-all cursor-pointer"
+                className="flex-1 flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-muted hover:text-primary hover:bg-slate-100 rounded-lg transition-all cursor-pointer"
               >
                 <ArrowLeft size={14} />
                 Back to Dashboard
               </button>
               <button
-                onClick={handleNewChat}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-card border border-border hover:border-primary hover:text-primary text-slate-dark rounded-lg text-xs font-semibold transition-all shadow-xs cursor-pointer"
+                type="button"
+                onClick={() => setSidebarOpen(false)}
+                className="p-1.5 text-slate-muted hover:text-slate-dark hover:bg-slate-200 rounded-lg transition-colors cursor-pointer md:hidden shrink-0"
+                title="Close conversations"
+                aria-label="Close conversations"
+                data-testid="close-sidebar-button"
               >
-                <Plus size={14} />
-                New Chat
+                <X size={16} />
               </button>
             </div>
+            <button
+              onClick={() => {
+                handleNewChat();
+                if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                  setSidebarOpen(false);
+                }
+              }}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-card border border-border hover:border-primary hover:text-primary text-slate-dark rounded-lg text-xs font-semibold transition-all shadow-xs cursor-pointer"
+            >
+              <Plus size={14} />
+              New Chat
+            </button>
+          </div>
 
-            <div className="flex-1 overflow-y-auto py-2" aria-busy={conversationsLoading}>
-              {conversationsLoading && (
-                <div className="space-y-2 px-3" data-testid="conversation-list-skeleton">
-                  {[0, 1, 2, 3, 4].map((i) => (
-                    <div key={i} className="flex items-start gap-2 py-2">
-                      <SkeletonLoader className="h-4 w-4 rounded" />
-                      <div className="flex-1 space-y-2">
-                        <SkeletonLoader className="h-3 w-3/4" />
-                        <SkeletonLoader className="h-2 w-1/3" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {!conversationsLoading && conversations.map((conv) => (                <div
-                  key={conv.id}
-                  onClick={() => loadConversation(conv.id)}
-                  className={`group w-full flex items-start gap-2.5 px-3 py-2.5 text-left transition-all border-l-2 cursor-pointer ${
-                    activeConversationId === conv.id
-                      ? 'bg-primary/5 border-l-primary'
-                      : 'border-l-transparent hover:bg-slate-100'
-                  }`}
-                >
-                  <MessageSquare size={16} className="text-slate-muted mt-0.5 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className={`text-xs truncate ${activeConversationId === conv.id ? 'font-semibold text-primary' : 'font-medium text-slate-dark'}`}>
-                      {conv.title}
-                    </p>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className="text-[10px] text-slate-muted">{formatShortTime(conv.timestamp || conv.updated_at || conv.created_at)}</span>
-                      <span className="text-[10px] text-slate-300">·</span>
-                      <span className="text-[10px] text-slate-muted">{conv.message_count !== undefined ? conv.message_count : (conv.messageCount || 0)} msgs</span>
+          <div className="flex-1 overflow-y-auto py-2" aria-busy={conversationsLoading}>
+            {conversationsLoading && (
+              <div className="space-y-2 px-3" data-testid="conversation-list-skeleton">
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <div key={i} className="flex items-start gap-2 py-2">
+                    <SkeletonLoader className="h-4 w-4 rounded" />
+                    <div className="flex-1 space-y-2">
+                      <SkeletonLoader className="h-3 w-3/4" />
+                      <SkeletonLoader className="h-2 w-1/3" />
                     </div>
                   </div>
-                  <button
-                    onClick={(e) => handleDeleteConversation(e, conv.id)}
-                    className="p-1 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-slate-200 text-slate-muted hover:text-red-500 transition-all shrink-0 cursor-pointer"
-                    title="Delete conversation"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            <div className="p-3 border-t border-border shrink-0">
-              <div className="flex items-center gap-2.5 px-2 py-2">
-                <div className="w-7 h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-[10px] font-bold shrink-0">
-                  {(() => {
-                    const name = user?.first_name || user?.name || 'User';
-                    return name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
-                  })()}
-                </div>
+                ))}
+              </div>
+            )}
+            {!conversationsLoading && conversations.map((conv) => (
+              <div
+                key={conv.id}
+                onClick={() => {
+                  loadConversation(conv.id);
+                  if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                    setSidebarOpen(false);
+                  }
+                }}
+                className={`group w-full flex items-start gap-2.5 px-3 py-2.5 text-left transition-all border-l-2 cursor-pointer ${
+                  activeConversationId === conv.id
+                    ? 'bg-primary/5 border-l-primary'
+                    : 'border-l-transparent hover:bg-slate-100'
+                }`}
+              >
+                <MessageSquare size={16} className="text-slate-muted mt-0.5 shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-semibold text-slate-dark truncate">
-                    {user?.first_name ? `${user.first_name} ${user.last_name || ''}` : (user?.name || 'User')}
+                  <p className={`text-xs truncate ${activeConversationId === conv.id ? 'font-semibold text-primary' : 'font-medium text-slate-dark'}`}>
+                    {conv.title}
                   </p>
-                  <p className="text-[10px] text-slate-muted truncate">{user?.email || ''}</p>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className="text-[10px] text-slate-muted">{formatShortTime(conv.timestamp || conv.updated_at || conv.created_at)}</span>
+                    <span className="text-[10px] text-slate-300">·</span>
+                    <span className="text-[10px] text-slate-muted">{conv.message_count !== undefined ? conv.message_count : (conv.messageCount || 0)} msgs</span>
+                  </div>
                 </div>
+                <button
+                  onClick={(e) => handleDeleteConversation(e, conv.id)}
+                  className="p-1 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-slate-200 text-slate-muted hover:text-red-500 transition-all shrink-0 cursor-pointer"
+                  title="Delete conversation"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="p-3 border-t border-border shrink-0">
+            <div className="flex items-center gap-2.5 px-2 py-2">
+              <div className="w-7 h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-[10px] font-bold shrink-0">
+                {(() => {
+                  const name = user?.first_name || user?.name || 'User';
+                  return name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+                })()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-slate-dark truncate">
+                  {user?.first_name ? `${user.first_name} ${user.last_name || ''}` : (user?.name || 'User')}
+                </p>
+                <p className="text-[10px] text-slate-muted truncate">{user?.email || ''}</p>
               </div>
             </div>
           </div>
-        )}
+        </div>
 
         <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex items-center justify-between px-6 py-3 border-b border-border bg-card shrink-0">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center shadow-xs">
+          <div className="flex items-center justify-between px-3 sm:px-6 py-3 border-b border-border bg-card shrink-0 gap-2">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <button
+                type="button"
+                onClick={() => setSidebarOpen(true)}
+                className="p-1.5 -ml-1 text-slate-muted hover:text-slate-dark hover:bg-slate-100 rounded-lg transition-colors cursor-pointer md:hidden shrink-0"
+                title="Open conversations"
+                aria-label="Open conversations"
+                data-testid="mobile-conversations-toggle"
+              >
+                <Menu size={20} />
+              </button>
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-primary flex items-center justify-center shadow-xs shrink-0">
                 <Bot size={20} className="text-white" />
               </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h1 className="font-bold text-sm text-slate-dark">AI Support Assistant</h1>
-                  <span className="bg-accent/10 border border-accent/20 text-primary text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                  <h1 className="font-bold text-sm text-slate-dark truncate">AI Support Assistant</h1>
+                  <span className="bg-accent/10 border border-accent/20 text-primary text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide shrink-0">
                     Automated System
                   </span>
                 </div>
-                <p className="text-[11px] text-slate-muted">
+                <p className="text-[10px] sm:text-[11px] text-slate-muted truncate">
                   Not a live human agent · AI searches technical manuals & knowledge base
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               {messages.length > 2 && (
                 <button
                   onClick={handleClearChat}
@@ -1915,17 +1986,17 @@ function AISupportPage() {
                   title="Clear all messages in this conversation"
                 >
                   <Trash2 size={13} />
-                  <span>Clear Chat</span>
+                  <span className="hidden sm:inline">Clear Chat</span>
                 </button>
               )}
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold">
+              <span className="inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                Online
+                <span className="hidden xs:inline sm:inline">Online</span>
               </span>
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3 bg-page" aria-busy={conversationsLoading || Boolean(loadingConversationId)}>
+          <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-3 bg-page" aria-busy={conversationsLoading || Boolean(loadingConversationId)}>
             {(conversationsLoading || loadingConversationId) ? (
               <div className="space-y-4" data-testid="chat-messages-skeleton">
                 {[0, 1, 2].map((i) => (
@@ -2003,8 +2074,12 @@ function AISupportPage() {
                             ? 'px-4 py-2.5 bg-primary text-primary-foreground rounded-2xl rounded-br-md shadow-xs'
                             : 'bg-card text-slate-dark border border-border rounded-2xl rounded-bl-md shadow-xs px-4 py-3'
                           }>
-                            {typeof msg.content === 'string' ? (
-                              <FormattedText text={msg.content} />
+                            {msg.role === 'user' ? (
+                              <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+                                {typeof msg.content === 'string' ? msg.content : msg.content}
+                              </p>
+                            ) : typeof msg.content === 'string' ? (
+                              <FormattedText text={msg.content} isUser={false} />
                             ) : (
                               msg.content
                             )}
@@ -2111,7 +2186,7 @@ function AISupportPage() {
             <div ref={messagesEndRef} />
           </div>
 
-          <div className="px-6 py-3 border-t border-border bg-card shrink-0">
+          <div className="px-3 sm:px-6 py-2.5 sm:py-3 border-t border-border bg-card shrink-0">
             <div className="flex items-center gap-3">
               <button
                 type="button"
@@ -2189,4 +2264,5 @@ function AISupportPage() {
   );
 }
 
+export { FormattedText };
 export default AISupportPage;

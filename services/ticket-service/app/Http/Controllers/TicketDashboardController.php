@@ -159,6 +159,10 @@ class TicketDashboardController extends Controller
             'branch_id' => $request->query('branch_id'),
         ];
 
+        if ($dateErr = $this->validateDateRange($filters['date_from'], $filters['date_to'])) {
+            return $dateErr;
+        }
+
         $forceRefresh = filter_var($request->query('forceRefresh', $request->query('force_refresh', false)), FILTER_VALIDATE_BOOLEAN);
 
         $data = app(\App\Actions\Dashboards\GetAdminDashboardMetricsAction::class)->execute($user, $filters, $forceRefresh);
@@ -191,6 +195,10 @@ class TicketDashboardController extends Controller
             'branch' => $request->query('branch'),
             'branch_id' => $request->query('branch_id'),
         ];
+
+        if ($dateErr = $this->validateDateRange($filters['date_from'], $filters['date_to'])) {
+            return $dateErr;
+        }
 
         $forceRefresh = filter_var($request->query('forceRefresh', $request->query('force_refresh', false)), FILTER_VALIDATE_BOOLEAN);
 

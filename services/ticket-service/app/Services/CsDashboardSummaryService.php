@@ -104,7 +104,9 @@ class CsDashboardSummaryService
 
     private function queued(?int $branchId, int $limit): array
     {
-        $base = $this->ticketBase($branchId)->whereNull('t.assigned_to');
+        $base = $this->ticketBase($branchId)
+            ->whereNull('t.assigned_to')
+            ->whereRaw("LOWER(ts.status_name) != 'in progress'");
         $count = (clone $base)->count();
         $items = (clone $base)->orderBy('t.created_at')->limit($limit)->get()
             ->map(fn ($row) => $this->ticketItem($row))->values()->all();

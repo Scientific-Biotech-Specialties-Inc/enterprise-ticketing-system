@@ -27,6 +27,7 @@ import {
 } from '@/services/ticketService';
 import { useAuth } from '@/context/AuthContext';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import SkeletonLoader from '@/components/SkeletonLoader';
 import { formatDisplayDate } from '@/utils/dateUtils';
 import CustomerTicketDetailModal from '@/components/CustomerTicketDetailModal';
@@ -55,6 +56,7 @@ export default function Notifications() {
   const [activeNotificationId, setActiveNotificationId] = useState(null);
   const [activeEmployees, setActiveEmployees] = useState([]);
   const [activeTicketLoading, setActiveTicketLoading] = useState(false);
+  useLockBodyScroll(activeTicketLoading);
   const [activeSecurityIncident, setActiveSecurityIncident] = useState(null);
   const [activeSystemAlert, setActiveSystemAlert] = useState(null);
 

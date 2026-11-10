@@ -101,6 +101,15 @@ const mockLiveDashboard = {
       { name: 'Engineering', active_tickets: 2 },
     ],
   },
+  recurring_issues: {
+    top_categories: [
+      { name: 'Hardware Calibration', count: 14, percentage: 33.3 },
+      { name: 'Software Update', count: 9, percentage: 21.4 },
+    ],
+    top_equipment: [
+      { name: 'Sysmex KX-21N', serial_number: 'SN-882', label: 'Sysmex KX-21N (SN-882)', count: 11, percentage: 26.2 },
+    ],
+  },
 };
 
 const mockBranches = [
@@ -444,5 +453,68 @@ describe('AdminDashboard (Live Data, Scoping, and ETL Sync)', () => {
       expect(screen.getByText('96.4%')).toBeDefined();
       expect(screen.getByText('91%')).toBeDefined();
     });
+  });
+
+  it('rejects End date earlier than Start date under Custom Range', async () => {
+    vi.spyOn(authContextModule, 'useAuth').mockReturnValue({
+      user: { id: 1, role: 'admin', email: 'admin@example.com', branch_id: 1, branch: 'Cebu Branch' },
+    });
+
+    render(
+      <BranchProvider>
+        <AdminDashboard />
+      </BranchProvider>
+    );
+
+    await waitFor(() => expect(ticketService.getAdminDashboard).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Custom Range' }));
+    const startInput = screen.getByLabelText('Start date');
+    const endInput = screen.getByLabelText('End date');
+
+    fireEvent.change(startInput, { target: { value: '2026-11-10' } });
+    fireEvent.change(endInput, { target: { value: '2026-11-12' } });
+    await waitFor(() => expect(endInput.value).toBe('2026-11-12'));
+
+    const callsBeforeInvalid = ticketService.getAdminDashboard.mock.calls.length;
+
+    fireEvent.change(endInput, { target: { value: '2026-11-05' } });
+    expect(screen.getByRole('alert')).toHaveTextContent('End date cannot be earlier than start date.');
+    expect(endInput.value).toBe('2026-11-12');
+    expect(ticketService.getAdminDashboard).toHaveBeenCalledTimes(callsBeforeInvalid);
+  });
+
+  it('displays live time, date, and Recurring Issues section with categories and equipment toggle', async () => {
+    vi.spyOn(authContextModule, 'useAuth').mockReturnValue({
+      user: { id: 1, role: 'admin', email: 'admin@example.com', branch_id: 1, branch: 'Cebu Branch' },
+    });
+
+    render(
+      <BranchProvider>
+        <AdminDashboard />
+      </BranchProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Recurring Issues')).toBeDefined();
+      expect(screen.getByText('Hardware Calibration')).toBeDefined();
+      expect(screen.getByText(/Most frequent: Hardware Calibration \(14 tickets, 33.3% of period volume\)\./)).toBeDefined();
+    });
+
+    // Live time & date header renders AM/PM clock like other role dashboards
+    expect(screen.getByText(/\d{1,2}:\d{2}:\d{2}\s?(AM|PM)/i)).toBeDefined();
+
+    // Switch Recurring Issues dropdown to Top Equipment
+    const recurringSelect = screen.getByDisplayValue('Top Categories');
+    fireEvent.change(recurringSelect, { target: { value: 'Top Equipment' } });
+
+    await waitFor(() => {
+      expect(screen.getByText('Sysmex KX-21N (SN-882)')).toBeDefined();
+      expect(screen.getByText(/Most frequent: Sysmex KX-21N \(SN-882\) \(11 tickets, 26.2% of period volume\)\./)).toBeDefined();
+    });
+
+    // KPI cards render without info tooltip icons or hover title tooltips
+    expect(screen.queryByRole('img')).toBeNull();
+    expect(screen.getByText('42')).not.toHaveAttribute('title');
   });
 });

@@ -82,7 +82,6 @@ const AdminLayout = React.lazy(() => import('./components/AdminLayout.jsx'));
 const AdminDashboard = React.lazy(() => import('./pages/AdminDashboard.jsx'));
 const AdminEmployees = React.lazy(() => import('./pages/AdminEmployees.jsx'));
 const AdminReports = React.lazy(() => import('./pages/AdminReports.jsx'));
-const AdminSettings = React.lazy(() => import('./pages/AdminSettings.jsx'));
 const ExternalFeedbackPage = React.lazy(() => import('./pages/ExternalFeedbackPage.jsx'));
 
 // ─── Employee Portal Gate ─────────────────────────────────────────────────────
@@ -427,7 +426,6 @@ function App() {
                 <Route path="dashboard" element={<AdminDashboard />} />
                 <Route path="employees" element={<Navigate to="dashboard" replace />} />
                 <Route path="reports" element={<AdminReports />} />
-                <Route path="settings" element={<AdminSettings />} />
                 <Route path="profile" element={<Profile />} />
                 <Route path="notifications" element={<Notifications />} />
               </Route>

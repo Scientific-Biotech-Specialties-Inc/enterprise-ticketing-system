@@ -108,8 +108,8 @@ const getFileName = (file) => {
 export function ConfirmDialog({ onConfirm, onCancel, isSaving = false, title = "Update this ticket?", message = "Are you sure you want to save the changes to this ticket?", confirmText = "Yes, Update" }) {
   useLockBodyScroll(true);
   return (
-    <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-      <div className="bg-card border border-border rounded-xl w-full max-w-md shadow-modal p-6 flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+      <div className="bg-card border border-border rounded-xl w-full max-w-md max-h-[90vh] overflow-y-auto overscroll-contain shadow-modal p-6 flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
         <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-4 text-primary">
           <HelpCircle className="w-6 h-6" />
         </div>
@@ -172,8 +172,8 @@ export function HoldTicketDialog({ isOpen, onClose, onConfirm, isSaving = false 
   };
 
   return (
-    <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-2xl w-120 max-w-full shadow-2xl p-6 sm:p-7 relative flex flex-col">
+    <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+      <div className="bg-white rounded-2xl w-120 max-w-full max-h-[90vh] overflow-y-auto overscroll-contain shadow-2xl p-6 sm:p-7 relative flex flex-col">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -275,8 +275,8 @@ export function ReclassifyEditModal({
   };
 
   return (
-    <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-2xl w-115 max-w-full shadow-2xl p-6 sm:p-7 relative flex flex-col">
+    <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+      <div className="bg-white rounded-2xl w-115 max-w-full max-h-[90vh] overflow-y-auto overscroll-contain shadow-2xl p-6 sm:p-7 relative flex flex-col">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-full bg-[#252578]/10 text-[#252578] flex items-center justify-center shrink-0">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -381,8 +381,8 @@ export function ReclassifyConfirmModal({
   const priorityChanged = oldPriority !== newPriority;
 
   return (
-    <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-2xl w-120 max-w-full shadow-2xl p-6 sm:p-7 relative flex flex-col">
+    <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+      <div className="bg-white rounded-2xl w-120 max-w-full max-h-[90vh] overflow-y-auto overscroll-contain shadow-2xl p-6 sm:p-7 relative flex flex-col">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center shrink-0">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -563,8 +563,8 @@ export function SendReminderDialog({ isOpen, onClose, onConfirm, ticket, assigne
   };
 
   return (
-    <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] animate-in fade-in duration-200">
-      <div className="bg-card border border-border rounded-xl w-full max-w-lg shadow-modal p-6 flex flex-col animate-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none animate-in fade-in duration-200">
+      <div className="bg-card border border-border rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto overscroll-contain shadow-modal p-6 flex flex-col animate-in zoom-in-95 duration-200">
         <div className="flex items-start justify-between pb-4 border-b border-border">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0">
@@ -1391,29 +1391,6 @@ export function TicketSummary({ ticket, employees = [], onClose, onEdit, onStatu
                   </button>
                 )}
 
-                {/* Secondary: Message the Assigned Employee */}
-                {assignee.isAssigned ? (
-                  <button
-                    type="button"
-                    onClick={handleOpenMessages}
-                    className="min-h-[44px] px-3.5 border border-[#D5D9E4] hover:bg-[#F5F6FA] text-xs font-semibold text-[#1B2033] rounded-lg transition-colors inline-flex items-center gap-1.5 cursor-pointer"
-                    title={`Communicate directly with ${assignee.name || 'the assigned employee'} regarding this ticket`}
-                  >
-                    <MessageCircle className="w-3.5 h-3.5 text-[#1E2A78]" />
-                    <span>Message the assigned employee</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    disabled
-                    className="min-h-[44px] px-3.5 border border-[#D5D9E4] bg-gray-50 text-xs font-semibold text-gray-400 rounded-lg inline-flex items-center gap-1.5 opacity-60 cursor-not-allowed"
-                    title="No employee assigned to this ticket yet"
-                  >
-                    <MessageCircle className="w-3.5 h-3.5 text-gray-400" />
-                    <span>Message the assigned employee</span>
-                  </button>
-                )}
-
                 {/* Secondary: Message the Customer */}
                 <button
                   type="button"
@@ -2185,11 +2162,11 @@ export function AssignModal({ ticket, employees, departments, priorityOptions, o
 
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-        <div className="bg-card border border-border rounded-xl w-170 max-w-full max-h-[92vh] flex flex-col relative shadow-modal animate-in fade-in zoom-in-95 duration-200">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+        <div className="bg-card border border-border rounded-xl w-170 max-w-full max-h-[92vh] flex flex-col overflow-hidden relative shadow-modal animate-in fade-in zoom-in-95 duration-200">
 
           {/* Scrollable content */}
-          <div className="overflow-y-auto flex-1 p-6">
+          <div className="overflow-y-auto overscroll-contain flex-1 p-6">
             <div className="flex items-center justify-between gap-4 mb-4">
               <h3 className="text-xl font-bold text-slate-dark">
                 {ticket.status === 'Pending Assignment' || ticket.reassignmentStatus === 'Approved' ? 'Reassign Ticket' : 'Assign Ticket'}

@@ -11,6 +11,7 @@ import { AI_API_URL, KB_API_URL } from '@/config/api.config';
 import tokenStore from '@/auth/tokenStore';
 import echo from '@/services/echo';
 import { PageHeader } from '@/components/ui/page-header';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -294,14 +295,14 @@ const fileTypeIcons = {
 
 function StatCard({ icon: Icon, label, value, sub, bgClass }) {
   return (
-    <div className="bg-card rounded-xl border border-border shadow-xs p-4 flex items-center gap-4">
-      <div className={`w-11 h-11 rounded-lg flex items-center justify-center shrink-0 ${bgClass || 'bg-primary/10 text-primary'}`}>
-        <Icon size={20} />
+    <div className="bg-card rounded-xl border border-border shadow-xs p-3 sm:p-4 flex items-center gap-2.5 sm:gap-4 min-w-0">
+      <div className={`w-9 h-9 sm:w-11 sm:h-11 rounded-lg flex items-center justify-center shrink-0 ${bgClass || 'bg-primary/10 text-primary'}`}>
+        <Icon className="w-4 h-4 sm:w-5 sm:h-5" />
       </div>
-      <div>
-        <p className="text-2xl font-bold text-slate-dark">{value}</p>
-        <p className="text-xs text-slate-muted">{label}</p>
-        {sub && <p className="text-[10px] text-slate-400 mt-0.5">{sub}</p>}
+      <div className="min-w-0 flex-1">
+        <p className="text-xl sm:text-2xl font-bold text-slate-dark truncate">{value}</p>
+        <p className="text-xs text-slate-muted truncate">{label}</p>
+        {sub && <p className="text-[10px] text-slate-400 mt-0.5 truncate">{sub}</p>}
       </div>
     </div>
   );
@@ -343,10 +344,11 @@ function EmptyState({ onUpload, onCreate, title, description }) {
 }
 
 function ArchiveConfirmModal({ isOpen, onClose, onConfirm, doc }) {
+  useLockBodyScroll(Boolean(isOpen && doc));
   if (!isOpen || !doc) return null;
   return (
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+      <div className="w-full max-w-md max-h-[90vh] overflow-y-auto overscroll-contain rounded-xl bg-white p-6 shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-100 text-amber-600">
@@ -425,6 +427,7 @@ function ArchiveConfirmModal({ isOpen, onClose, onConfirm, doc }) {
 }
 
 function DeleteConfirmModal({ isOpen, onClose, onConfirm, doc, title, isDeleting = false, errorMessage = '' }) {
+  useLockBodyScroll(isOpen);
   const [confirmText, setConfirmText] = useState('');
   const targetTitle = doc?.title || title || '';
 
@@ -455,8 +458,8 @@ function DeleteConfirmModal({ isOpen, onClose, onConfirm, doc, title, isDeleting
   };
 
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+      <div className="w-full max-w-md max-h-[90vh] overflow-y-auto overscroll-contain rounded-xl bg-white p-6 shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-100 text-red-600">
@@ -580,10 +583,11 @@ function DeleteConfirmModal({ isOpen, onClose, onConfirm, doc, title, isDeleting
 }
 
 function DiscardConfirmModal({ isOpen, onClose, onConfirm, title, description }) {
+  useLockBodyScroll(isOpen);
   if (!isOpen) return null;
   return (
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+      <div className="w-full max-w-md max-h-[90vh] overflow-y-auto overscroll-contain rounded-xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-amber-100">
           <AlertTriangle size={24} className="text-amber-600" />
         </div>
@@ -703,6 +707,7 @@ function PipelineProgressView({
 }
 
 function ReplaceConfirmModal({ isOpen, doc, onClose, onReplaceComplete, onProcessingStatusChange }) {
+  useLockBodyScroll(Boolean(isOpen && doc));
   const [step, setStep] = useState('form');
   const [selectedFile, setSelectedFile] = useState(null);
   const [dragOver, setDragOver] = useState(false);
@@ -907,8 +912,8 @@ function ReplaceConfirmModal({ isOpen, doc, onClose, onReplaceComplete, onProces
 
   return (
     <>
-      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-        <div className="w-full max-w-xl rounded-xl bg-white shadow-2xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+        <div className="w-full max-w-xl rounded-xl bg-white shadow-2xl max-h-[90vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
             <div className="flex items-center gap-2.5">
               <div className="p-2 rounded-lg bg-amber-50 text-amber-600 border border-amber-200">
@@ -1120,6 +1125,7 @@ function ReplaceConfirmModal({ isOpen, doc, onClose, onReplaceComplete, onProces
 }
 
 function CreateArticleConfirmModal({ isOpen, onClose, onConfirm, form, selectedFile, mode = 'manual' }) {
+  useLockBodyScroll(isOpen);
   if (!isOpen) return null;
   const isCsv = mode === 'bulk' || Boolean(selectedFile?.name?.toLowerCase()?.endsWith('.csv'));
   const isFile = mode === 'file' || Boolean(selectedFile && !isCsv);
@@ -1129,8 +1135,8 @@ function CreateArticleConfirmModal({ isOpen, onClose, onConfirm, form, selectedF
   const charCount = form.content?.length || 0;
 
   return (
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+      <div className="w-full max-w-md max-h-[90vh] overflow-y-auto overscroll-contain rounded-xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[#252578]/10 text-[#252578]">
           {isCsv ? (
             <FileSpreadsheet size={24} className="text-[#252578]" />
@@ -1276,6 +1282,7 @@ function CreateArticleConfirmModal({ isOpen, onClose, onConfirm, form, selectedF
 }
 
 function CategoriesManager({ isOpen, onClose }) {
+  useLockBodyScroll(isOpen);
   const [categories, setCategories] = useState(MOCK_CATEGORIES);
   const [newCat, setNewCat] = useState('');
   const [editingIdx, setEditingIdx] = useState(null);
@@ -1302,13 +1309,13 @@ function CategoriesManager({ isOpen, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-      <div className="w-full max-w-lg rounded-xl bg-white shadow-2xl max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+      <div className="w-full max-w-lg rounded-xl bg-white shadow-2xl max-h-[80vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
           <h2 className="text-lg font-bold text-gray-900">Manage Categories</h2>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 cursor-pointer"><X size={20} /></button>
         </div>
-        <div className="p-6 overflow-y-auto flex-1 space-y-3">
+        <div className="p-6 overflow-y-auto overscroll-contain flex-1 space-y-3">
           {categories.map((cat, idx) => (
             <div key={idx} className="flex items-center gap-2">
               {editingIdx === idx ? (
@@ -1350,6 +1357,7 @@ function CategoriesManager({ isOpen, onClose }) {
 }
 
 function UploadModal({ isOpen, onClose, onUploadComplete, initialMode = 'manual' }) {
+  useLockBodyScroll(isOpen);
   const [uploadMode, setUploadMode] = useState(initialMode || 'manual'); // 'manual' | 'file' | 'bulk'
   const [step, setStep] = useState('form');
   const [progress, setProgress] = useState(0);
@@ -1770,8 +1778,8 @@ function UploadModal({ isOpen, onClose, onUploadComplete, initialMode = 'manual'
 
   return (
     <>
-      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-        <div className="w-full max-w-3xl rounded-xl bg-white shadow-2xl max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+        <div className="w-full max-w-3xl rounded-xl bg-white shadow-2xl max-h-[92vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
             <div>
               <h2 className="text-lg font-bold text-gray-900">
@@ -2709,6 +2717,7 @@ function DocumentContentPreview({ doc, onReplacePrompt }) {
 }
 
 function DocumentDetailModal({ isOpen, doc, onClose, onPublish, onArchivePrompt, onReplacePrompt, onRetryIndex, isRetrying = false }) {
+  useLockBodyScroll(Boolean(isOpen && doc));
   if (!isOpen || !doc) return null;
 
   const indexing = isRetrying || isIndexingInProgress(doc);
@@ -2720,8 +2729,8 @@ function DocumentDetailModal({ isOpen, doc, onClose, onPublish, onArchivePrompt,
   const PublishStateIcon = publishStateIcons[doc.publishState || 'Draft'] || FileText;
 
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-      <div className="w-full max-w-3xl rounded-2xl bg-white shadow-2xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+      <div className="w-full max-w-3xl rounded-2xl bg-white shadow-2xl max-h-[90vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <h2 className="text-lg font-bold text-gray-900 truncate" title={doc.title}>{doc.title}</h2>
@@ -2955,6 +2964,7 @@ function DocumentDetailModal({ isOpen, doc, onClose, onPublish, onArchivePrompt,
 }
 
 function EditMetadataModal({ isOpen, doc, onClose, onSave, onReplaceFile }) {
+  useLockBodyScroll(Boolean(isOpen && doc));
   const [form, setForm] = useState({ title: '', category: '', machine: '', version: '', description: '', tags: '', content: '' });
   const [errors, setErrors] = useState({});
   const [showDiscardModal, setShowDiscardModal] = useState(false);
@@ -3016,13 +3026,13 @@ function EditMetadataModal({ isOpen, doc, onClose, onSave, onReplaceFile }) {
 
   return (
     <>
-      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px]">
-        <div className="w-full max-w-lg rounded-xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1.5px] overscroll-none">
+        <div className="w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden rounded-xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 shrink-0">
             <h2 className="text-lg font-bold text-gray-900">Edit Metadata</h2>
             <button onClick={handleAttemptClose} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 cursor-pointer"><X size={20} /></button>
           </div>
-          <div className="px-6 py-4 space-y-4">
+          <div className="px-6 py-4 space-y-4 overflow-y-auto overscroll-contain flex-1">
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
                 Document Title <span className="text-red-500">*</span>
@@ -3886,33 +3896,36 @@ function AIKnowledgeBase() {
         title="AI Knowledge Base"
         subtitle="Manage documents for the AI Support Assistant"
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
             <Button
               variant="outline"
+              size="sm"
               onClick={() => setShowCategories(true)}
             >
-              <FolderOpen size={16} />
+              <FolderOpen size={15} />
               Categories
             </Button>
             <Button
               variant="outline"
+              size="sm"
               onClick={() => {
                 setUploadModalMode('file');
                 setShowUploadModal(true);
               }}
             >
-              <Upload size={16} />
+              <Upload size={15} />
               Upload Document
             </Button>
             <Button
               variant="default"
+              size="sm"
               onClick={() => {
                 setUploadModalMode('manual');
                 setShowUploadModal(true);
               }}
               className="bg-[#252578] hover:bg-[#1f1f66] text-white gap-1.5"
             >
-              <Plus size={16} />
+              <Plus size={15} />
               Create Article
             </Button>
           </div>

@@ -46,7 +46,7 @@ export default function TicketDetailModalShell({
       role="dialog"
       aria-modal="true"
       aria-labelledby="ticket-modal-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-0 sm:p-4 backdrop-blur-[2px] animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-0 sm:p-4 backdrop-blur-[2px] overscroll-none animate-in fade-in duration-200"
     >
       <button
         type="button"
@@ -66,7 +66,7 @@ export default function TicketDetailModalShell({
         {header}
 
         {/* Scrollable Content (Native Scroll, no custom arrows, 24px padding on desktop, 16px section gap) */}
-        <div className="flex-1 overflow-y-auto px-5 sm:px-6 py-5 space-y-4">
+        <div className="flex-1 overflow-y-auto overscroll-contain px-5 sm:px-6 py-5 space-y-4">
           {children}
         </div>
 

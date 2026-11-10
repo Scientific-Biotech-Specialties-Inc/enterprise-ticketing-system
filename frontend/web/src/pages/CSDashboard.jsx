@@ -27,6 +27,7 @@ import {
 import { AssignModal } from '@/components/CSModals';
 import { useAuth } from '@/context/AuthContext';
 import useRealtimeRefresh from '@/hooks/useRealtimeRefresh';
+import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import { formatDisplayDate } from '@/utils/dateUtils';
 import CustomerTicketDetailModal from '@/components/CustomerTicketDetailModal';
 import SlaStatusBadge from '@/components/sla/SlaStatusBadge';
@@ -72,6 +73,7 @@ export default function CSDashboard() {
 
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [modalLoading, setModalLoading] = useState(false);
+  useLockBodyScroll(modalLoading);
   const [newTicketId, setNewTicketId] = useState(null);
   const [assignModalTicket, setAssignModalTicket] = useState(null);
   const [assignEmployees, setAssignEmployees] = useState([]);

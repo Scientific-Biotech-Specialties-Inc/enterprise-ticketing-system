@@ -211,11 +211,75 @@ export default function PredictiveAnalytics({
   const minDaysRequired = rawPredictive?.historical_basis?.minimum_days_required ?? 30;
 
   const trendData = CONTINUOUS_TIMELINE[activePeriod] || CONTINUOUS_TIMELINE['Last 7 Days'];
-  const equipVals = defaultEquipFail[activePeriod] || defaultEquipFail['Last 7 Days'];
-  const recVals = defaultRecFreq[activePeriod] || defaultRecFreq['Last 7 Days'];
   const esc = defaultEscRisk[activePeriod] || defaultEscRisk['Last 7 Days'];
   const totalEsc = (esc.low || 0) + (esc.medium || 0) + (esc.high || 0) + (esc.critical || 0) || 1;
   const critPct = Math.round(((esc.critical || 0) / totalEsc) * 100);
+
+  const livePredCategories = Array.isArray(rawPredictive?.recurring_issues?.categories)
+    ? rawPredictive.recurring_issues.categories
+    : [];
+  const liveDashCategories = Array.isArray(analyticsData?.dashboard?.recurring_issues?.top_categories)
+    ? analyticsData.dashboard.recurring_issues.top_categories
+    : [];
+
+  const recItems = useMemo(() => {
+    if (livePredCategories.length > 0) {
+      return livePredCategories.slice(0, 6).map((c) => ({
+        name: c.item_name || c.name || 'Category',
+        count: Number(c.recent_frequency ?? c.count ?? 0),
+        growth: c.change_percentage != null ? Number(c.change_percentage) : null,
+      }));
+    }
+    if (liveDashCategories.length > 0) {
+      return liveDashCategories.slice(0, 6).map((c) => ({
+        name: c.name || 'Category',
+        count: Number(c.count ?? 0),
+        growth: null,
+        share: c.percentage != null ? Number(c.percentage) : null,
+      }));
+    }
+    const defaults = defaultRecFreq[activePeriod] || defaultRecFreq['Last 7 Days'];
+    return DEFAULT_CATEGORIES.slice(0, 4).map((name, idx) => ({
+      name,
+      count: defaults[idx] ?? 0,
+      growth: idx === 0 ? 12 : null,
+    }));
+  }, [livePredCategories, liveDashCategories, activePeriod]);
+
+  const livePredMachines = Array.isArray(rawPredictive?.recurring_issues?.machines)
+    ? rawPredictive.recurring_issues.machines
+    : [];
+  const liveDashMachines = Array.isArray(analyticsData?.dashboard?.recurring_issues?.top_equipment)
+    ? analyticsData.dashboard.recurring_issues.top_equipment
+    : [];
+
+  const equipItems = useMemo(() => {
+    if (livePredMachines.length > 0) {
+      return livePredMachines.slice(0, 5).map((m) => ({
+        name: m.item_name || m.name || 'Equipment',
+        value: Number(m.recent_frequency ?? m.count ?? 0),
+      }));
+    }
+    if (liveDashMachines.length > 0) {
+      return liveDashMachines.slice(0, 5).map((m) => ({
+        name: m.label || m.name || 'Equipment',
+        value: Number(m.percentage ?? m.count ?? 0),
+      }));
+    }
+    const defaults = defaultEquipFail[activePeriod] || defaultEquipFail['Last 7 Days'];
+    return [DEFAULT_EQUIPMENT[0], DEFAULT_EQUIPMENT[1], DEFAULT_EQUIPMENT[2]].map((name, idx) => ({
+      name,
+      value: defaults[idx] ?? 0,
+    }));
+  }, [livePredMachines, liveDashMachines, activePeriod]);
+
+  const topRecItem = recItems[0] || { name: DEFAULT_CATEGORIES[0], count: 0, growth: 12 };
+  const topEquipItem = equipItems[0] || { name: DEFAULT_EQUIPMENT[0], value: 0 };
+  const recGrowthBadge = topRecItem.growth != null
+    ? `${topRecItem.growth >= 0 ? '+' : ''}${Math.round(topRecItem.growth)}% Frequency Growth`
+    : topRecItem.share != null
+    ? `${topRecItem.share}% Share`
+    : '+12% Frequency Growth';
 
   // ─── 1. Underlying Data Table Rows ─────────────────────────────────────
   const underlyingRows = useMemo(() => {
@@ -316,7 +380,7 @@ export default function PredictiveAnalytics({
       </div>
 
       {/* KPI Strip - Sized identically to Overview KPI Cards, no subtext */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         <MetricCard
           title="Predicted Tickets"
           value={trendData.totalProjected}
@@ -522,7 +586,7 @@ export default function PredictiveAnalytics({
               <h3 className="text-sm font-bold text-foreground">Recurring Issue Patterns</h3>
             </div>
             <Badge variant="warning" className="text-[10px]">
-              +12% Frequency Growth
+              {recGrowthBadge}
             </Badge>
           </div>
 
@@ -539,9 +603,9 @@ export default function PredictiveAnalytics({
                 },
               }}
               data={{
-                labels: DEFAULT_CATEGORIES.slice(0, 4),
+                labels: recItems.map((i) => i.name),
                 datasets: [{
-                  data: recVals,
+                  data: recItems.map((i) => i.count),
                   backgroundColor: ['rgba(37,37,120,0.85)', 'rgba(245,158,11,0.85)', 'rgba(244,63,94,0.85)', 'rgba(16,185,129,0.85)'],
                   borderRadius: 6,
                   barThickness: 16,
@@ -558,7 +622,7 @@ export default function PredictiveAnalytics({
                 Basis: Repeat occurrence frequency recorded over the past 30 days.
               </p>
               <p className="text-[11px] mt-0.5">
-                Network issues have the highest statistical recurrence rate in {branchName}, showing a 12% increase compared to preceding periods.
+                {topRecItem.name} issues have the highest statistical recurrence rate in {branchName} ({topRecItem.count} incidents).
               </p>
             </div>
           </div>
@@ -589,9 +653,9 @@ export default function PredictiveAnalytics({
                 },
               }}
               data={{
-                labels: [DEFAULT_EQUIPMENT[0], DEFAULT_EQUIPMENT[1], DEFAULT_EQUIPMENT[2]],
+                labels: equipItems.map((i) => i.name),
                 datasets: [{
-                  data: equipVals,
+                  data: equipItems.map((i) => i.value),
                   backgroundColor: ['rgba(244,63,94,0.8)', 'rgba(99,102,241,0.8)', 'rgba(245,158,11,0.8)'],
                   borderRadius: 6,
                   barThickness: 16,
@@ -608,7 +672,7 @@ export default function PredictiveAnalytics({
                 Basis: Equipment repair frequency and mean-time-between-failures over the last 90 days.
               </p>
               <p className="text-[11px] mt-0.5">
-                {DEFAULT_EQUIPMENT[0]} exhibits the highest failure probability ({equipVals[0]}%) across {branchName}.
+                {topEquipItem.name} exhibits the highest recurrence or failure indicator ({topEquipItem.value}%) across {branchName}.
               </p>
             </div>
           </div>
