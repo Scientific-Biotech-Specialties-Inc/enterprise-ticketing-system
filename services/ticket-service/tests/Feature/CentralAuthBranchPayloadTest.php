@@ -399,12 +399,13 @@ class CentralAuthBranchPayloadTest extends TestCase
 
     /**
      * Auth Module "IT Admin" is the Ticketing superadmin; "Branch Admin" is the branch-scoped admin.
-     * The email address grants nothing: superadmin@example.com with role Branch Admin is an admin.
+     * The email address grants nothing: even an address that looks privileged maps by role only.
      */
     public function test_auth_roles_map_to_ticketing_roles_without_email_privileges(): void
     {
         $cases = [
             ['admin@example.com', 'IT Admin', 'superadmin'],
+            ['branchadmin@example.com', 'Branch Admin', 'admin'],
             ['superadmin@example.com', 'Branch Admin', 'admin'],
         ];
 
