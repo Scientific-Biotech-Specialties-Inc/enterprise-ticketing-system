@@ -1,7 +1,7 @@
 import { safeUrl } from '@/utils/safeUrl';
 import { attachmentUrl } from '@/utils/attachmentFiles';
 import React, { useState, useMemo, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   HelpCircle,
   X,
@@ -45,6 +45,7 @@ import {
   addInternalNote,
   getInternalNotes,
   sendTicketReminder,
+  recordProofView,
   getEligibleEmployees,
   updateTicket,
   acceptTicket,
@@ -68,11 +69,12 @@ import {
   formatPHT,
   formatRelativePHT,
   getAssigneeInfo,
+  getAssigneeList,
+  getMessagesPath,
 } from './ticket-modal';
 import CustomerTicketDetailModal from './CustomerTicketDetailModal';
 import InternalNotesSection, { NoteList } from './InternalNotesSection';
 import TicketFeedbackSection from './feedback/TicketFeedbackSection';
-import { hasFeedbackBeenSubmitted } from '@/data/mockFeedbackData';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import useLiveTicket from '@/hooks/useLiveTicket';
 import { priorityColors } from '@/constants/employeeTickets';
@@ -677,6 +679,7 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
   const { ticket } = useLiveTicket(ticketProp);
   useLockBodyScroll(!!ticket);
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
 
   // Reassignment Reject Modal State
@@ -743,6 +746,9 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
   const [proofRejectionReason, setProofRejectionReason] = useState('');
   const [proofOpened, setProofOpened] = useState(false);
   const [proofAccepted, setProofAccepted] = useState(false);
+  // Spec 0038 AC-30 / AC-31: proof files this CS user has opened (recorded by ticket-service).
+  const [viewedProofIds, setViewedProofIds] = useState([]);
+  const [proofGateMessage, setProofGateMessage] = useState('');
 
   const cleanTicketId = useMemo(() => {
     const raw = ticket?.ticket_ID || ticket?.id;
@@ -808,6 +814,11 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
 
   const isTicketAssigned = assignee.isAssigned;
 
+  // Spec 0038 AC-7 / AC-8: every active assignee, each with its own reminder cooldown.
+  const assigneeList = useMemo(() => getAssigneeList(ticket), [ticket]);
+  const [reminderSentAtById, setReminderSentAtById] = useState({});
+  const [reminderTarget, setReminderTarget] = useState(null);
+
   // Requesting employee for reassignment
   const requestingEmployee = useMemo(() => {
     let name = '';
@@ -871,12 +882,8 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
   const handleOpenMessages = () => {
     onClose();
     const tId = ticket?.ticket_ID || ticket?.id;
-    let path = '/cs/messages';
-    if (window.location.pathname.startsWith('/cs-manager')) path = '/cs-manager/messages';
-    else if (window.location.pathname.startsWith('/service-manager')) path = '/service-manager/messages';
-    else if (window.location.pathname.startsWith('/it-manager')) path = '/it-manager/messages';
-    else if (window.location.pathname.startsWith('/employee')) path = '/employee/messages';
-    navigate(path, { state: { selectedTicketId: tId } });
+    // Router relative path, so the /ticketing/ basename does not break the match (AC-18).
+    navigate(getMessagesPath(location.pathname), { state: { selectedTicketId: tId } });
   };
 
   // Reminder authorization & cooldown check
@@ -895,29 +902,50 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
   );
 
   const reminderCooldownMs = 60 * 60 * 1000;
-  const isReminderOnCooldown = useMemo(() => {
-    if (!currentLastReminder) return false;
-    const sentTime = new Date(currentLastReminder).getTime();
-    return !isNaN(sentTime) && (Date.now() - sentTime) < reminderCooldownMs;
-  }, [currentLastReminder]);
 
-  const cooldownMinutesRemaining = useMemo(() => {
-    if (!isReminderOnCooldown || !currentLastReminder) return 0;
-    const sentTime = new Date(currentLastReminder).getTime();
-    return Math.max(1, Math.ceil((reminderCooldownMs - (Date.now() - sentTime)) / (60 * 1000)));
-  }, [isReminderOnCooldown, currentLastReminder]);
+  // The primary assignee (first active row), or the legacy single assignee when the
+  // payload has no assigned_employees rows.
+  const primaryReminderTarget = assigneeList[0] || {
+    id: null,
+    name: assignee.name,
+    firstName: assignee.firstName,
+    lastReminderSentAt: currentLastReminder,
+  };
+
+  /** Cooldown for one assignee, read from that assignee's own last_reminder_sent_at. */
+  const getReminderCooldown = (target) => {
+    const sentAt = (target?.id != null && reminderSentAtById[String(target.id)]) || target?.lastReminderSentAt || null;
+    if (!sentAt) return { onCooldown: false, minutes: 0 };
+    const sentTime = new Date(sentAt).getTime();
+    if (isNaN(sentTime) || (Date.now() - sentTime) >= reminderCooldownMs) return { onCooldown: false, minutes: 0 };
+    return { onCooldown: true, minutes: Math.max(1, Math.ceil((reminderCooldownMs - (Date.now() - sentTime)) / (60 * 1000))) };
+  };
+
+  const primaryCooldown = getReminderCooldown(primaryReminderTarget);
+  const isReminderOnCooldown = primaryCooldown.onCooldown;
+  const cooldownMinutesRemaining = primaryCooldown.minutes;
+
+  const openReminderFor = (target) => {
+    setReminderError('');
+    setReminderTarget(target);
+    setShowReminderModal(true);
+  };
 
   const handleSendReminderConfirm = async (customMessage) => {
     setIsSendingReminder(true);
     setReminderError('');
     try {
       const ticketId = cleanTicketId || ticket.ticket_ID || ticket.id;
-      await sendTicketReminder(ticketId, customMessage);
-      const nowIso = new Date().toISOString();
+      const target = reminderTarget || primaryReminderTarget;
+      const response = await sendTicketReminder(ticketId, customMessage, target?.id ?? null);
+      const nowIso = response?.data?.last_reminder_sent_at || response?.last_reminder_sent_at || new Date().toISOString();
       setCurrentLastReminder(nowIso);
       ticket.last_reminder_sent_at = nowIso;
+      if (target?.id != null) {
+        setReminderSentAtById((prev) => ({ ...prev, [String(target.id)]: nowIso }));
+      }
 
-      const recipientName = assignee.name;
+      const recipientName = target?.name || assignee.name;
       const reminderEvent = {
         id: `reminder-${Date.now()}`,
         type: 'reminder',
@@ -1352,11 +1380,46 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
   const isExternal = !ticket.is_internal && ticket.ticket_type !== 'Internal' && ticket.type !== 'Internal';
   const hasProof = proofFiles.length > 0;
 
+  const isPendingEvaluation = currentStatus === 'Pending Evaluation' || ticket.status === 'Pending Evaluation';
+  const isProofViewed = (file) => file?.id != null && viewedProofIds.includes(Number(file.id));
+  const allProofsViewed = hasProof && proofFiles.every(isProofViewed);
+
   const openProofPreview = (file) => {
     const fName = getFileName(file);
     const fUrl = getFileUrl(file);
     setPreviewFile({ name: fName, url: fUrl });
     setProofOpened(true);
+
+    // AC-31: record the view so the approval gate knows this user opened the file.
+    if (isPendingEvaluation && file?.id != null) {
+      const tId = cleanTicketId || ticket.ticket_ID || ticket.id;
+      recordProofView(tId, file.id)
+        .then((res) => {
+          const ids = Array.isArray(res?.viewed_attachment_ids) ? res.viewed_attachment_ids.map(Number) : [Number(file.id)];
+          setViewedProofIds((prev) => [...new Set([...prev, ...ids])]);
+          setProofGateMessage('');
+        })
+        .catch((err) => {
+          setProofGateMessage(err?.response?.data?.message || 'This proof view could not be recorded. Open the file again to retry.');
+        });
+    }
+  };
+
+  /** Shows the server's PROOF_NOT_VIEWED reason when an approval is refused (AC-32). */
+  const reportProofGateError = (err) => {
+    const data = err?.response?.data;
+    if (data?.code === 'PROOF_NOT_VIEWED') {
+      const files = Array.isArray(data.unviewed_files) && data.unviewed_files.length > 0
+        ? ` Not opened yet: ${data.unviewed_files.join(', ')}.`
+        : '';
+      setProofGateMessage(`${data.message || 'Open each proof of completion file before approving it.'}${files}`);
+      return true;
+    }
+    if (data?.code === 'PROOF_CHECK_UNAVAILABLE') {
+      setProofGateMessage(data.message);
+      return true;
+    }
+    return false;
   };
 
   // Timeline events count
@@ -1459,9 +1522,16 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
                     /* In Progress -> Resolve ticket is primary */
                     <button
                       type="button"
-                      disabled={isProcessing || (isExternal && hasProof && (!proofOpened || !proofAccepted))}
+                      disabled={isProcessing || (currentStatus === 'Pending Evaluation'
+                        ? !allProofsViewed
+                        : (isExternal && hasProof && (!proofOpened || !proofAccepted)))}
+                      title={currentStatus === 'Pending Evaluation' && !allProofsViewed
+                        ? (hasProof ? 'Open each proof of completion file to enable approval' : 'No proof of completion was uploaded')
+                        : undefined}
                       onClick={async () => {
-                        if (isExternal && hasProof) {
+                        if (currentStatus === 'Pending Evaluation') {
+                          if (!allProofsViewed) return;
+                        } else if (isExternal && hasProof) {
                           if (!proofOpened) {
                             window.alert('Please open and review the proof of completion documents before accepting.');
                             return;
@@ -1585,16 +1655,13 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
                   {isEligibleForReminder && (
                     <button
                       type="button"
-                      onClick={() => {
-                        setReminderError('');
-                        setShowReminderModal(true);
-                      }}
+                      onClick={() => openReminderFor(primaryReminderTarget)}
                       disabled={isProcessing || isReminderOnCooldown}
-                      title={isReminderOnCooldown ? `Reminder sent recently (${cooldownMinutesRemaining}m cooldown)` : `Send reminder to ${assignee.firstName}`}
-                      aria-label={`Send reminder to ${assignee.firstName}`}
+                      title={isReminderOnCooldown ? `Reminder sent recently (${cooldownMinutesRemaining}m cooldown)` : `Send reminder to ${primaryReminderTarget.firstName}`}
+                      aria-label={`Send reminder to ${primaryReminderTarget.firstName}`}
                       className="min-h-[36px] px-3 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-semibold rounded-lg transition-colors cursor-pointer disabled:opacity-50"
                     >
-                      Remind {assignee.firstName}
+                      Remind {primaryReminderTarget.firstName}
                       {isReminderOnCooldown && (
                         <span className="text-[10px] text-slate-500 ml-1">({cooldownMinutesRemaining}m)</span>
                       )}
@@ -1643,20 +1710,43 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
 
         {/* AssigneeRow (when not pending reassignment) */}
         {!ticket.reassignmentRequested && (
-          <div className="rounded-xl border border-[#D5D9E4] bg-white p-3.5 sm:p-4 shadow-xs">
-            <AssigneeRow
-              name={assignee.isAssigned ? assignee.name : 'None assigned'}
-              firstName={assignee.firstName}
-              initials={assignee.initials}
-              department={assignee.isAssigned ? assignee.department : ''}
-              updatedText={`Updated ${formatPHT(ticket.last_updated || ticket.updated_at || ticket.created_at)}`}
-              onMessage={assignee.isAssigned ? handleOpenMessages : null}
-              messageLabel={`Message ${assignee.firstName || 'assigned employee'}`}
-              onRemind={(!readOnly && isEligibleForReminder) ? () => setShowReminderModal(true) : null}
-              remindDisabled={isProcessing || isReminderOnCooldown}
-              remindTitle={isReminderOnCooldown ? `Reminder sent recently (${cooldownMinutesRemaining}m cooldown)` : `Send reminder to ${assignee.firstName}`}
-              remindCooldownText={isReminderOnCooldown ? `${cooldownMinutesRemaining}m` : ''}
-            />
+          <div className="rounded-xl border border-[#D5D9E4] bg-white p-3.5 sm:p-4 shadow-xs space-y-3">
+            {assigneeList.length > 0 ? (
+              assigneeList.map((a, idx) => {
+                const cd = getReminderCooldown(a);
+                return (
+                  <AssigneeRow
+                    key={a.id ?? `assignee-${idx}`}
+                    name={a.name}
+                    firstName={a.firstName}
+                    initials={a.name.split(' ').filter(Boolean).map((p) => p[0]).join('').slice(0, 2).toUpperCase()}
+                    department={a.department}
+                    statusText={a.isAccepted ? 'Accepted' : 'Awaiting acceptance'}
+                    updatedText={idx === 0 ? `Updated ${formatPHT(ticket.last_updated || ticket.updated_at || ticket.created_at)}` : ''}
+                    onMessage={handleOpenMessages}
+                    messageLabel={`Message ${a.firstName}`}
+                    onRemind={(!readOnly && isEligibleForReminder) ? () => openReminderFor(a) : null}
+                    remindDisabled={isProcessing || cd.onCooldown}
+                    remindTitle={cd.onCooldown ? `Reminder sent recently (${cd.minutes}m cooldown)` : `Send reminder to ${a.firstName}`}
+                    remindCooldownText={cd.onCooldown ? `${cd.minutes}m` : ''}
+                  />
+                );
+              })
+            ) : (
+              <AssigneeRow
+                name={assignee.isAssigned ? assignee.name : 'None assigned'}
+                firstName={assignee.firstName}
+                initials={assignee.initials}
+                department={assignee.isAssigned ? assignee.department : ''}
+                updatedText={`Updated ${formatPHT(ticket.last_updated || ticket.updated_at || ticket.created_at)}`}
+                onMessage={assignee.isAssigned ? handleOpenMessages : null}
+                messageLabel={`Message ${assignee.firstName || 'assigned employee'}`}
+                onRemind={(!readOnly && isEligibleForReminder) ? () => openReminderFor(primaryReminderTarget) : null}
+                remindDisabled={isProcessing || isReminderOnCooldown}
+                remindTitle={isReminderOnCooldown ? `Reminder sent recently (${cooldownMinutesRemaining}m cooldown)` : `Send reminder to ${assignee.firstName}`}
+                remindCooldownText={isReminderOnCooldown ? `${cooldownMinutesRemaining}m` : ''}
+              />
+            )}
           </div>
         )}
 
@@ -1746,15 +1836,34 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
                 {proofFiles.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {proofFiles.map((file, idx) => (
-                      <AttachmentCard
-                        key={file.id || idx}
-                        file={file}
-                        onPreview={openProofPreview}
-                      />
+                      <div key={file.id || idx} className="space-y-1">
+                        <AttachmentCard
+                          file={file}
+                          onPreview={openProofPreview}
+                        />
+                        {isProofViewed(file) && (
+                          <p className="flex items-center gap-1 text-[11px] font-semibold text-green-700">
+                            <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" />
+                            Viewed
+                          </p>
+                        )}
+                      </div>
                     ))}
                   </div>
                 ) : (
                   <p className="text-gray-400 italic">No proof files uploaded.</p>
+                )}
+
+                {/* AC-30 / AC-33: approval needs every proof file opened by this user. */}
+                {!allProofsViewed && (
+                  <p className="text-[11px] text-blue-800">
+                    {hasProof
+                      ? 'Open each proof of completion file to enable approval'
+                      : 'No proof of completion was uploaded'}
+                  </p>
+                )}
+                {proofGateMessage && (
+                  <p role="alert" className="text-[11px] font-semibold text-red-700">{proofGateMessage}</p>
                 )}
 
                 {showRejectProofInput ? (
@@ -1801,8 +1910,9 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
                     <button type="button" onClick={() => setShowRejectProofInput(true)} className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-semibold">Reject Proof</button>
                     <button
                       type="button"
-                      disabled={isProcessing}
+                      disabled={isProcessing || !allProofsViewed}
                       onClick={async () => {
+                        if (!allProofsViewed) return;
                         setIsProcessing(true);
                         try {
                           const timestamp = new Date().toISOString();
@@ -1814,13 +1924,14 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
                           });
                           onClose();
                         } catch (err) {
-                          console.error(err);
+                          if (!reportProofGateError(err)) console.error(err);
                         } finally {
                           setIsProcessing(false);
                         }
                       }}
-                      className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold"
+                      className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
                     >
+                      {isProcessing ? <Loader2 className="inline w-3.5 h-3.5 animate-spin mr-1" /> : null}
                       Approve &amp; Resolve
                     </button>
                   </div>
@@ -1829,7 +1940,7 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
             )}
 
             {/* Customer Feedback */}
-            {(currentStatus === 'Resolved' || currentStatus === 'Closed' || hasFeedbackBeenSubmitted(ticket.id || ticket.ticket_ID)) && (
+            {(currentStatus === 'Resolved' || currentStatus === 'Closed') && (
               <div className="pt-2 border-t border-[#D5D9E4]">
                 <TicketFeedbackSection ticket={ticket} readOnly={true} />
               </div>
@@ -1941,10 +2052,10 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
       {showReminderModal && (
         <SendReminderDialog
           isOpen={showReminderModal}
-          onClose={() => setShowReminderModal(false)}
+          onClose={() => { setShowReminderModal(false); setReminderTarget(null); }}
           onConfirm={handleSendReminderConfirm}
           ticket={ticket}
-          assignedEmployee={employees.find(e => String(e.id) === String(ticket?.assigned_to || ticket?.assigned?.[0])) || { name: assignee.name }}
+          assignedEmployee={{ name: (reminderTarget || primaryReminderTarget)?.name || assignee.name }}
           isSending={isSendingReminder}
           error={reminderError}
         />

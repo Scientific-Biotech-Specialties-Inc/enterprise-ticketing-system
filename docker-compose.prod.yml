@@ -70,6 +70,7 @@ services:
     container_name: customer-service-prod
     restart: always
     environment:
+      PHP_CLI_SERVER_WORKERS: 4
       APP_ENV: production
       APP_DEBUG: "false"
       DB_CONNECTION: mysql
@@ -310,6 +311,7 @@ services:
     container_name: configuration-service-prod
     restart: always
     environment:
+      PHP_CLI_SERVER_WORKERS: 4
       APP_ENV: production
       APP_DEBUG: "false"
       DB_CONNECTION: mysql
@@ -341,6 +343,7 @@ services:
     container_name: notification-service-prod
     restart: always
     environment:
+      PHP_CLI_SERVER_WORKERS: 4
       APP_ENV: production
       APP_DEBUG: "false"
       DB_CONNECTION: mysql
@@ -408,6 +411,7 @@ services:
     volumes:
       - attachment_data_prod:/var/www/storage/app/public
     environment:
+      PHP_CLI_SERVER_WORKERS: 4
       APP_ENV: production
       APP_DEBUG: "false"
       DB_CONNECTION: mysql
@@ -451,6 +455,7 @@ services:
     container_name: ai-service-prod
     restart: always
     environment:
+      PHP_CLI_SERVER_WORKERS: 4
       APP_ENV: production
       APP_DEBUG: "false"
       DB_CONNECTION: mysql
@@ -535,6 +540,7 @@ services:
     container_name: messaging-service-prod
     restart: always
     environment:
+      PHP_CLI_SERVER_WORKERS: 4
       APP_ENV: production
       APP_DEBUG: "false"
       DB_CONNECTION: mongodb

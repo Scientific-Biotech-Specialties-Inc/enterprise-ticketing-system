@@ -70,6 +70,7 @@ services:
       - default
       - shared-capstone-network
     environment:
+      PHP_CLI_SERVER_WORKERS: 4
       DB_CONNECTION: mysql
       DB_HOST: db
       DB_PORT: 3306
@@ -301,6 +302,7 @@ services:
       - default
       - shared-capstone-network
     environment:
+      PHP_CLI_SERVER_WORKERS: 4
       DB_CONNECTION: mysql
       DB_HOST: db
       DB_PORT: 3306
@@ -342,6 +344,7 @@ services:
     ports:
       - "8003:8000"
     environment:
+      PHP_CLI_SERVER_WORKERS: 4
       DB_CONNECTION: mysql
       DB_HOST: db
       DB_PORT: 3306
@@ -409,6 +412,7 @@ services:
       - default
       - shared-capstone-network
     environment:
+      PHP_CLI_SERVER_WORKERS: 4
       DB_CONNECTION: mysql
       DB_HOST: db
       DB_PORT: 3306
@@ -440,6 +444,7 @@ services:
     ports:
       - "8005:8000"
     environment:
+      PHP_CLI_SERVER_WORKERS: 4
       DB_CONNECTION: mysql
       DB_HOST: db
       DB_PORT: 3306
@@ -496,6 +501,7 @@ services:
       - default
       - shared-capstone-network
     environment:
+      PHP_CLI_SERVER_WORKERS: 4
       DB_CONNECTION: mysql
       DB_HOST: db
       DB_PORT: 3306
@@ -590,6 +596,7 @@ services:
     env_file:
       - ./services/messaging-service/.env
     environment:
+      PHP_CLI_SERVER_WORKERS: 4
       DB_CONNECTION: mongodb
       PASSPORT_CONNECTION: mysql
       DB_HOST: db

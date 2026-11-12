@@ -981,6 +981,11 @@ class EmployeeAssignmentService
                     } elseif (in_array(strtolower($newStatusName), ['on hold', 'hold', 'pending'])) {
                         $updateFields['previous_in_progress_owner'] = $ticket->in_progress_owner ?? 'employee';
                         $updateFields['in_progress_owner'] = null;
+                        // Spec 0038 AC-28: an On Hold ticket resumes to the status it was held from.
+                        if ((int) $statusId === 11) {
+                            $updateFields['held_from_status_ID'] = $ticket->ticket_status_ID;
+                            $updateFields['hold_reason'] = $remarksText !== '' ? $remarksText : null;
+                        }
                     } elseif (in_array(strtolower($newStatusName), ['in progress', 'pending evaluation'])) {
                         $updateFields['in_progress_owner'] = 'employee';
                     }

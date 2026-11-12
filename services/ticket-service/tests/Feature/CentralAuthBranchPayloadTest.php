@@ -61,11 +61,12 @@ class CentralAuthBranchPayloadTest extends TestCase
                 'last_name' => 'Aninion',
                 'role' => 'Engineer',
                 'department' => 'Service',
-                'branch_id' => 12,
-                'branch' => 'Main Office',
+                // Auth Module id: deliberately not a local branch id (resolved by name instead).
+                'branch_id' => 9912,
+                'branch' => 'Test Makati Branch',
                 'branch_details' => [
-                    'id' => 12,
-                    'name' => 'Main Office',
+                    'id' => 9912,
+                    'name' => 'Test Makati Branch',
                     'address' => 'Makati City, Metro Manila',
                 ],
             ], 200),
@@ -332,26 +333,20 @@ class CentralAuthBranchPayloadTest extends TestCase
 
     public function test_verify_employee_jwt_fetches_branch_from_auth_service_when_missing_from_jwt(): void
     {
-        Http::fake(function (\Illuminate\Http\Client\Request $request) {
-            if (str_contains($request->url(), '/api/internal/users/71')) {
-                return Http::response([
-                    'id' => 71,
-                    'email' => 'slosinada@gmail.com',
-                    'first_name' => 'Jasmine',
-                    'last_name' => 'Aninion',
-                    'role' => 'Engineer',
-                    'department' => 'Service',
-                    'branch_id' => 12,
-                    'branch' => 'Main Office',
-                    'branch_details' => [
-                        'id' => 12,
-                        'name' => 'Main Office',
-                        'address' => 'Makati City, Metro Manila',
-                    ],
-                ], 200);
-            }
-            return Http::response(['status' => 'success'], 200);
-        });
+        // Auth Module numbers branches independently: Auth id 9912 must resolve to the LOCAL row by name.
+        Branch::updateOrInsert(
+            ['code' => 'TEST_MKT'],
+            [
+                'slug' => 'test-makati-branch',
+                'name' => 'Test Makati Branch',
+                'region' => 'NCR',
+                'is_active' => true,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]
+        );
+        $localBranch = Branch::where('code', 'TEST_MKT')->first();
+        // The /api/internal/users/71 stub (setUp) answers with Auth branch id 9912 named "Test Makati Branch".
 
         $middleware = new VerifyEmployeeJwt();
         $token = $this->generateJwt([
@@ -374,7 +369,66 @@ class CentralAuthBranchPayloadTest extends TestCase
         $this->assertEquals(200, $response->getStatusCode(), (string) $response->getContent());
         $employee = Employee::where('email', 'slosinada@gmail.com')->first();
         $this->assertNotNull($employee);
-        $this->assertEquals('Main Office', $employee->branch);
-        $this->assertEquals(12, $employee->branch_id);
+        $this->assertEquals('Test Makati Branch', $employee->branch);
+        $this->assertEquals($localBranch->id, $employee->branch_id);
+    }
+
+    public function test_unknown_auth_branch_name_never_stores_the_foreign_branch_id(): void
+    {
+        $middleware = new VerifyEmployeeJwt();
+        $token = $this->generateJwt([
+            'sub' => 99970,
+            'email' => 'foreign_branch_agent@example.com',
+            'role' => 'Engineer',
+            'department' => 'Service',
+            'branch' => 'Branch Unknown To Ticketing',
+            'branch_id' => 9913,
+        ]);
+
+        $request = Request::create('/api/employee/tickets', 'GET');
+        $request->headers->set('Authorization', "Bearer {$token}");
+
+        $response = $middleware->handle($request, fn () => new Response('OK', 200));
+
+        $this->assertEquals(200, $response->getStatusCode());
+        $employee = Employee::where('email', 'foreign_branch_agent@example.com')->first();
+        $this->assertNotNull($employee);
+        $this->assertEquals('Branch Unknown To Ticketing', $employee->branch);
+        $this->assertNotEquals(9913, $employee->branch_id);
+    }
+
+    /**
+     * Auth Module "IT Admin" is the Ticketing superadmin; "Branch Admin" is the branch-scoped admin.
+     * The email address grants nothing: superadmin@example.com with role Branch Admin is an admin.
+     */
+    public function test_auth_roles_map_to_ticketing_roles_without_email_privileges(): void
+    {
+        $cases = [
+            ['admin@example.com', 'IT Admin', 'superadmin'],
+            ['superadmin@example.com', 'Branch Admin', 'admin'],
+        ];
+
+        foreach ($cases as [$email, $authRole, $expectedRole]) {
+            Employee::where('email', $email)->delete();
+
+            $middleware = new VerifyEmployeeJwt();
+            $token = $this->generateJwt([
+                'sub' => crc32($email),
+                'email' => $email,
+                'role' => $authRole,
+                'department' => 'IT',
+                'branch' => 'Cebu Testing Branch',
+            ]);
+
+            $request = Request::create('/api/employee/tickets', 'GET');
+            $request->headers->set('Authorization', "Bearer {$token}");
+
+            $response = $middleware->handle($request, fn () => new Response('OK', 200));
+
+            $this->assertEquals(200, $response->getStatusCode(), "{$email} ({$authRole})");
+            $employee = Employee::where('email', $email)->first();
+            $this->assertNotNull($employee);
+            $this->assertEquals($expectedRole, $employee->role, "{$email} ({$authRole})");
+        }
     }
 }

@@ -1621,12 +1621,28 @@ export const getEmployeeFilterOptions = async () => {
 };
 
 // Ticket SLA Reminder (TS-REMINDER)
-export const sendTicketReminder = async (ticketId, customMessage = '') => {
+// Spec 0038 AC-31: record that the current CS user opened a proof of completion file.
+// Returns { viewed_attachment_ids, all_viewed }.
+export const recordProofView = async (ticketId, attachmentId) => {
   const numericId = typeof ticketId === 'number' ? ticketId : Number(String(ticketId).replace(/\D/g, ''));
-  const response = await ticketClient.post(`/tickets/${numericId}/reminders`, {
+  const response = await ticketClient.post(`/tickets/${numericId}/proof-views`, {
+    attachment_id: Number(attachmentId),
+  });
+  return response.data;
+};
+
+// Spec 0038 AC-8: `employeeId` reminds that specific active assignee (per assignee cooldown).
+// Omit it to remind the primary assignee, as before.
+export const sendTicketReminder = async (ticketId, customMessage = '', employeeId = null) => {
+  const numericId = typeof ticketId === 'number' ? ticketId : Number(String(ticketId).replace(/\D/g, ''));
+  const body = {
     custom_message: customMessage,
     message: customMessage,
-  });
+  };
+  if (employeeId !== null && employeeId !== undefined && employeeId !== '') {
+    body.employee_id = Number(employeeId);
+  }
+  const response = await ticketClient.post(`/tickets/${numericId}/reminders`, body);
   return response.data;
 };
 

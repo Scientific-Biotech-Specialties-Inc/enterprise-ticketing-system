@@ -91,6 +91,10 @@ Route::middleware('auth.subsystem')->group(function () {
     Route::post('/tickets/{ticketId}/reminders', [TicketReminderController::class, 'sendReminder']);
     Route::post('/tickets/{ticketId}/reminder', [TicketReminderController::class, 'sendReminder']);
 
+    // ─── Spec 0038: proof review gate and lightweight ownership lookup ───────
+    Route::post('/tickets/{ticketId}/proof-views', [\App\Http\Controllers\TicketProofReviewController::class, 'store'])->whereNumber('ticketId');
+    Route::get('/tickets/{ticketId}/ownership', [\App\Http\Controllers\TicketOwnershipController::class, 'show'])->whereNumber('ticketId')->middleware('no-cache');
+
     // ─── Core Ticket Lifecycle & Status Transitions ───────────────────────────
     Route::post('/tickets', [TicketController::class, 'store']);
     Route::post('/tickets/internal', [TicketController::class, 'storeInternalTicket']);

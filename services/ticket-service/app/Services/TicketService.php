@@ -1253,8 +1253,13 @@ class TicketService
                 'e.role',
                 'ta.assignment_status',
                 'ta.assigned_at',
-                'ta.accepted_at'
+                'ta.accepted_at',
+                // Spec 0038 AC-7 / AC-8: per assignee activity and reminder cooldown.
+                'ta.completed_at',
+                'ta.last_reminder_sent_at'
             )
+            ->orderBy('ta.assigned_at')
+            ->orderBy('ta.assignment_ID')
             ->get();
 
         $assigned = $assignedEmployees->pluck('id')->map(fn($id) => (int)$id)->all();
@@ -1318,7 +1323,16 @@ class TicketService
             'assigned_employee' => $primaryAssignedName,
             'assigned_employee_name' => $primaryAssignedName,
             'assigned_to_name' => $primaryAssignedName,
-            'assigned_employees' => $assignedEmployees->toArray(),
+            // Spec 0038 security model: customers see assignee names and departments only.
+            'assigned_employees' => $isCustomer
+                ? $assignedEmployees->map(fn ($e) => [
+                    'id' => (int) $e->id,
+                    'name' => $e->name,
+                    'department' => $e->department,
+                    'assignment_status' => $e->assignment_status,
+                    'completed_at' => $e->completed_at,
+                ])->values()->all()
+                : $assignedEmployees->toArray(),
             'reassignmentRequested' => !empty($pendingReassign),
             'reassignmentReason' => $pendingReassign ? $pendingReassign->reason : null,
             'reassignmentRequestedBy' => $pendingReassign ? ($pendingReassign->requesting_employee_name ?: 'Assigned Employee') : null,
@@ -1496,6 +1510,12 @@ class TicketService
                         'allowed_statuses' => $e->allowedStatuses,
                     ]
                 ];
+            }
+
+            // Spec 0038 AC-32 / AC-33: CS must open every proof file before approving.
+            $proofGate = app(ProofReviewService::class)->approvalGateError($ticket, (int) $statusToSet, $user);
+            if ($proofGate !== null) {
+                return $proofGate;
             }
 
             if ($statusToSet === 3 && $ticket->is_internal) {
@@ -1996,7 +2016,7 @@ class TicketService
             'priority_ID' => $validated['priority_ID'] ?? $ticket->priority_ID,
         ]);
 
-        $this->cacheService->clearTicketCaches();
+        $this->cacheService->clearTicketCaches((int) $ticketId);
         return ['status' => 200, 'data' => ['message' => 'Ticket updated successfully.']];
     }
 
@@ -2229,6 +2249,14 @@ class TicketService
      */
     public function resolveTicket(int $ticketId, $user): array
     {
+        $ticket = DB::table('tickets')->where('ticket_ID', $ticketId)->first();
+        if ($ticket) {
+            // Spec 0038 AC-32: proof review gate.
+            $proofGate = app(ProofReviewService::class)->approvalGateError($ticket, ProofReviewService::STATUS_RESOLVED, $user);
+            if ($proofGate !== null) {
+                return $proofGate;
+            }
+        }
         return $this->stateMachine->applyTransition($ticketId, 'resolve', [], $user);
     }
 
@@ -2266,6 +2294,12 @@ class TicketService
                     ];
                 }
             }
+        }
+
+        // Spec 0038 AC-32: proof review gate.
+        $proofGate = app(ProofReviewService::class)->approvalGateError($ticket, ProofReviewService::STATUS_CLOSED, $user);
+        if ($proofGate !== null) {
+            return $proofGate;
         }
 
         try {

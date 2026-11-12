@@ -36,7 +36,6 @@ import { useAuth } from '@/context/AuthContext';
 import FilePreviewModal from '@/components/FilePreviewModal';
 import InternalNotesSection from '@/components/InternalNotesSection';
 import TicketFeedbackSection from '@/components/feedback/TicketFeedbackSection';
-import { hasFeedbackBeenSubmitted } from '@/data/mockFeedbackData';
 import { PageHeader } from '@/components/ui/page-header';
 import { Badge, getStatusBadgeVariant } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -133,15 +132,23 @@ export default function EmployeeTicketUpdate() {
     }
   }, [location.pathname, location.search, location.state]);
 
-  const loadTicketData = useCallback(async () => {
+  /**
+   * Load the ticket. `background: true` (work log save, 30s poll, realtime event)
+   * refreshes in place without skeletons (spec 0038 AC-21 / AC-22). Skeletons show
+   * only on the first load of a ticket.
+   */
+  const loadTicketData = useCallback(async ({ background = false } = {}) => {
     if (!numericId) return;
-    setLoading(true);
-    setErrorMessage('');
+    if (!background) setLoading(true);
+    if (!background) setErrorMessage('');
     try {
-      const details = await getTicketDetails(numericId);
+      const details = background
+        ? await getTicketDetails(numericId, { forceRefresh: true })
+        : await getTicketDetails(numericId);
+      // AC-23: server values win, except the four local only reassignment fields.
       setTicket((prev) => ({
-        ...details,
         ...(prev || {}),
+        ...details,
         timeline: details?.timeline || prev?.timeline,
         reassignmentDenyReason: prev?.reassignmentDenyReason || details?.reassignmentDenyReason,
         disapprovalReason: prev?.disapprovalReason || details?.disapprovalReason,
@@ -157,21 +164,22 @@ export default function EmployeeTicketUpdate() {
 
       // TS040: Automatically load complete customer and support conversation thread
       try {
-        setConversationLoading(true);
+        if (!background) setConversationLoading(true);
         const msgs = await getTicketMessages(numericId);
         setConversationMessages(Array.isArray(msgs) ? msgs : []);
         setConversationError('');
       } catch (cErr) {
         console.warn('Could not load real-time conversation messages:', cErr);
-        setConversationError('Unable to load customer conversation messages.');
+        if (!background) setConversationError('Unable to load customer conversation messages.');
       } finally {
-        setConversationLoading(false);
+        if (!background) setConversationLoading(false);
       }
     } catch (err) {
       const msg = err?.response?.data?.message || 'Failed to load ticket details.';
-      setErrorMessage(msg);
+      if (!background) setErrorMessage(msg);
+      else console.warn('Background ticket refresh failed:', msg);
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, [numericId, statusDraft]);
 
@@ -190,11 +198,14 @@ export default function EmployeeTicketUpdate() {
   }, [ticket?.status]);
 
   useRealtimeRefresh({
-    refresh: loadTicketData,
+    refresh: () => loadTicketData({ background: true }),
     channels: [{ name: 'ticket-updates', event: 'ticket.changed' }],
     intervalMs: 30000,
-    shouldRefresh: ({ payload }) => {
-      return (
+    // The poll has no payload and always refreshes; a realtime event refreshes
+    // only when it is about this ticket.
+    shouldRefresh: ({ source, payload }) => {
+      if (source === 'poll') return true;
+      return Boolean(
         payload &&
         (Number(payload.ticketId) === numericId || Number(payload.ticket_ID) === numericId)
       );
@@ -323,7 +334,7 @@ export default function EmployeeTicketUpdate() {
 
       setSuccessMessage(`Ticket successfully delegated to ${targetName}.`);
       setShowDelegateModal(false);
-      await loadTicketData();
+      await loadTicketData({ background: true });
     } catch (err) {
       const msg = err?.response?.data?.message || err?.message || 'Failed to delegate ticket. Ticket assignment remains unchanged.';
       setErrorMessage(msg);
@@ -412,11 +423,13 @@ export default function EmployeeTicketUpdate() {
       setRemarks('');
       setAttachedFiles([]);
       setShowStatusConfirm(false);
-      await loadTicketData();
+      await loadTicketData({ background: true });
     } catch (err) {
       // Every failed status change opens a modal explaining why.
       const notice = getActionError(err, 'Failed to update status.');
       setShowStatusConfirm(false);
+      // AC-25: return the dropdown to the saved status so nobody thinks it saved.
+      setStatusDraft(ticket.status);
       setActionError(notice);
       setErrorMessage(notice.inline);
     } finally {
@@ -453,7 +466,7 @@ export default function EmployeeTicketUpdate() {
       await updateEmployeeTicket(numericId, formData);
       setSuccessMessage('Internal note added successfully!');
       setTimeout(() => setSuccessMessage(''), 4000);
-      await loadTicketData();
+      await loadTicketData({ background: true });
     } catch (err) {
       // Revert optimistic note
       setTicket((prev) => prev ? {
@@ -1142,7 +1155,7 @@ export default function EmployeeTicketUpdate() {
                       setWorkLogDate(new Date().toISOString().split('T')[0]);
                       setWorkLogSuccess('Work log saved successfully.');
                       setTimeout(() => setWorkLogSuccess(''), 3000);
-                      await loadTicketData();
+                      await loadTicketData({ background: true });
                     } catch (err) {
                       setWorkLogError(err?.response?.data?.message || 'Failed to save work log.');
                     } finally {
@@ -1257,7 +1270,7 @@ export default function EmployeeTicketUpdate() {
             </div>
 
             {/* Customer Satisfaction Feedback */}
-            {(ticket.status === 'Resolved' || ticket.status === 'Closed' || hasFeedbackBeenSubmitted(ticket.id || ticket.ticket_ID)) && (
+            {(ticket.status === 'Resolved' || ticket.status === 'Closed') && (
               <div className="rounded-xl border border-border bg-card p-6 shadow-xs">
                 <TicketFeedbackSection ticket={ticket} readOnly={true} />
               </div>

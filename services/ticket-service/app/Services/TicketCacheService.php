@@ -10,9 +10,16 @@ class TicketCacheService
 {
     /**
      * Clear all cached ticket statistics, dashboard feeds, and form options.
+     *
+     * Pass the changed ticket's id to also delete that customer's dashboard counts key
+     * directly (spec 0038 AC-13), which works on any cache driver, not only Redis SCAN.
      */
-    public function clearTicketCaches(): void
+    public function clearTicketCaches(?int $ticketId = null): void
     {
+        if ($ticketId !== null) {
+            $this->forgetCustomerDashboardForTicket($ticketId);
+        }
+
         try {
             Cache::forget('cs_dashboard_counts');
             Cache::forget('ticket_form_options_cache');
@@ -75,6 +82,24 @@ class TicketCacheService
             }
         } catch (\Exception $e) {
             Log::warning('Redis cache clearing failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Direct key delete (never KEYS *) of the ticket owner's customer dashboard counts.
+     */
+    public function forgetCustomerDashboardForTicket(int $ticketId): void
+    {
+        try {
+            $createdBy = \Illuminate\Support\Facades\DB::table('tickets')
+                ->where('ticket_ID', $ticketId)
+                ->where('is_internal', false)
+                ->value('created_by');
+            if ($createdBy) {
+                Cache::forget("customer_dashboard_counts_{$createdBy}");
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Customer dashboard cache clear failed: ' . $e->getMessage());
         }
     }
 

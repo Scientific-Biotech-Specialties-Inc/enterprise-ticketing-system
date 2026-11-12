@@ -57,7 +57,7 @@ describe('ProofCompletionModal re-upload blocked by the Transition Matrix', () =
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(screen.getByText('Resolved Status Blocked')).toBeInTheDocument();
     expect(screen.getByText(
-      'The Resolved status has been blocked by the Super Admin, so your changes were not saved. Please contact your Super Admin for assistance.'
+      "Your administrator's transition rules don't allow In Progress to Resolved, so your changes were not saved."
     )).toBeInTheDocument();
   });
 

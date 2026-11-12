@@ -11,7 +11,6 @@ import ReassignmentModal from '@/components/employee/ReassignmentModal';
 import { isReassignmentDenied } from '@/utils/reassignmentUtils';
 import { getTicketDetails } from '@/services/ticketService';
 import TicketFeedbackSection from '@/components/feedback/TicketFeedbackSection';
-import { hasFeedbackBeenSubmitted } from '@/data/mockFeedbackData';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 
 export default function TicketInfoModal({ ticket, onClose, onReassignSuccess }) {
@@ -327,7 +326,7 @@ export default function TicketInfoModal({ ticket, onClose, onReassignSuccess }) 
           )}
 
           {/* Customer Satisfaction Feedback */}
-          {(currentTicket.status === 'Resolved' || currentTicket.status === 'Closed' || hasFeedbackBeenSubmitted(currentTicket.id || currentTicket.ticket_ID)) && (
+          {(currentTicket.status === 'Resolved' || currentTicket.status === 'Closed') && (
             <div className="pt-2">
               <TicketFeedbackSection ticket={currentTicket} readOnly={true} />
             </div>

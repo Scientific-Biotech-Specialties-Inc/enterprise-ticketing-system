@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { downloadAttachment } from '@/utils/attachmentFiles';
+import MessageImageAttachment from '@/components/messaging/MessageImageAttachment';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { MessageCircle, Send, Users, User, AlertCircle, MoreVertical, Edit2, Trash2, Archive, RotateCcw, X, Info, History, Sparkles, Bot, Clock, Paperclip, FileText, Download, ShieldAlert, Loader2, Menu } from 'lucide-react';
@@ -136,6 +137,9 @@ export default function MessagingPage() {
   const [csFilter, setCsFilter] = useState('external');
   const [conversationTab, setConversationTab] = useState('active'); // 'active' | 'archived'
   const [reopening, setReopening] = useState(false);
+  // Spec 0038 AC-19: tell the user when a deep linked conversation is archived or missing.
+  const [deepLinkNotice, setDeepLinkNotice] = useState(null);
+  const handledDeepLinkRef = useRef(null);
 
   // Live presence heartbeat for currently active ticket thread (suppresses in-app notification alerts for viewer)
   useEffect(() => {
@@ -291,8 +295,11 @@ export default function MessagingPage() {
           setTickets(list);
 
           // Auto-select if initialTicketId is in the list
-          if (initialTicketId && !isBackgroundRefresh) {
-            const numericId = Number(initialTicketId);
+          // Handle each deep link target once, even when the page is already mounted.
+          if (initialTicketId && handledDeepLinkRef.current !== String(initialTicketId)) {
+            handledDeepLinkRef.current = String(initialTicketId);
+            setDeepLinkNotice(null);
+            const numericId = Number(String(initialTicketId).replace(/\D/g, ''));
             const found = list.find(t => {
               const ticketId = t.ticket_ID || t.id;
               const numericTicketId = Number(String(ticketId).replace(/\D/g, ''));
@@ -322,10 +329,16 @@ export default function MessagingPage() {
                   }
                   setTickets(prev => [singleTicket, ...prev.filter(t => (t.ticket_ID || t.id) !== sId)]);
                   setSelectedContactId(sId);
+                  if (statusNormalized === 'closed' || statusNormalized === 'resolved' || statusNormalized.includes('discard')) {
+                    setDeepLinkNotice('This conversation is archived');
+                  }
                   window.history.replaceState({}, document.title);
+                } else if (active) {
+                  setDeepLinkNotice('Conversation not found');
                 }
               } catch (e) {
                 console.warn('Could not load specific ticket for messaging deep link', e);
+                if (active) setDeepLinkNotice('Conversation not found');
               }
             }
           }
@@ -1001,6 +1014,14 @@ export default function MessagingPage() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)] w-full min-h-[500px]">
+      {deepLinkNotice && (
+        <div role="status" className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-medium text-amber-900">
+          <span>{deepLinkNotice}</span>
+          <button type="button" onClick={() => setDeepLinkNotice(null)} className="font-semibold text-amber-800 hover:underline cursor-pointer">
+            Dismiss
+          </button>
+        </div>
+      )}
       <div className="relative flex flex-1 bg-card rounded-xl shadow-xs border border-border overflow-hidden min-h-0">
         {/* Mobile backdrop for conversation list drawer */}
         {mobileListOpen && (
@@ -1387,39 +1408,13 @@ export default function MessagingPage() {
 
                                         if (isImageAtt && fileUrl) {
                                           return (
-                                            <div key={attIdx} className="space-y-1.5 text-left">
-                                              <div className={`overflow-hidden rounded-xl border max-w-[280px] sm:max-w-[340px] ${
-                                                isMine ? 'border-white/20 bg-black/10' : 'border-gray-200 bg-gray-50'
-                                              }`}>
-                                                <img
-                                                  src={fileUrl}
-                                                  alt={attName}
-                                                  loading="lazy"
-                                                  className="w-full max-h-[260px] object-contain bg-white block"
-                                                />
-                                                <div className={`flex items-center justify-between gap-2 px-2.5 py-1.5 text-[11px] ${
-                                                  isMine ? 'bg-white/10 text-white' : 'bg-gray-50 text-slate-800 border-t border-gray-200'
-                                                }`}>
-                                                  <div className="min-w-0 flex-1">
-                                                    <p className="truncate font-semibold leading-tight">{attName}</p>
-                                                    {formattedSize && (
-                                                      <p className={`text-[10px] ${isMine ? 'text-white/70' : 'text-slate-400'}`}>
-                                                        {formattedSize}
-                                                      </p>
-                                                    )}
-                                                  </div>
-                                                  <a
-                                                    href={fileUrl}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    className="shrink-0 opacity-80 hover:opacity-100 p-1 rounded"
-                                                    title={`Download ${attName}`}
-                                                  >
-                                                    <Download size={14} />
-                                                  </a>
-                                                </div>
-                                              </div>
-                                            </div>
+                                            <MessageImageAttachment
+                                              key={attIdx}
+                                              fileUrl={fileUrl}
+                                              fileName={attName}
+                                              formattedSize={formattedSize}
+                                              isMine={isMine}
+                                            />
                                           );
                                         }
 

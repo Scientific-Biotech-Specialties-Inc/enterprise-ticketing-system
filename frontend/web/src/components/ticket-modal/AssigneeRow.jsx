@@ -3,7 +3,8 @@ import { MessageCircle, Bell, ArrowUpRight } from 'lucide-react';
 
 /**
  * AssigneeRow component
- * Displays: Avatar initials, Name + Department, Updated <time> PHT, optional Message and Remind buttons
+ * Displays: Avatar initials, Name + Department, status line (default "Assigned technician"),
+ * Updated <time> PHT, optional Message and Remind buttons
  */
 export default function AssigneeRow({
   name,
@@ -11,6 +12,7 @@ export default function AssigneeRow({
   initials,
   department,
   updatedText,
+  statusText = '',
   onMessage = null,
   messageLabel = null,
   onRemind = null,
@@ -42,7 +44,7 @@ export default function AssigneeRow({
             )}
           </h4>
           <p className="text-xs text-[#5A6178] truncate">
-            Assigned technician{updatedText ? ` · ${updatedText}` : ''}
+            {statusText || 'Assigned technician'}{updatedText ? ` · ${updatedText}` : ''}
           </p>
         </div>
       </div>

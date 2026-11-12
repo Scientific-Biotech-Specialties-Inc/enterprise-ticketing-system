@@ -4,10 +4,11 @@ import { useAuth } from '@/context/AuthContext';
 import { Bot, Send, Paperclip, ChevronDown, ChevronUp, X, CheckCircle, CheckCircle2, AlertTriangle, Plus, MessageSquare, Trash2, ArrowLeft, Clock, Menu } from 'lucide-react';
 import axiosInstance from '@/api/axiosInstance';
 import { AI_API_URL } from '@/config/api.config';
-import { getTicketFormOptions, createTicket, getCustomerTickets, saveTicketDraft } from '@/services/ticketService';
+import { getTicketFormOptions, createTicket, getCustomerTickets, saveTicketDraft, classifyDepartment } from '@/services/ticketService';
 import TitleCasingModal from '@/components/TitleCasingModal';
 import DuplicateTicketModal from '@/components/DuplicateTicketModal';
 import { formatProperTitleCase, needsProperCasing } from '@/utils/titleCaseUtils';
+import { resolveRegisteredMachine, formatMachineLabel, buildEscalationDescription } from '@/utils/machineMatching';
 import SkeletonLoader from '@/components/SkeletonLoader.jsx';
 
 const formatTime = (iso) => {
@@ -362,6 +363,10 @@ function TicketReviewModal({ isOpen, data, machines = [], onClose, onSubmit, onS
   const [showTitleCasingModal, setShowTitleCasingModal] = useState(false);
   const [isTitleManuallyEdited, setIsTitleManuallyEdited] = useState(false);
   const [submitError, setSubmitError] = useState(null);
+  const [machineError, setMachineError] = useState(null);
+  // Spec 0012 department classification: Service tickets require a machine,
+  // IT tickets do not. Defaults to required until the classification returns.
+  const [requiresEquipment, setRequiresEquipment] = useState(true);
 
   useEffect(() => {
     if (data) {
@@ -372,10 +377,33 @@ function TicketReviewModal({ isOpen, data, machines = [], onClose, onSubmit, onS
       setShowTitleCasingModal(false);
       setIsTitleManuallyEdited(false);
       setSubmitError(null);
+      setMachineError(null);
     }
   }, [data, isOpen]);
 
+  useEffect(() => {
+    if (!isOpen || !data) return undefined;
+    let cancelled = false;
+    setRequiresEquipment(true);
+    classifyDepartment(data.problemSummary || '', data.conversationSummary || '')
+      .then((result) => {
+        if (!cancelled && result && result.requires_equipment === false) setRequiresEquipment(false);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [data, isOpen]);
+
   if (!isOpen) return null;
+
+  /** AC-3: a Service ticket cannot be submitted without a registered machine. */
+  const validateMachine = () => {
+    if (requiresEquipment && !form.machine_ID) {
+      setMachineError('Select your machine before submitting this ticket.');
+      return false;
+    }
+    setMachineError(null);
+    return true;
+  };
 
   const handleSaveDraft = async () => {
     if (isSubmitting || isSavingDraft || !onSaveDraft) return;
@@ -392,6 +420,7 @@ function TicketReviewModal({ isOpen, data, machines = [], onClose, onSubmit, onS
 
   const handleSubmit = async () => {
     if (isSubmitting || isSavingDraft) return;
+    if (!validateMachine()) return;
 
     const summaryTrimmed = (form.problemSummary || '').trim();
     // Only prompt for proper casing if the user manually edited the title
@@ -461,37 +490,39 @@ function TicketReviewModal({ isOpen, data, machines = [], onClose, onSubmit, onS
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-                Machine / Equipment <span className="text-red-500">*</span>
+                Machine / Equipment {requiresEquipment ? <span className="text-red-500">*</span> : <span className="normal-case font-normal text-gray-400">(optional)</span>}
               </label>
-              <input
-                type="text"
-                list="review-machines-list"
-                value={form.machineModel || ''}
+              <select
+                aria-label="Machine / Equipment"
+                aria-invalid={Boolean(machineError)}
+                value={form.machine_ID ? String(form.machine_ID) : ''}
                 onChange={(e) => {
-                  const val = e.target.value;
-                  const matched = machines.find(m => 
-                    m.machine_name?.toLowerCase() === val.toLowerCase() || 
-                    m.model?.toLowerCase() === val.toLowerCase()
-                  );
-                  setForm({ 
-                    ...form, 
-                    machineModel: val,
-                    machine_ID: matched ? matched.machine_ID : form.machine_ID 
+                  const picked = machines.find(m => String(m.machine_ID) === e.target.value) || null;
+                  setForm({
+                    ...form,
+                    machine_ID: picked ? picked.machine_ID : null,
+                    machineModel: picked ? formatMachineLabel(picked) : '',
                   });
+                  if (picked) setMachineError(null);
                 }}
-                placeholder="Select or enter machine..."
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-transparent focus:ring-2 focus:ring-[#252578]"
-              />
-              <datalist id="review-machines-list">
+                className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-transparent focus:ring-2 focus:ring-[#252578] bg-white ${machineError ? 'border-red-400' : 'border-gray-200'}`}
+              >
+                <option value="">Select your machine</option>
                 {machines.map((m) => (
-                  <option key={m.machine_ID} value={m.machine_name}>
-                    {m.serial_number ? `${m.machine_name} (${m.serial_number})` : m.machine_name}
+                  <option key={m.machine_ID} value={String(m.machine_ID)}>
+                    {formatMachineLabel(m)}
                   </option>
                 ))}
-              </datalist>
-              <p className="text-[11px] text-gray-400 mt-1">
-                Select the specific machine experiencing the problem. Tickets are tracked per machine.
-              </p>
+              </select>
+              {machineError ? (
+                <p role="alert" className="text-[11px] text-red-600 mt-1">{machineError}</p>
+              ) : (
+                <p className="text-[11px] text-gray-400 mt-1">
+                  {machines.length === 0
+                    ? 'No registered machines were found on your account.'
+                    : 'Select the specific machine experiencing the problem. Tickets are tracked per machine.'}
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Company Name</label>
@@ -1389,73 +1420,23 @@ function AISupportPage() {
     const userOrg = user?.company_name || user?.organization || user?.client_name || user?.company ||
       (user?.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : '') || 'Customer Organization';
 
-    // ─── DYNAMIC MACHINE MODEL RESOLUTION ─────────────────────
-    let model = escData?.machineModel;
-    let matchedMachineId = escData?.machine_ID || null;
-    let isExplicitMachine = false;
+    // ─── REGISTERED MACHINE RESOLUTION (spec 0038, AC-1 / AC-2) ───
+    // The machine comes only from the customer's registered machines. Gemini's
+    // machine string (`machine` or `machineModel`) is matched against the same
+    // catalog; it is never used as a machine name on its own.
+    const registeredMachines = ticketOptions?.machines || [];
+    const geminiMachine = escData?.machineModel || escData?.machine || '';
+    const matchedMachine = resolveRegisteredMachine(registeredMachines, [...userMsgs, geminiMachine]);
+    const matchedMachineId = matchedMachine ? matchedMachine.machine_ID : null;
+    const model = matchedMachine ? formatMachineLabel(matchedMachine) : '';
 
-    if (model && model.trim() !== '' && model.toLowerCase() !== 'unknown machine' && model.toLowerCase() !== 'general equipment') {
-      model = cleanProblemText(model.trim());
-      isExplicitMachine = true;
-    } else {
-      model = null;
-    }
-
-    // Match chat messages against database equipment list
-    if (!model && ticketOptions?.machines && ticketOptions.machines.length > 0) {
-      const combinedChatText = userMsgs.join(' ').toLowerCase();
-      const matchedMachine = ticketOptions.machines.find(m => {
-        const nameMatch = m.machine_name && combinedChatText.includes(m.machine_name.toLowerCase());
-        const modelMatch = m.model && combinedChatText.includes(m.model.toLowerCase());
-        const brandMatch = m.brand && combinedChatText.includes(m.brand.toLowerCase());
-        return nameMatch || modelMatch || brandMatch;
-      });
-
-      if (matchedMachine) {
-        matchedMachineId = matchedMachine.machine_ID;
-        const brandStr = matchedMachine.brand ? `${matchedMachine.brand} ` : '';
-        const modelStr = matchedMachine.model ? `${matchedMachine.model} ` : '';
-        model = `${brandStr}${modelStr}(${matchedMachine.machine_name})`.trim();
-        isExplicitMachine = true;
-      }
-    }
-
-    // Fallback to user's chat message answers if no database match
-    if (!model) {
-      if (userMsgs.length >= 2 && userMsgs[1].length < 80) {
-        model = cleanProblemText(`${userMsgs[1]} ${userMsgs[0]}`);
-        isExplicitMachine = true;
-      } else if (userMsgs.length >= 1 && userMsgs[0].length < 80) {
-        model = cleanProblemText(userMsgs[0]);
-        isExplicitMachine = true;
-      } else if (ticketOptions?.machines && ticketOptions.machines.length > 0) {
-        const first = ticketOptions.machines[0];
-        matchedMachineId = first.machine_ID;
-        model = `${first.brand || ''} ${first.model || ''} (${first.machine_name})`.trim();
-        isExplicitMachine = false;
-      } else {
-        model = 'Equipment Support Request';
-        isExplicitMachine = false;
-      }
-    }
-
-    let convSummary = escData?.conversationSummary;
-    if (convSummary && typeof convSummary === 'string') {
-      convSummary = convSummary
-        .replace(/(?:\b|\n)(?:\d+[\.\)]|Step \d+:|-|\*)\s+[^\n]+/gi, '')
-        .replace(/\n{2,}/g, '\n\n')
-        .trim();
-    }
-
-    if (!convSummary || convSummary.trim() === '') {
-      const userProblemDetails = userMsgs.length > 0 ? userMsgs.join('. ') : 'Issue reported via AI Assistant.';
-      convSummary = `Customer reported an issue regarding "${convoTitle}". Machine: ${model}. Problem details: ${userProblemDetails}. Automated troubleshooting was attempted but the issue persists. Ticket escalated to technical team for follow-up.`;
-    }
+    // AC-4: no Machine line, problem details listed once.
+    const convSummary = buildEscalationDescription(convoTitle, userMsgs);
 
     return {
       machineModel: model,
       machine_ID: matchedMachineId,
-      isExplicitMachine,
+      isExplicitMachine: Boolean(matchedMachine),
       companyName: userOrg,
       purchaseDate: new Date().toISOString().split('T')[0],
       problemSummary: convoTitle,
@@ -1467,17 +1448,8 @@ function AISupportPage() {
 
   const handleCreateTicket = useCallback(async () => {
     const review = generateRealReviewData(escalationTicketData);
-    let targetMachineId = review.machine_ID || null;
-    const targetModel = (review.machineModel || '').trim().toLowerCase();
-
-    if (!targetMachineId && ticketOptions?.machines && targetModel) {
-      const found = ticketOptions.machines.find(m =>
-        m.machine_name?.toLowerCase().includes(targetModel) ||
-        m.model?.toLowerCase().includes(targetModel) ||
-        targetModel.includes(m.machine_name?.toLowerCase())
-      );
-      if (found) targetMachineId = found.machine_ID;
-    }
+    // Machine id comes only from the registered machine resolution (AC-1 / AC-2).
+    const targetMachineId = review.machine_ID || null;
 
     let targetCategoryId = review.problem_category_ID || null;
     const targetCategory = (review.category || '').trim().toLowerCase();
@@ -1517,21 +1489,13 @@ function AISupportPage() {
     try {
       const options = await getTicketFormOptions().catch(() => null);
 
-      let matchedMachine = null;
-      let machineId = 1;
-      if (options?.machines && options.machines.length > 0) {
-        matchedMachine = options.machines.find(m =>
-          (m.machine_name && formData.machineModel && m.machine_name.toLowerCase().trim() === formData.machineModel.toLowerCase().trim()) ||
-          (m.machine_name && formData.machineModel && formData.machineModel.toLowerCase().includes(m.machine_name.toLowerCase())) ||
-          (m.machine_name && formData.machineModel && m.machine_name.toLowerCase().includes(formData.machineModel.toLowerCase())) ||
-          (m.model && formData.machineModel && formData.machineModel.toLowerCase().includes(m.model.toLowerCase()))
-        );
-        if (matchedMachine) {
-          machineId = matchedMachine.machine_ID;
-        } else {
-          machineId = formData.machine_ID || options.machines[0].machine_ID;
-        }
-      }
+      // The machine is whatever registered machine the customer picked in the
+      // review modal (spec 0038 AC-3). No name matching, no first machine fallback.
+      const registered = options?.machines || ticketOptions?.machines || [];
+      const matchedMachine = formData.machine_ID
+        ? registered.find(m => String(m.machine_ID) === String(formData.machine_ID)) || null
+        : null;
+      const machineId = matchedMachine ? matchedMachine.machine_ID : null;
 
       // Check ongoing tickets for this user
       const existingTickets = await getCustomerTickets({ createdBy: currentUserId || 1, forceRefresh: true }).catch(() => []);
@@ -1592,7 +1556,7 @@ function AISupportPage() {
 
       const payload = new FormData();
       payload.append('title', ticketTitle);
-      payload.append('machine_ID', machineId);
+      if (machineId) payload.append('machine_ID', machineId);
       payload.append('problem_category_ID', categoryId);
       payload.append('priority_ID', priorityId);
       payload.append('description', formData.conversationSummary || formData.problemSummary || 'Submitted via AI Support Assistant.');
@@ -1664,21 +1628,13 @@ function AISupportPage() {
     try {
       const options = ticketOptions || await getTicketFormOptions().catch(() => null);
 
-      let matchedMachine = null;
-      let machineId = 1;
-      if (options?.machines && options.machines.length > 0) {
-        matchedMachine = options.machines.find(m =>
-          (m.machine_name && formData.machineModel && m.machine_name.toLowerCase().trim() === formData.machineModel.toLowerCase().trim()) ||
-          (m.machine_name && formData.machineModel && formData.machineModel.toLowerCase().includes(m.machine_name.toLowerCase())) ||
-          (m.machine_name && formData.machineModel && m.machine_name.toLowerCase().includes(formData.machineModel.toLowerCase())) ||
-          (m.model && formData.machineModel && formData.machineModel.toLowerCase().includes(m.model.toLowerCase()))
-        );
-        if (matchedMachine) {
-          machineId = matchedMachine.machine_ID;
-        } else {
-          machineId = formData.machine_ID || options.machines[0].machine_ID;
-        }
-      }
+      // The machine is whatever registered machine the customer picked in the
+      // review modal (spec 0038 AC-3). No name matching, no first machine fallback.
+      const registered = options?.machines || ticketOptions?.machines || [];
+      const matchedMachine = formData.machine_ID
+        ? registered.find(m => String(m.machine_ID) === String(formData.machine_ID)) || null
+        : null;
+      const machineId = matchedMachine ? matchedMachine.machine_ID : null;
 
       // Check ongoing tickets for this user for duplicate detection
       const existingTickets = await getCustomerTickets({ createdBy: currentUserId || 1, forceRefresh: true }).catch(() => []);

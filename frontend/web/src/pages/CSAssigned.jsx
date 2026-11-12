@@ -892,6 +892,11 @@ export default function CSAssigned() {
               // Close the modal immediately after a generic status/reassignment update
               setModal(null);
             } catch (err) {
+              // Spec 0038 AC-32: let the modal show a refused proof approval instead of hiding it.
+              if (['PROOF_NOT_VIEWED', 'PROOF_CHECK_UNAVAILABLE'].includes(err?.response?.data?.code)) {
+                loadLiveData({ forceRefresh: true, source: 'poll' });
+                throw err;
+              }
               console.error('Failed to update ticket status on backend:', err);
             }
 

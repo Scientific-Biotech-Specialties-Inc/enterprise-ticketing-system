@@ -254,15 +254,15 @@ export default function EmployeeDashboard() {
     });
   }, [assignedTickets, search, statusFilter, priorityFilter]);
 
-  // Attention-needed items for Assigned section
+  // Attention-needed items for Assigned section (spec 0038 AC-20): SLA problems only.
+  // Not yet accepted or Escalated tickets without an SLA risk are not listed.
   const assignedAttentionItems = useMemo(() => {
     return assignedTickets.filter((t) => {
       const risk = evaluateSlaRisk(t);
-      const needsAccept = !isTicketAccepted(t);
-      const isUrgent = risk === 'breached' || risk === 'at_risk' || needsAccept || t.status === 'Escalated';
-      return isUrgent && !['Resolved', 'Closed', 'Discarded', 'Discarded by Customer'].includes(t.status);
+      const hasSlaProblem = risk === 'breached' || risk === 'at_risk';
+      return hasSlaProblem && !['Resolved', 'Closed', 'Discarded', 'Discarded by Customer'].includes(t.status);
     }).slice(0, 4);
-  }, [assignedTickets, evaluateSlaRisk, isTicketAccepted]);
+  }, [assignedTickets, evaluateSlaRisk]);
 
   // Attention-needed items for Requestor section
   const requestorAttentionItems = useMemo(() => {

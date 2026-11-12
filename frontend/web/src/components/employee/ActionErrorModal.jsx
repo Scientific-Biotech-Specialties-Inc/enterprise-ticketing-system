@@ -20,11 +20,24 @@ export function getActionError(err, fallbackMessage = 'Something went wrong. Ple
 
   if (data?.code === 'INVALID_TICKET_TRANSITION') {
     const toStatus = data.to_status || 'Requested';
+    // Spec 0038 AC-25: name the blocked move and the statuses that are allowed.
+    const fromStatus = data.from_status ? String(data.from_status).replace(/\s*\((?:Employee|CS)-owned\)/i, '') : '';
+    const allowed = Array.isArray(data.allowed_statuses)
+      ? data.allowed_statuses.filter(Boolean).map((s) => String(s).replace(/\s*\((?:Employee|CS)-owned\)/i, ''))
+      : [];
+    const allowedText = allowed.length > 0
+      ? ` Allowed next statuses: ${[...new Set(allowed)].join(', ')}.`
+      : '';
+    const message = fromStatus
+      ? `Your administrator's transition rules don't allow ${fromStatus} to ${toStatus}, so your changes were not saved.${allowedText}`
+      : `The ${toStatus} status has been blocked by the Super Admin, so your changes were not saved. Please contact your Super Admin for assistance.`;
     return {
       kind: 'blocked',
       title: `${toStatus} Status Blocked`,
-      message: `The ${toStatus} status has been blocked by the Super Admin, so your changes were not saved. Please contact your Super Admin for assistance.`,
-      inline: `Not saved: the ${toStatus} status has been blocked by the Super Admin.`,
+      message,
+      inline: fromStatus
+        ? `Not saved: ${fromStatus} to ${toStatus} is not allowed by the transition rules.`
+        : `Not saved: the ${toStatus} status has been blocked by the Super Admin.`,
     };
   }
 

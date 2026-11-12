@@ -40,6 +40,23 @@ class TicketDashboardService
     /**
      * Get summary metrics and recent tickets for the customer dashboard with optional combinable filters (TS021).
      */
+    /**
+     * Customer dashboard card for a status name (spec 0038 AC-12), or null when the
+     * status is excluded (Discarded). Every other status lands in exactly one card.
+     */
+    public static function customerSummaryBucket(string $statusName): ?string
+    {
+        $norm = strtolower(trim($statusName));
+        return match ($norm) {
+            'open', 'pending', 'pending assignment' => 'open',
+            'in progress', 'escalated', 'pending evaluation', 'reopened', 'on hold' => 'in_progress',
+            'resolved' => 'resolved',
+            'closed' => 'closed',
+            'discarded', 'discarded by customer', 'cancelled' => null,
+            default => 'open',
+        };
+    }
+
     public function getCustomerDashboard(int $createdBy, int $limit, array $filters = []): array
     {
         $hasFilters = !empty(array_filter($filters, fn($v) => $v !== null && $v !== ''));
@@ -64,9 +81,9 @@ class TicketDashboardService
             ];
 
             foreach ($statusCounts as $row) {
-                $key = str_replace(' ', '_', strtolower($row->status_name));
-                if (array_key_exists($key, $sum)) {
-                    $sum[$key] = (int) $row->total;
+                $key = self::customerSummaryBucket((string) $row->status_name);
+                if ($key !== null) {
+                    $sum[$key] += (int) $row->total;
                 }
             }
             return $sum;
@@ -80,10 +97,19 @@ class TicketDashboardService
                 ->join('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
                 ->leftJoin('ticket_priorities as tp', 'tp.priority_ID', '=', 't.priority_ID')
                 ->leftJoin('employees as e', 'e.emp_id', '=', 't.assigned_to')
-                ->leftJoin('ticket_assignments as ta', function ($join) {
-                    $join->on('ta.ticket_ID', '=', 't.ticket_ID')
-                         ->whereNull('ta.completed_at');
-                })
+                // Spec 0038 AC-13: join only the first active assignment per ticket, so a
+                // ticket with several assignees appears once in the recent list.
+                ->leftJoinSub(
+                    DB::table('ticket_assignments')
+                        ->whereNull('completed_at')
+                        ->select('ticket_ID', DB::raw('MIN(assignment_ID) as first_assignment_ID'))
+                        ->groupBy('ticket_ID'),
+                    'ta_first',
+                    'ta_first.ticket_ID',
+                    '=',
+                    't.ticket_ID'
+                )
+                ->leftJoin('ticket_assignments as ta', 'ta.assignment_ID', '=', 'ta_first.first_assignment_ID')
                 ->leftJoin('employees as e_ta', 'e_ta.emp_id', '=', 'ta.employee_ID')
                 ->select(
                     't.ticket_ID',
@@ -150,10 +176,10 @@ class TicketDashboardService
             }
 
             return $query->orderByDesc('t.created_at')
-                ->limit($limit * 2)
+                ->orderByDesc('t.ticket_ID')
+                ->limit($limit)
                 ->get()
                 ->unique('ticket_ID')
-                ->take($limit)
                 ->map(fn ($row) => [
                     'id' => TicketNumberGeneratorService::refFor($row->ticket_ID, $row->ticket_number ?? null),
                     'ticket_ID' => $row->ticket_ID,
@@ -597,6 +623,8 @@ class TicketDashboardService
                         DB::raw("CONCAT(e.first_name, ' ', e.last_name) as employee_name"),
                         'e.department as employee_department'
                     )
+                    ->orderBy('ta.assigned_at')
+                    ->orderBy('ta.assignment_ID')
                     ->get()
                     ->groupBy('ticket_ID');
 
@@ -631,6 +659,9 @@ class TicketDashboardService
                         'assignment_status' => $a->assignment_status ?: 'assigned',
                         'assigned_at' => $a->assigned_at ? Carbon::parse($a->assigned_at)->toIso8601String() : null,
                         'accepted_at' => $a->accepted_at ? Carbon::parse($a->accepted_at)->toIso8601String() : null,
+                        // Spec 0038 AC-7 / AC-8: per assignee activity and reminder cooldown.
+                        'completed_at' => $a->completed_at ? Carbon::parse($a->completed_at)->toIso8601String() : null,
+                        'last_reminder_sent_at' => !empty($a->last_reminder_sent_at) ? Carbon::parse($a->last_reminder_sent_at)->toIso8601String() : null,
                     ];
                 })->values()->all();
 

@@ -218,12 +218,20 @@ class AuthController extends Controller
                     $techRole = 'Employee';
                 }
 
+                // Map the Auth Module branch to the local branch by name (ids are numbered independently).
                 $branch = 'Main Branch';
                 $branchId = 1;
-                $branchName = $u['branch'] ?? ($u['branch_details']['name'] ?? '');
-                if (!empty($branchName) && stripos($branchName, 'north') !== false) {
-                    $branch = 'North Luzon Hub';
-                    $branchId = 2;
+                $branchName = trim((string) ($u['branch'] ?? ($u['branch_details']['name'] ?? '')));
+                if ($branchName !== '') {
+                    try {
+                        $localBranch = DB::table('branches')->whereRaw('LOWER(name) = ?', [strtolower($branchName)])->first(['id', 'name']);
+                        if ($localBranch) {
+                            $branch = $localBranch->name;
+                            $branchId = (int) $localBranch->id;
+                        }
+                    } catch (\Throwable $e) {
+                        // branches table unavailable: keep the default branch rather than skip this user
+                    }
                 }
 
                 $existing = DB::table('employees')->where('email', $email)->first();

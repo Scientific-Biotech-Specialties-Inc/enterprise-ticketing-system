@@ -183,6 +183,47 @@ export const getAssigneeInfo = (ticket, employees = []) => {
 };
 
 /**
+ * Every active assignee of a ticket, in assignment order (spec 0038 AC-7 / AC-10).
+ * Active means `completed_at` is empty and the assignment status is `assigned`
+ * or `accepted`. Returns [] when there are none, so callers can keep the
+ * single "None assigned" row (AC-11).
+ */
+export const getAssigneeList = (ticket) => {
+  const rows = Array.isArray(ticket?.assigned_employees) ? ticket.assigned_employees : [];
+  return rows
+    .filter((e) => {
+      if (!e || typeof e !== 'object') return false;
+      if (e.completed_at) return false;
+      const status = String(e.assignment_status || 'assigned').toLowerCase();
+      return status === 'assigned' || status === 'accepted';
+    })
+    .map((e) => {
+      const name = e.name || e.full_name || 'Unnamed employee';
+      const status = String(e.assignment_status || 'assigned').toLowerCase();
+      return {
+        id: e.id ?? e.emp_id ?? e.employee_id ?? null,
+        name,
+        firstName: name.split(' ')[0],
+        department: e.department || ticket?.department || 'Support Department',
+        isAccepted: status === 'accepted' || e.accepted === true,
+        lastReminderSentAt: e.last_reminder_sent_at || null,
+      };
+    });
+};
+
+const EMPLOYEE_PORTAL_PREFIXES = ['cs-manager', 'service-manager', 'it-manager', 'cs', 'employee'];
+
+/**
+ * Messages route for the portal you are in (spec 0038 AC-17 / AC-18).
+ * `pathname` must be the router relative path (`useLocation().pathname`), so the
+ * `/ticketing/` basename never breaks the match. Customers get `/messages`.
+ */
+export const getMessagesPath = (pathname = '') => {
+  const first = String(pathname).split('/').filter(Boolean)[0] || '';
+  return EMPLOYEE_PORTAL_PREFIXES.includes(first) ? `/${first}/messages` : '/messages';
+};
+
+/**
  * Auto-generate chronological timeline events for Technician View
  * Never empty; sorted most recent first.
  */

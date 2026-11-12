@@ -25,6 +25,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { PersistentBanner } from '@/components/ui/alert-banner';
+import { resolveRegisteredMachine } from '@/utils/machineMatching';
 import { useToast } from '@/context/ToastContext';
 import {
   ArrowLeft,
@@ -94,22 +95,9 @@ export default function TicketCreation() {
       const exists = machineList.some((m) => Number(m.machine_ID) === numericVal);
       if (exists) return numericVal;
     }
-    const search = String(val).trim().toLowerCase();
-    if (!search) return '';
-    const matched = machineList.find((m) => {
-      const name = (m.machine_name || '').toLowerCase();
-      const model = (m.model || '').toLowerCase();
-      const brand = (m.brand || '').toLowerCase();
-      const serial = (m.serial_number || '').toLowerCase();
-      return (
-        name === search ||
-        model === search ||
-        (name && search.includes(name)) ||
-        (model && search.includes(model)) ||
-        (brand && search.includes(brand)) ||
-        (serial && search.includes(serial))
-      );
-    });
+    // Spec 0038 AC-1: a machine string from the AI flow only links one of the customer's
+    // registered machines by exact serial, then model, then name. A brand never counts.
+    const matched = resolveRegisteredMachine(machineList, [String(val)]);
     return matched ? matched.machine_ID : '';
   }, []);
 

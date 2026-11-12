@@ -14,6 +14,7 @@ import {
   Check,
   ShieldCheck,
   Lock,
+  Loader2,
 } from 'lucide-react';
 import { getCustomerTicketContext } from '@/services/ticketService';
 import { formatDisplayDate } from '@/utils/dateUtils';
@@ -33,7 +34,7 @@ export default function CustomerInfoPanel({
 }) {
   const [loading, setLoading] = useState(false);
   const [context, setContext] = useState(null);
-  const [isCachedFallback, setIsCachedFallback] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [copiedSerial, setCopiedSerial] = useState(false);
 
@@ -65,45 +66,20 @@ export default function CustomerInfoPanel({
       const res = await getCustomerTicketContext(ticketId);
       if (res && res.customer) {
         setContext(res);
-        setIsCachedFallback(false);
+        setLoadFailed(false);
       } else {
         throw new Error('Customer context data unavailable');
       }
     } catch (err) {
-      console.warn('Customer context fetch error, falling back to cached ticket info:', err);
-      setIsCachedFallback(true);
-      setErrorMsg('Customer Management System is currently unreachable. Displaying cached ticket context.');
-
-      // Synthesize cached fallback from ticket properties
-      setContext({
-        customer: {
-          type: ticket.is_internal ? 'internal_employee' : 'customer',
-          name: ticket.customer || ticket.client_name || 'Customer',
-          email: ticket.customer_email || ticket.email || null,
-          phone: ticket.contact_number || ticket.customer_phone || ticket.phone || null,
-          address: ticket.facility || ticket.address || null,
-          preferred_contact_method: ticket.phone ? 'Phone' : 'Email',
-          missing_fields: [],
-        },
-        machine: ticket.machine_name || ticket.equipment ? {
-          linked: true,
-          machine_name: ticket.machine_name || ticket.equipment,
-          brand: ticket.machine_brand || ticket.brand || '—',
-          model: ticket.machine_model || ticket.model || '—',
-          serial_number: ticket.serial_number || 'N/A',
-          status: 'Active',
-          category: ticket.category || 'General',
-          location: ticket.facility || 'Customer Site',
-          history_summary: {
-            past_ticket_count: 0,
-            last_service_date: null,
-          },
-        } : null,
-      });
+      // Spec 0038 AC-6: never synthesize machine or customer values on failure.
+      console.warn('Customer context fetch error:', err);
+      setContext(null);
+      setLoadFailed(true);
+      setErrorMsg('Machine details could not be loaded');
     } finally {
       setLoading(false);
     }
-  }, [ticketId, ticket]);
+  }, [ticketId]);
 
   useEffect(() => {
     if (ticketId && isAuthorized) {
@@ -155,35 +131,7 @@ export default function CustomerInfoPanel({
           </div>
         </div>
 
-        {isCachedFallback && (
-          <button
-            type="button"
-            onClick={loadContext}
-            disabled={loading}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-amber-300 bg-amber-50 text-amber-800 text-xs font-semibold hover:bg-amber-100 transition disabled:opacity-50 cursor-pointer"
-            title="Retry connecting to live customer database"
-          >
-            <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
-            {loading ? 'Retrying...' : 'Retry Live Sync'}
-          </button>
-        )}
       </div>
-
-      {/* CMS-Unavailable / Cached Data Alert */}
-      {isCachedFallback && (
-        <div
-          role="alert"
-          className="rounded-xl bg-amber-50 border border-amber-200 p-3.5 text-xs text-amber-900 flex items-start gap-2.5 animate-fadeIn"
-        >
-          <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
-          <div className="flex-1 leading-relaxed">
-            <span className="font-bold">CMS Unavailable:</span> {errorMsg}
-            <span className="block text-[11px] text-amber-700 mt-0.5">
-              Contact and equipment data below is derived from cached ticket records. Live updates will resume once connection is restored.
-            </span>
-          </div>
-        </div>
-      )}
 
       {/* 2-Column Responsive Layout for Customer + Machine */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -202,7 +150,7 @@ export default function CustomerInfoPanel({
           <div className="space-y-2 text-xs">
             <div>
               <span className="text-gray-400 block text-[10px] uppercase font-semibold">Name</span>
-              <p className="font-bold text-gray-800 text-sm">{customerData?.name || ticket.customer || '—'}</p>
+              <p className="font-bold text-gray-800 text-sm">{customerData?.name || ticket.customer || 'Not available'}</p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
@@ -242,7 +190,7 @@ export default function CustomerInfoPanel({
               <span className="text-gray-400 block text-[10px] uppercase font-semibold">Location / Address</span>
               <div className="flex items-start gap-1.5 text-gray-700 mt-0.5">
                 <MapPin size={13} className="text-gray-400 shrink-0 mt-0.5" />
-                <span className="leading-snug">{customerData?.address || ticket.facility || 'Customer Site'}</span>
+                <span className="leading-snug">{customerData?.address || 'Not available'}</span>
               </div>
             </div>
 
@@ -257,34 +205,61 @@ export default function CustomerInfoPanel({
           </div>
         </div>
 
-        {/* Machine & Equipment Details Card */}
+        {/* Machine & Equipment Details Card (spec 0038 AC-6: customer-context values only) */}
         <div className="bg-slate-50/70 border border-slate-200/80 rounded-xl p-4 space-y-3">
           <div className="flex items-center justify-between border-b border-slate-200/60 pb-2">
             <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
               <Wrench size={13} className="text-slate-400" />
               Machine & Equipment Details
             </span>
-            <span className="text-[10px] bg-white border border-slate-200 text-slate-600 font-semibold px-2 py-0.5 rounded-full">
-              {machineData?.category || ticket.category || 'Asset'}
-            </span>
+            {machineData?.category && (
+              <span className="text-[10px] bg-white border border-slate-200 text-slate-600 font-semibold px-2 py-0.5 rounded-full">
+                {machineData.category}
+              </span>
+            )}
           </div>
 
+          {loading && !context && !loadFailed ? (
+            <div className="space-y-2" aria-busy="true" aria-label="Loading machine details">
+              <div className="h-4 w-2/3 rounded bg-slate-200 animate-pulse" />
+              <div className="h-3 w-1/2 rounded bg-slate-200 animate-pulse" />
+              <div className="h-3 w-1/3 rounded bg-slate-200 animate-pulse" />
+            </div>
+          ) : loadFailed ? (
+            <div role="alert" className="flex flex-col items-start gap-2 text-xs text-gray-600">
+              <p className="flex items-center gap-1.5 font-semibold text-gray-800">
+                <AlertTriangle size={14} className="text-amber-600 shrink-0" />
+                {errorMsg || 'Machine details could not be loaded'}
+              </p>
+              <button
+                type="button"
+                onClick={loadContext}
+                disabled={loading}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-gray-200 bg-white text-gray-700 text-xs font-semibold hover:bg-gray-50 transition disabled:opacity-50 cursor-pointer"
+              >
+                {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                Retry
+              </button>
+            </div>
+          ) : !machineData || machineData.linked === false ? (
+            <p className="text-sm font-bold text-gray-800">No machine linked</p>
+          ) : (
           <div className="space-y-2 text-xs">
             <div>
               <span className="text-gray-400 block text-[10px] uppercase font-semibold">Machine Name</span>
               <p className="font-bold text-gray-800 text-sm">
-                {machineData?.machine_name || ticket.equipment || ticket.machine_name || 'No machine linked'}
+                {machineData.machine_name || 'Not recorded'}
               </p>
             </div>
 
             <div className="grid grid-cols-2 gap-2 pt-1">
               <div>
                 <span className="text-gray-400 block text-[10px] uppercase font-semibold">Brand / Make</span>
-                <p className="font-medium text-gray-700 mt-0.5">{machineData?.brand || machineData?.make || '—'}</p>
+                <p className="font-medium text-gray-700 mt-0.5">{machineData.brand || machineData.make || 'Not recorded'}</p>
               </div>
               <div>
                 <span className="text-gray-400 block text-[10px] uppercase font-semibold">Model</span>
-                <p className="font-medium text-gray-700 mt-0.5">{machineData?.model || '—'}</p>
+                <p className="font-medium text-gray-700 mt-0.5">{machineData.model || 'Not recorded'}</p>
               </div>
             </div>
 
@@ -292,9 +267,9 @@ export default function CustomerInfoPanel({
               <span className="text-gray-400 block text-[10px] uppercase font-semibold">Serial Number</span>
               <div className="flex items-center gap-2 mt-0.5">
                 <code className="bg-white border border-gray-200 px-2 py-1 rounded text-xs font-mono font-bold text-gray-800 tracking-wider">
-                  {machineData?.serial_number || ticket.serial_number || 'N/A'}
+                  {machineData.serial_number || 'Not recorded'}
                 </code>
-                {machineData?.serial_number && machineData.serial_number !== 'N/A' && (
+                {machineData.serial_number && (
                   <button
                     type="button"
                     onClick={() => handleCopySerial(machineData.serial_number)}
@@ -308,13 +283,14 @@ export default function CustomerInfoPanel({
               </div>
             </div>
 
-            {machineData?.last_maintenance_date && (
+            {machineData.last_maintenance_date && (
               <div className="pt-1 text-[11px] text-gray-500 flex items-center gap-1.5">
                 <Clock size={12} className="text-gray-400" />
                 <span>Last Maintenance: {formatDisplayDate(machineData.last_maintenance_date)}</span>
               </div>
             )}
           </div>
+          )}
         </div>
       </div>
 

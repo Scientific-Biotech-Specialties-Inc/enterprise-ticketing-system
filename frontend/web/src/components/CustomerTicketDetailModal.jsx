@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   X,
   RotateCcw,
@@ -25,6 +25,8 @@ import {
   formatPHT,
   formatRelativePHT,
   getAssigneeInfo,
+  getAssigneeList,
+  getMessagesPath,
   getFileName,
   getFileUrl,
 } from './ticket-modal';
@@ -51,6 +53,7 @@ export default function CustomerTicketDetailModal({
   readOnly = false,
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
 
   const isCSSide = useMemo(() => {
@@ -205,6 +208,7 @@ export default function CustomerTicketDetailModal({
   const assignee = useMemo(() => {
     return getAssigneeInfo(effectiveTicket);
   }, [effectiveTicket]);
+  const activeAssignees = useMemo(() => getAssigneeList(effectiveTicket), [effectiveTicket]);
 
   // SLA Status & Dates
   const isSlaBreached = Boolean(
@@ -263,15 +267,8 @@ export default function CustomerTicketDetailModal({
     if (!effectiveTicket) return;
     onClose?.();
     const tId = effectiveTicket.ticket_ID || effectiveTicket.id;
-    let path = '/messages';
-    if (typeof window !== 'undefined') {
-      if (window.location.pathname.startsWith('/cs-manager')) path = '/cs-manager/messages';
-      else if (window.location.pathname.startsWith('/service-manager')) path = '/service-manager/messages';
-      else if (window.location.pathname.startsWith('/it-manager')) path = '/it-manager/messages';
-      else if (window.location.pathname.startsWith('/cs')) path = '/cs/messages';
-      else if (window.location.pathname.startsWith('/employee')) path = '/employee/messages';
-    }
-    navigate(path, { state: { selectedTicketId: tId } });
+    // Router relative path, so the /ticketing/ basename does not break the match (AC-18).
+    navigate(getMessagesPath(location.pathname), { state: { selectedTicketId: tId } });
   };
 
   const handleExecuteReopen = async () => {
@@ -418,15 +415,33 @@ export default function CustomerTicketDetailModal({
           )}
 
           {/* Assignee Row */}
-          <AssigneeRow
-            name={assignee.name}
-            firstName={assignee.firstName}
-            initials={assignee.initials}
-            department={assignee.department}
-            updatedText={`Updated ${formatPHT(effectiveTicket.last_updated || effectiveTicket.updated_at || effectiveTicket.date_created)}`}
-            onMessage={assignee.isAssigned ? handleRedirectToMessages : null}
-            messageLabel={`Message ${assignee.firstName}`}
-          />
+          {/* Spec 0038 AC-10 / AC-11: every active assignee (name and department), no Remind. */}
+          {activeAssignees.length > 0 ? (
+            <div className="space-y-3">
+              {activeAssignees.map((a, idx) => (
+                <AssigneeRow
+                  key={a.id ?? `assignee-${idx}`}
+                  name={a.name}
+                  firstName={a.firstName}
+                  initials={a.name.split(' ').filter(Boolean).map((p) => p[0]).join('').slice(0, 2).toUpperCase()}
+                  department={a.department}
+                  updatedText={idx === 0 ? `Updated ${formatPHT(effectiveTicket.last_updated || effectiveTicket.updated_at || effectiveTicket.date_created)}` : ''}
+                  onMessage={handleRedirectToMessages}
+                  messageLabel={`Message ${a.firstName}`}
+                />
+              ))}
+            </div>
+          ) : (
+            <AssigneeRow
+              name={assignee.name}
+              firstName={assignee.firstName}
+              initials={assignee.initials}
+              department={assignee.department}
+              updatedText={`Updated ${formatPHT(effectiveTicket.last_updated || effectiveTicket.updated_at || effectiveTicket.date_created)}`}
+              onMessage={assignee.isAssigned ? handleRedirectToMessages : null}
+              messageLabel={`Message ${assignee.firstName}`}
+            />
+          )}
         </div>
 
         {/* 3. TabBar */}

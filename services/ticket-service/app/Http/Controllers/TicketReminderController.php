@@ -73,14 +73,40 @@ class TicketReminderController extends Controller
             ], 422);
         }
 
-        // 4. Validate assigned employee
-        $assignedEmpId = (int) ($ticket->assigned_to ?? 0);
-        if (!$assignedEmpId) {
-            // Check active ticket_assignments as fallback
-            $assignedEmpId = (int) DB::table('ticket_assignments')
-                ->where('ticket_ID', $ticketId)
-                ->whereNull('completed_at')
-                ->value('employee_ID');
+        // 4. Resolve the employee to remind (spec 0038 AC-8 / AC-9).
+        // With employee_id: it must be an active assignee of this ticket. Without it:
+        // today's behaviour, the primary assignee (older callers keep working).
+        $requestedEmpId = $request->input('employee_id');
+        $assignment = null;
+        if ($requestedEmpId !== null && $requestedEmpId !== '') {
+            if (!is_numeric($requestedEmpId) || (int) $requestedEmpId <= 0) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'The employee_id must be a valid employee id.',
+                ], 422);
+            }
+            $assignment = $this->activeAssignment($ticketId, (int) $requestedEmpId);
+            if (!$assignment) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Cannot send reminder: that employee is not an active assignee of this ticket.',
+                ], 422);
+            }
+            $assignedEmpId = (int) $requestedEmpId;
+        } else {
+            $assignedEmpId = (int) ($ticket->assigned_to ?? 0);
+            if (!$assignedEmpId) {
+                // Check active ticket_assignments as fallback
+                $assignedEmpId = (int) DB::table('ticket_assignments')
+                    ->where('ticket_ID', $ticketId)
+                    ->whereNull('completed_at')
+                    ->orderBy('assigned_at')
+                    ->orderBy('assignment_ID')
+                    ->value('employee_ID');
+            }
+            if ($assignedEmpId) {
+                $assignment = $this->activeAssignment($ticketId, $assignedEmpId);
+            }
         }
 
         if (!$assignedEmpId) {
@@ -90,17 +116,21 @@ class TicketReminderController extends Controller
             ], 422);
         }
 
-        // 5. Anti-spam cooldown check: 60 minutes
+        // 5. Anti-spam cooldown check: 60 minutes per assignee. The assignment row is
+        // the gate; tickets.last_reminder_sent_at is only used when there is no row.
         $now = now();
-        if (!empty($ticket->last_reminder_sent_at)) {
-            $lastSent = Carbon::parse($ticket->last_reminder_sent_at);
+        $hasAssignmentColumn = $assignment !== null && property_exists($assignment, 'last_reminder_sent_at');
+        $lastSentRaw = $hasAssignmentColumn ? $assignment->last_reminder_sent_at : ($assignment === null ? $ticket->last_reminder_sent_at : null);
+        if (!empty($lastSentRaw)) {
+            $lastSent = Carbon::parse($lastSentRaw);
             $minutesSinceLast = $now->diffInMinutes($lastSent);
             if ($minutesSinceLast < 60) {
                 $minutesRemaining = 60 - $minutesSinceLast;
                 return response()->json([
                     'status' => 'error',
-                    'message' => "A reminder was sent recently for this ticket. Please wait {$minutesRemaining} more minute(s) before sending another.",
+                    'message' => "A reminder was sent recently to this employee. Please wait {$minutesRemaining} more minute(s) before sending another.",
                     'cooldown_remaining_minutes' => $minutesRemaining,
+                    'employee_id' => $assignedEmpId,
                     'last_reminder_sent_at' => $lastSent->toIso8601String(),
                 ], 429);
             }
@@ -185,7 +215,13 @@ class TicketReminderController extends Controller
             Log::warning("Failed to record reminder_sent in ticket_audit_logs: " . $e->getMessage());
         }
 
-        // 10. Update last_reminder_sent_at on ticket
+        // 10. Update last_reminder_sent_at: per assignment (the cooldown gate), and the
+        // ticket summary (latest reminder) that existing readers use.
+        if ($hasAssignmentColumn) {
+            DB::table('ticket_assignments')
+                ->where('assignment_ID', $assignment->assignment_ID)
+                ->update(['last_reminder_sent_at' => $now]);
+        }
         DB::table('tickets')->where('ticket_ID', $ticketId)->update([
             'last_reminder_sent_at' => $now,
             'updated_at' => $now,
@@ -215,9 +251,25 @@ class TicketReminderController extends Controller
             'data' => [
                 'ticket_id' => $ticketId,
                 'assigned_to' => $assignedEmpId,
+                'employee_id' => $assignedEmpId,
                 'last_reminder_sent_at' => $now->toIso8601String(),
                 'sla_status' => $slaStatus,
             ],
         ]);
+    }
+
+    /**
+     * The active assignment row for an employee on a ticket: not completed, and
+     * status assigned or accepted (spec 0038 AC-9).
+     */
+    private function activeAssignment(int $ticketId, int $empId): ?object
+    {
+        return DB::table('ticket_assignments')
+            ->where('ticket_ID', $ticketId)
+            ->where('employee_ID', $empId)
+            ->whereNull('completed_at')
+            ->whereIn('assignment_status', ['assigned', 'accepted'])
+            ->orderByDesc('assignment_ID')
+            ->first();
     }
 }
