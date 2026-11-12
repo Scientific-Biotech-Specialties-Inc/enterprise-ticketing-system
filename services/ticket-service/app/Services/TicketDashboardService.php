@@ -1827,11 +1827,18 @@ class TicketDashboardService
             'to' => $dateTo->toDateString(),
             'dept' => $departmentFilter,
             'prio' => $priorityFilter,
+            'sort_by' => $filters['sort_by'] ?? null,
+            'sort_dir' => $filters['sort_dir'] ?? null,
         ]));
 
         if ($forceRefresh) {
             Cache::forget($cacheKey);
         }
+
+        $sort = array_filter([
+            'sort_by' => $filters['sort_by'] ?? null,
+            'sort_dir' => $filters['sort_dir'] ?? null,
+        ]);
 
         return Cache::remember($cacheKey, 60, function () use (
             $branch,
@@ -1840,7 +1847,8 @@ class TicketDashboardService
             $dateFrom,
             $dateTo,
             $departmentFilter,
-            $priorityFilter
+            $priorityFilter,
+            $sort
         ) {
             return $this->computeTabularReportData(
                 $branch,
@@ -1849,13 +1857,55 @@ class TicketDashboardService
                 $dateFrom,
                 $dateTo,
                 $departmentFilter,
-                $priorityFilter
+                $priorityFilter,
+                $sort
             );
         });
     }
 
+    /** Columns of the employee performance report and its exports (spec 0039, AC-19). */
+    public const EMPLOYEE_REPORT_HEADERS = [
+        'Employee',
+        'Department',
+        'Performance Score',
+        'Pending',
+        'Tickets Assigned',
+        'Resolved',
+        'Resolution SLA (%)',
+        'Response SLA (%)',
+        'Avg Response (mins)',
+        'Avg Resolution (hrs)',
+        'CSAT Score',
+    ];
+
     /**
-     * Compute structured tabular report rows for the 6 operational report types.
+     * One employee performance report row. A missing value is "—", never 0 or 100; a score without
+     * enough judged periods reads "Not enough data".
+     */
+    protected function employeeReportRow(array $e): array
+    {
+        $num = fn ($v, string $suffix = '') => $v === null ? '—' : round((float) $v, 1) . $suffix;
+        $score = ($e['score_status'] ?? null) === AssignmentPeriodMetrics::SCORE_NOT_ENOUGH_DATA
+            ? 'Not enough data'
+            : $num($e['performance_score'] ?? null);
+
+        return [
+            'Employee' => $e['name'] ?? '',
+            'Department' => $e['department'] ?? '',
+            'Performance Score' => $score,
+            'Pending' => (int) ($e['pending_count'] ?? 0),
+            'Tickets Assigned' => (int) ($e['tickets_assigned'] ?? 0),
+            'Resolved' => (int) ($e['tickets_resolved'] ?? 0),
+            'Resolution SLA (%)' => $num($e['sla_compliance_rate'] ?? null, '%'),
+            'Response SLA (%)' => $num($e['response_sla_rate'] ?? null, '%'),
+            'Avg Response (mins)' => $num($e['average_response_minutes'] ?? null),
+            'Avg Resolution (hrs)' => $num($e['average_resolution_hours'] ?? null, 'h'),
+            'CSAT Score' => ($e['csat_score'] ?? null) !== null ? number_format((float) $e['csat_score'], 2) . ' / 5.0' : '—',
+        ];
+    }
+
+    /**
+     * Compute structured tabular report rows for the operational report types.
      */
     protected function computeTabularReportData(
         object $branch,
@@ -1864,13 +1914,40 @@ class TicketDashboardService
         Carbon $dateFrom,
         Carbon $dateTo,
         ?string $departmentFilter,
-        ?string $priorityFilter
+        ?string $priorityFilter,
+        array $sort = []
     ): array {
         $headers = [];
         $rows = [];
         $summary = [];
 
-        if ($reportType === 'department_performance') {
+        if ($reportType === 'employee_performance') {
+            // Spec 0039 (AC-19): the same figures as the dashboard Employee Performance table.
+            $headers = self::EMPLOYEE_REPORT_HEADERS;
+
+            $empMetrics = app(AdminPerformanceService::class)->getEmployeePerformanceMetrics(
+                (object) ['role' => 'superadmin'],
+                [
+                    'branch_id' => $branch->id ?? $branch->slug ?? 'all',
+                    'preset' => $preset,
+                    'date_from' => $dateFrom->toDateString(),
+                    'date_to' => $dateTo->toDateString(),
+                    'department' => $departmentFilter,
+                ] + $sort
+            );
+
+            $employees = $empMetrics['employees'] ?? [];
+            foreach ($employees as $e) {
+                $rows[] = $this->employeeReportRow($e);
+            }
+
+            $summary = [
+                'total_employees' => count($rows),
+                'pending_count' => array_sum(array_column($employees, 'pending_count')),
+                'tickets_assigned' => array_sum(array_column($employees, 'tickets_assigned')),
+                'tickets_resolved' => array_sum(array_column($employees, 'tickets_resolved')),
+            ];
+        } elseif ($reportType === 'department_performance') {
             $headers = [
                 'Department',
                 'Staff Count',

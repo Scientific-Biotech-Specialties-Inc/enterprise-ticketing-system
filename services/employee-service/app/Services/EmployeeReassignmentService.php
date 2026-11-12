@@ -252,6 +252,17 @@ class EmployeeReassignmentService
                     ]);
                 }
 
+                // Spec 0039 (AC-1, AC-3): the requester stops holding the ticket; the new assignee starts.
+                $periods = app(AssignmentPeriodRecorder::class);
+                $periods->release(
+                    $ticketId,
+                    $newEmpId ? AssignmentPeriodRecorder::REASON_REASSIGNED : AssignmentPeriodRecorder::REASON_RETURNED_TO_CS,
+                    [(int) $targetEmpId]
+                );
+                if ($newEmpId) {
+                    $periods->open($ticketId, (int) $newEmpId, (int) $csEmpId);
+                }
+
                 DB::table('ticket_audit_logs')->insert([
                     'ticket_ID' => $ticketId,
                     'action_type' => 'reassign_approve',

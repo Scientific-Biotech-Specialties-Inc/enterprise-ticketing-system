@@ -3,26 +3,36 @@ import { ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, RefreshCw } from 'lucide-
 import { Button } from '@/components/ui/button';
 import { getAdminEmployeePerformance } from '@/services/ticketService';
 
-// Columns the server can sort by (spec 0029 AC-6). Sorting is done by the API so ordering matches exports.
+// Columns the server can sort by (spec 0029 AC-6, spec 0039 AC-18). Sorting is done by the API so
+// ordering matches exports. Figures come from each person's own assignment periods (spec 0039).
 const COLUMNS = [
   { key: 'name', label: 'Employee', numeric: false },
-  { key: 'tickets_assigned', label: 'Assigned', numeric: true },
-  { key: 'resolution_rate', label: 'Resolution Rate', numeric: true, suffix: '%' },
+  { key: 'performance_score', label: 'Performance Score', numeric: true, suffix: '' },
+  { key: 'pending_count', label: 'Pending', numeric: true, suffix: '' },
+  { key: 'tickets_assigned', label: 'Assigned', numeric: true, suffix: '' },
+  { key: 'tickets_resolved', label: 'Resolved', numeric: true, suffix: '' },
+  { key: 'sla_compliance_rate', label: 'Resolution SLA', numeric: true, suffix: '%' },
+  { key: 'response_sla_rate', label: 'Response SLA', numeric: true, suffix: '%' },
+  { key: 'average_response_minutes', label: 'Avg Response', numeric: true, suffix: ' min' },
   { key: 'average_resolution_hours', label: 'Avg Resolution', numeric: true, suffix: ' h' },
-  { key: 'sla_compliance_rate', label: 'SLA Compliance', numeric: true, suffix: '%' },
-  { key: 'reassignment_rate', label: 'Reassignment Rate', numeric: true, suffix: '%' },
   { key: 'csat_score', label: 'CSAT', numeric: true, suffix: '' },
 ];
 
 // A missing value is shown as a dash, never as 0 or 100 (spec 0031 AC-6).
 const show = (value, suffix = '') => (value === null || value === undefined ? '—' : `${value}${suffix}`);
 
+// Score cell: too few judged periods reads "Not enough data" instead of a number (spec 0039 AC-17).
+const showScore = (e) => (e.score_status === 'not_enough_data'
+  ? <span className="text-gray-500 italic">Not enough data</span>
+  : show(e.performance_score));
+
 export default function EmployeePerformanceView({
   selectedPeriod = 'Last 7 Days',
   dateFrom = null,
   dateTo = null,
+  branchId = null,
 }) {
-  const [sortBy, setSortBy] = useState('resolution_rate');
+  const [sortBy, setSortBy] = useState('performance_score');
   const [sortDir, setSortDir] = useState('desc');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -33,6 +43,8 @@ export default function EmployeePerformanceView({
     setError(null);
     try {
       const params = { preset: selectedPeriod, sort_by: sortBy, sort_dir: sortDir };
+      // Superadmin picks a branch or all; a branch Admin sends none and gets their own branch.
+      if (branchId) params.branch_id = branchId;
       if (selectedPeriod === 'Custom Range') {
         params.preset = 'custom';
         if (dateFrom) params.date_from = dateFrom;
@@ -45,7 +57,7 @@ export default function EmployeePerformanceView({
     } finally {
       setLoading(false);
     }
-  }, [selectedPeriod, dateFrom, dateTo, sortBy, sortDir]);
+  }, [selectedPeriod, dateFrom, dateTo, branchId, sortBy, sortDir]);
 
   useEffect(() => {
     load();
@@ -70,7 +82,8 @@ export default function EmployeePerformanceView({
       <div>
         <h3 className="text-sm font-semibold text-gray-800">Employee Performance</h3>
         <p className="text-xs text-gray-500">
-          Counts tickets where the employee is the assigned employee. Click a column header to sort.
+          Measured from each person&apos;s own assignments: the clock starts when a ticket reaches them.
+          Pending is work assigned but not yet accepted and still within its accept time. Click a column header to sort.
         </p>
       </div>
 
@@ -122,13 +135,15 @@ export default function EmployeePerformanceView({
                     {e.name}
                     <span className="block text-[11px] text-gray-500 font-normal">{e.department}</span>
                   </td>
-                  <td className="px-3 py-2">{e.tickets_assigned}</td>
                   {e.has_data ? (
-                    COLUMNS.slice(2).map((col) => (
-                      <td key={col.key} className="px-3 py-2">{show(e[col.key], col.suffix)}</td>
-                    ))
+                    <>
+                      <td className="px-3 py-2 font-semibold text-[#1E293B]">{showScore(e)}</td>
+                      {COLUMNS.slice(2).map((col) => (
+                        <td key={col.key} className="px-3 py-2">{show(e[col.key], col.suffix)}</td>
+                      ))}
+                    </>
                   ) : (
-                    <td colSpan={COLUMNS.length - 2} className="px-3 py-2 text-gray-500 italic">
+                    <td colSpan={COLUMNS.length - 1} className="px-3 py-2 text-gray-500 italic">
                       No data recorded for this period
                     </td>
                   )}

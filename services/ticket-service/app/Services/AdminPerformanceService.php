@@ -10,9 +10,10 @@ use Illuminate\Support\Facades\DB;
 /**
  * Employee and department performance for the admin dashboard and admin reports.
  *
- * Spec 0031: only technical departments (config ticketing.technical_departments) are listed; SLA compliance
- * comes from SlaOutcomeService by outcome date; a missing rate is null; CSAT comes from CsatSnapshotService;
- * nothing here calls the auth module.
+ * Spec 0031: only technical departments (config ticketing.technical_departments) are listed; department SLA
+ * compliance comes from SlaOutcomeService by outcome date; a missing rate is null; CSAT comes from
+ * CsatSnapshotService; nothing here calls the auth module.
+ * Spec 0039: employee figures are computed from ticket_assignment_periods (see AssignmentPeriodMetrics).
  */
 class AdminPerformanceService
 {
@@ -45,7 +46,8 @@ class AdminPerformanceService
 
     /**
      * Fetch individual and comparative employee performance metrics scoped to branch and date range.
-     * Enforces Assigned Employee capacity and clear no_data period response.
+     * Spec 0039: figures come from ticket_assignment_periods (each person's own holding periods), not from
+     * ticket creation dates. Default order is Performance Score high to low, not_enough_data last.
      */
     public function getEmployeePerformanceMetrics($user, array $filters = [], bool $forceRefresh = false): array
     {
@@ -55,7 +57,7 @@ class AdminPerformanceService
         $departmentFilter = $filters['department'] ?? null;
         $employeeIdFilter = !empty($filters['employee_id']) ? (int) $filters['employee_id'] : null;
 
-        $cacheKey = "admin_emp_perf_v2_{$branch->slug}_" . md5(json_encode([
+        $cacheKey = "admin_emp_perf_v3_{$branch->slug}_" . md5(json_encode([
             'branch' => $branch->slug,
             'preset' => $preset,
             'from' => $dateFrom->toDateString(),
@@ -88,11 +90,15 @@ class AdminPerformanceService
     /** Columns the comparative employee list may be sorted by. */
     private const EMPLOYEE_SORT_COLUMNS = [
         'name',
+        'performance_score',
+        'pending_count',
         'tickets_assigned',
         'tickets_resolved',
         'resolution_rate',
         'average_resolution_hours',
         'sla_compliance_rate',
+        'response_sla_rate',
+        'average_response_minutes',
         'reassignment_rate',
         'csat_score',
     ];
@@ -212,47 +218,50 @@ class AdminPerformanceService
 
         $empIds = $employees->pluck('emp_id')->all();
 
-        // 2. Tickets created in the window that these employees held as Assigned Employee
-        // (tickets.assigned_to or an active ticket_assignments row). Requester-only activity never counts.
-        $tickets = $this->assignedTicketsQuery($branch, $empIds)
-            ->whereBetween('t.created_at', [$dateFrom, $dateTo])
-            ->select(
-                't.ticket_ID',
-                't.assigned_to',
-                'ta.employee_ID as assignment_emp_id',
-                't.ticket_status_ID',
-                'ts.status_name',
-                't.resolution_due_at',
-                't.resolved_at',
-                't.closed_at',
-                't.first_response_at',
-                't.sla_status',
-                't.created_at'
-            )->distinct()->get();
+        // 2. Holding periods of these employees that started in the window (spec 0039 AC-6). Tickets with
+        // no period rows (assigned before tracking began) count for no employee.
+        $periodColumns = [
+            'p.id', 'p.ticket_ID', 'p.employee_ID', 'p.assigned_at', 'p.ack_due_at', 'p.accepted_at', 'p.paused_at',
+            'p.paused_seconds', 'p.ack_paused_seconds', 'p.released_at', 'p.release_reason',
+        ];
+        $periodsQuery = DB::table(AssignmentPeriodRecorder::TABLE . ' as p')
+            ->join('tickets as t', 't.ticket_ID', '=', 'p.ticket_ID')
+            ->whereIn('p.employee_ID', $empIds)
+            ->whereBetween('p.assigned_at', [$dateFrom, $dateTo]);
+        $this->dashboardService->applyBranchTicketFilter($periodsQuery, $branch);
+        $windowPeriods = $periodsQuery->select($periodColumns)->get();
 
-        // 3. SLA ticket set by outcome date (spec 0031 AC-4, AC-5), same assignment rule
-        $slaQuery = $this->assignedTicketsQuery($branch, $empIds);
-        $this->slaOutcomes->applyOutcomeWindow($slaQuery, $dateFrom, $dateTo);
-        $slaTickets = $slaQuery->select(
-            't.ticket_ID',
-            't.assigned_to',
-            'ta.employee_ID as assignment_emp_id',
-            't.ticket_status_ID',
-            'ts.status_name',
-            't.resolution_due_at',
-            't.resolved_at',
-            't.closed_at',
-            't.sla_status',
-            't.created_at'
-        )->distinct()->get();
+        // 3. Every period and the SLA fields of those tickets, for resolution attribution (AC-11)
+        $ticketIds = $windowPeriods->pluck('ticket_ID')->unique()->values()->all();
+        $allPeriods = empty($ticketIds) ? collect() : DB::table(AssignmentPeriodRecorder::TABLE . ' as p')
+            ->whereIn('p.ticket_ID', $ticketIds)
+            ->select($periodColumns)
+            ->get();
+        $ticketsById = empty($ticketIds) ? [] : DB::table('tickets as t')
+            ->join('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
+            ->whereIn('t.ticket_ID', $ticketIds)
+            ->select('t.ticket_ID', 't.ticket_status_ID', 'ts.status_name', 't.resolution_due_at', 't.resolved_at', 't.closed_at', 't.sla_status', 't.created_at')
+            ->get()
+            ->keyBy('ticket_ID')
+            ->all();
 
-        $ticketsByEmp = $this->indexByAssignee($tickets);
-        $slaOutcomesByEmp = [];
-        foreach ($this->indexByAssignee($slaTickets) as $empId => $rows) {
-            $slaOutcomesByEmp[$empId] = $this->slaOutcomes->tally($rows, $dateFrom, $dateTo, $now);
+        $periodMetrics = new AssignmentPeriodMetrics($this->slaOutcomes);
+        $resolutionOutcomes = $periodMetrics->attributeResolutionOutcomes($allPeriods, $ticketsById, $now);
+
+        // 4. CSAT per ticket (500 ms budget; empty when analytics is unavailable), credited to the
+        // period that finished the ticket (AC-15)
+        $csatScoresByTicket = $this->csatSnapshots->forTickets($ticketIds, $dateFrom, $dateTo)['ticket_ratings'];
+        $ratingByPeriod = [];
+        foreach ($allPeriods->groupBy('ticket_ID') as $ticketId => $ticketPeriods) {
+            if (!isset($csatScoresByTicket[$ticketId])) {
+                continue;
+            }
+            foreach ($periodMetrics->finishingPeriods($ticketPeriods->all()) as $period) {
+                $ratingByPeriod[(int) $period->id] = (float) $csatScoresByTicket[$ticketId];
+            }
         }
 
-        // 4. Approved reassignment requests originating from these employees
+        // 5. Approved reassignment requests originating from these employees
         $approvedReassigns = DB::table('reassignment_requests')
             ->whereIn('employee_id', $empIds)
             ->where('status', 'approved')
@@ -262,92 +271,41 @@ class AdminPerformanceService
             ->pluck('total', 'employee_id')
             ->all();
 
-        // 5. CSAT per ticket (500 ms budget; empty when analytics is unavailable)
-        $csatScoresByTicket = $this->csatSnapshots
-            ->forTickets($tickets->pluck('ticket_ID')->all(), $dateFrom, $dateTo)['ticket_ratings'];
-
         // 6. Per employee metrics
+        $periodsByEmp = $windowPeriods->groupBy('employee_ID');
         $empRecords = [];
         $activeEmployeesCount = 0;
 
         foreach ($employees as $emp) {
             $empId = (int) $emp->emp_id;
-            $fullName = $this->displayName($emp);
-
-            $assignedTickets = collect($ticketsByEmp[$empId] ?? []);
-            $totalAssigned = $assignedTickets->count();
-
-            $sla = $slaOutcomesByEmp[$empId] ?? ['met' => 0, 'breached' => 0, 'rate' => null];
-            $hasSlaOutcomes = ($sla['met'] + $sla['breached']) > 0;
+            $empPeriods = ($periodsByEmp[$empId] ?? collect())->all();
+            $figures = $periodMetrics->summarize($empPeriods, $resolutionOutcomes, $ratingByPeriod, $now);
 
             // Distinguish "no data for this period" from a zero value
-            if ($totalAssigned === 0 && !$hasSlaOutcomes) {
-                $empRecords[] = [
-                    'employee_id' => $empId,
-                    'name' => $fullName,
-                    'department' => TechnicalDepartments::canonical($emp->department) ?? $emp->department,
-                    'role' => $emp->role,
-                    'position_level' => $emp->position_level,
-                    'has_data' => false,
-                    'period_status' => 'no_data',
-                    'tickets_assigned' => 0,
-                    'tickets_resolved' => 0,
-                    'resolution_rate' => null,
-                    'average_resolution_hours' => null,
-                    'average_response_minutes' => null,
-                    'sla_compliance_rate' => null,
-                    'sla_met_count' => 0,
-                    'sla_breached_count' => 0,
-                    'reassignments_approved' => 0,
-                    'reassignment_rate' => null,
-                    'csat_score' => null,
-                    'csat_reviews_count' => 0,
-                ];
-                continue;
+            $hasData = !empty($empPeriods);
+            if ($hasData) {
+                $activeEmployeesCount++;
             }
-
-            $activeEmployeesCount++;
-
-            $resolvedTickets = $assignedTickets->filter(function ($t) {
-                $st = strtolower(trim((string) $t->status_name));
-                return in_array($st, ['resolved', 'closed'], true) || !empty($t->resolved_at);
-            });
-            $resolvedCount = $resolvedTickets->count();
-
-            $avgResolutionHours = $this->averageHours($resolvedTickets, 'resolved_at');
-            $avgResponseMinutes = $this->averageMinutes($assignedTickets, 'first_response_at');
 
             $approvedReassignCount = (int) ($approvedReassigns[$empId] ?? 0);
-
-            $ratings = [];
-            foreach ($assignedTickets->pluck('ticket_ID')->all() as $tId) {
-                if (isset($csatScoresByTicket[$tId])) {
-                    $ratings[] = $csatScoresByTicket[$tId];
-                }
-            }
+            $totalAssigned = $figures['tickets_assigned'];
 
             $empRecords[] = [
                 'employee_id' => $empId,
-                'name' => $fullName,
+                'name' => $this->displayName($emp),
                 'department' => TechnicalDepartments::canonical($emp->department) ?? $emp->department,
                 'role' => $emp->role,
                 'position_level' => $emp->position_level,
-                'has_data' => true,
-                'period_status' => 'active',
-                'tickets_assigned' => $totalAssigned,
-                'tickets_resolved' => $resolvedCount,
-                'resolution_rate' => $totalAssigned > 0 ? round(($resolvedCount / $totalAssigned) * 100, 1) : null,
-                'average_resolution_hours' => $avgResolutionHours,
-                'average_response_minutes' => $avgResponseMinutes,
-                'sla_compliance_rate' => $sla['rate'],
-                'sla_met_count' => $sla['met'],
-                'sla_breached_count' => $sla['breached'],
+                'has_data' => $hasData,
+                'period_status' => $hasData ? 'active' : 'no_data',
+            ] + $figures + [
                 'reassignments_approved' => $approvedReassignCount,
                 'reassignment_rate' => $totalAssigned > 0 ? round(($approvedReassignCount / $totalAssigned) * 100, 1) : null,
-                'csat_score' => !empty($ratings) ? round(array_sum($ratings) / count($ratings), 2) : null,
-                'csat_reviews_count' => count($ratings),
             ];
         }
+
+        // Default order (AC-18): Performance Score high to low, not_enough_data last.
+        $empRecords = $this->sortEmployeeRecords($empRecords, 'performance_score', 'desc');
 
         return [
             'status' => 'success',
@@ -588,56 +546,11 @@ class AdminPerformanceService
         ];
     }
 
-    /**
-     * Branch tickets these employees held as Assigned Employee: tickets.assigned_to or an active ticket_assignments row.
-     */
-    protected function assignedTicketsQuery(object $branch, array $empIds)
-    {
-        $query = DB::table('tickets as t')
-            ->join('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
-            ->leftJoin('ticket_assignments as ta', function ($join) {
-                $join->on('ta.ticket_ID', '=', 't.ticket_ID')
-                     ->whereNull('ta.completed_at');
-            })
-            ->where('ts.status_name', '!=', 'Discarded');
-
-        $this->dashboardService->applyBranchTicketFilter($query, $branch);
-
-        return $query->where(function ($q) use ($empIds) {
-            $q->whereIn('t.assigned_to', $empIds)
-              ->orWhereIn('ta.employee_ID', $empIds);
-        });
-    }
-
-    /**
-     * Group ticket rows under every employee who held them (direct assignee or active delegate), once per ticket.
-     *
-     * @return array<int, array<int, object>>
-     */
-    protected function indexByAssignee($rows): array
-    {
-        $byEmp = [];
-        foreach ($rows as $row) {
-            foreach (array_unique(array_filter([(int) ($row->assigned_to ?? 0), (int) ($row->assignment_emp_id ?? 0)])) as $empId) {
-                $byEmp[$empId][$row->ticket_ID] = $row;
-            }
-        }
-
-        return array_map('array_values', $byEmp);
-    }
-
     protected function averageHours($rows, string $endColumn): ?float
     {
         [$seconds, $samples] = $this->elapsed($rows, $endColumn);
 
         return $samples > 0 ? round(($seconds / $samples) / 3600, 1) : null;
-    }
-
-    protected function averageMinutes($rows, string $endColumn): ?float
-    {
-        [$seconds, $samples] = $this->elapsed($rows, $endColumn);
-
-        return $samples > 0 ? round(($seconds / $samples) / 60, 1) : null;
     }
 
     /**

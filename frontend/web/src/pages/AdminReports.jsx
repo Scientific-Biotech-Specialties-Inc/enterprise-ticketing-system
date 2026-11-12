@@ -52,6 +52,12 @@ const REPORT_TYPES = [
     headers: ['Department', 'Staff Count', 'Total Tickets', 'Resolved Tickets', 'Open Tickets', 'Overdue Tickets', 'Avg Resolution (hrs)', 'SLA Compliance (%)', 'CSAT Score'],
   },
   {
+    id: 'employee_performance',
+    name: 'Employee Performance',
+    description: "Per person Performance Score, pending work, response and resolution SLA, measured from each person's own assignments.",
+    headers: ['Employee', 'Department', 'Performance Score', 'Pending', 'Tickets Assigned', 'Resolved', 'Resolution SLA (%)', 'Response SLA (%)', 'Avg Response (mins)', 'Avg Resolution (hrs)', 'CSAT Score'],
+  },
+  {
     id: 'equipment_maintenance',
     name: 'Equipment Maintenance & MTBF Log',
     description: 'Hospital equipment breakdown frequencies, repair history, and failure probability.',

@@ -602,6 +602,17 @@ class TicketStateMachine
         ) {
             DB::table('tickets')->where('ticket_ID', $ticketId)->update($updateFields);
 
+            // Spec 0039: assignment period history, in this same transaction (AC-21).
+            $periods = app(AssignmentPeriodRecorder::class);
+            if (isset($updateFields['ticket_status_ID'])) {
+                // AC-3: Resolved, Closed or Discarded ends every holding period.
+                $periods->releaseForStatus((int) $ticketId, (int) $updateFields['ticket_status_ID']);
+            }
+            if ($auditAction === 'accept' && $actorId > 0) {
+                // AC-2: an employee accepting through the transition endpoint.
+                $periods->accept((int) $ticketId, (int) $actorId);
+            }
+
             // 1. Leaving On Hold -> resume SLA clock
             if ($currentState === self::STATE_ON_HOLD) {
                 $this->slaService->resumeClock($ticketId);

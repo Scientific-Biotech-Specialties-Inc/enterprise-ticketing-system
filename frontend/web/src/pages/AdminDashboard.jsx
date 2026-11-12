@@ -1472,6 +1472,7 @@ export default function AdminDashboard() {
           selectedPeriod={selectedPreset}
           dateFrom={globalDateFrom}
           dateTo={globalDateTo}
+          branchId={isSuperAdmin ? (selectedBranchId || 'all') : null}
         />
       ) : activeTab === 'departments' ? (
         <DepartmentPerformanceView

@@ -34,6 +34,12 @@ class TicketService
         $this->stateMachine = $stateMachine;
     }
 
+    /** Spec 0039: assignment period history writer. */
+    protected function periods(): AssignmentPeriodRecorder
+    {
+        return app(AssignmentPeriodRecorder::class);
+    }
+
     /**
      * Validation rule: reject HTML/script markup in free-text fields (stored XSS defence in depth).
      */
@@ -1660,6 +1666,16 @@ class TicketService
                             'created_at' => now(),
                             'updated_at' => now(),
                         ]);
+
+                        // Spec 0039 (AC-1, AC-3): everyone else stops holding it, the new assignee starts.
+                        $holders = DB::table(AssignmentPeriodRecorder::TABLE)
+                            ->where('ticket_ID', $ticketId)
+                            ->whereNull('released_at')
+                            ->where('employee_ID', '!=', $newAssignedTo)
+                            ->pluck('employee_ID')
+                            ->all();
+                        $this->periods()->release($ticketId, AssignmentPeriodRecorder::REASON_REASSIGNED, $holders);
+                        $this->periods()->open($ticketId, $newAssignedTo, (int) $assignedBy);
                     }
                 }
                 
@@ -1677,6 +1693,11 @@ class TicketService
                     }
                 }
 
+                // Spec 0039 (AC-3): Resolved, Closed or Discarded ends every holding period.
+                if ((int) $ticket->ticket_status_ID !== $statusToSet) {
+                    $this->periods()->releaseForStatus($ticketId, $statusToSet);
+                }
+
                 if ($actorType === 'employee') {
                     try {
                         $this->slaService->recordFirstResponse($ticketId, now());
@@ -1692,6 +1713,8 @@ class TicketService
                         $update['rejection_reason'] = null;
                         $update['assigned_to'] = null;
                         DB::table('ticket_assignments')->where('ticket_ID', $ticketId)->delete();
+                        // Spec 0039 (AC-3): the ticket goes back to CS with no assignee.
+                        $this->periods()->release($ticketId, AssignmentPeriodRecorder::REASON_RETURNED_TO_CS);
                     } else {
                         $update['resolved_at'] = null;
                         $update['closed_at'] = null;
