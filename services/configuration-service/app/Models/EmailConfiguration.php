@@ -47,9 +47,9 @@ class EmailConfiguration extends Model
 
         return [
             'id' => $this->id,
-            'provider' => 'Resend',
-            'api_key' => 're_•••••••••',
-            'apiKey' => 're_•••••••••',
+            'provider' => $this->provider ?: \App\Services\BrevoService::NAME,
+            'api_key' => \App\Services\BrevoService::MASK,
+            'apiKey' => \App\Services\BrevoService::MASK,
             'from_name' => $this->from_name,
             'fromName' => $this->from_name,
             'from_email' => $this->from_email,

@@ -4,7 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\EmailConfiguration;
 use App\Models\EmailTemplate;
-use App\Services\ResendService;
+use App\Contracts\EmailProvider;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -14,11 +14,19 @@ use Illuminate\Validation\ValidationException;
 
 class EmailConfigurationController extends Controller
 {
-    protected ResendService $resendService;
+    /**
+     * Email categories accepted by dispatchEmail(). "security" mail (OTP, password reset,
+     * provisioning) is never skipped by notification channel settings (spec 0040, AC-5).
+     */
+    public const CATEGORY_SECURITY = 'security';
 
-    public function __construct(ResendService $resendService)
+    public const CATEGORY_NOTIFICATION = 'notification';
+
+    protected EmailProvider $emailProvider;
+
+    public function __construct(EmailProvider $emailProvider)
     {
-        $this->resendService = $resendService;
+        $this->emailProvider = $emailProvider;
     }
 
     /**
@@ -74,7 +82,7 @@ class EmailConfigurationController extends Controller
 
     /**
      * Retrieves the current email delivery configuration.
-     * Guaranteed zero plaintext exposure: API key is always returned as re_•••••••••.
+     * Guaranteed zero plaintext exposure: API key is always returned masked (xkeysib-•••••••••).
      */
     public function getConfiguration()
     {
@@ -94,8 +102,8 @@ class EmailConfigurationController extends Controller
     }
 
     /**
-     * Saves or replaces the Resend email delivery configuration.
-     * Validates and pings the Resend API before persisting the encrypted key.
+     * Saves or replaces the email delivery configuration.
+     * Validates and pings the provider API (Brevo) before persisting the encrypted key.
      */
     public function saveConfiguration(Request $request)
     {
@@ -112,11 +120,11 @@ class EmailConfigurationController extends Controller
 
         $rawApiKey = trim($validated['apiKey']);
 
-        // Live ping verification against Resend API
-        $verifyResult = $this->resendService->verifyApiKey($rawApiKey);
+        // Live ping verification against the provider API
+        $verifyResult = $this->emailProvider->verifyApiKey($rawApiKey);
         if (!$verifyResult['valid']) {
             return response()->json([
-                'message' => 'Resend API Key verification failed.',
+                'message' => "{$this->emailProvider->name()} API Key verification failed.",
                 'errors' => [
                     'apiKey' => $verifyResult['error'],
                 ],
@@ -128,7 +136,7 @@ class EmailConfigurationController extends Controller
 
         // Create new active configuration (api_key is encrypted automatically via Eloquent cast)
         $config = EmailConfiguration::create([
-            'provider' => 'Resend',
+            'provider' => $this->emailProvider->name(),
             'api_key' => $rawApiKey,
             'from_name' => trim($validated['fromName']),
             'from_email' => trim($validated['fromEmail']),
@@ -140,19 +148,19 @@ class EmailConfigurationController extends Controller
             $request,
             'config_create',
             'Email Delivery',
-            'Resend Gateway',
-            "Configured Resend email delivery with sender '{$config->from_name} <{$config->from_email}>'"
+            "{$config->provider} Gateway",
+            "Configured {$config->provider} email delivery with sender '{$config->from_name} <{$config->from_email}>'"
         );
 
         return response()->json([
-            'message' => 'Resend email delivery configuration saved successfully.',
+            'message' => "{$config->provider} email delivery configuration saved successfully.",
             'data' => $config->toMaskedResponse(),
         ]);
     }
 
     /**
      * Updates only the API key for the active configuration.
-     * Verifies key against Resend API before persisting.
+     * Verifies key against the provider API before persisting.
      */
     public function updateApiKey(Request $request)
     {
@@ -165,10 +173,10 @@ class EmailConfigurationController extends Controller
         $rawApiKey = trim($validated['apiKey']);
 
         // Live ping verification
-        $verifyResult = $this->resendService->verifyApiKey($rawApiKey);
+        $verifyResult = $this->emailProvider->verifyApiKey($rawApiKey);
         if (!$verifyResult['valid']) {
             return response()->json([
-                'message' => 'Resend API Key verification failed.',
+                'message' => "{$this->emailProvider->name()} API Key verification failed.",
                 'errors' => [
                     'apiKey' => $verifyResult['error'],
                 ],
@@ -185,6 +193,7 @@ class EmailConfigurationController extends Controller
 
         $config->update([
             'api_key' => $rawApiKey,
+            'provider' => $this->emailProvider->name(),
         ]);
 
         $this->logAudit(
@@ -192,11 +201,11 @@ class EmailConfigurationController extends Controller
             'config_update',
             'Email Delivery',
             'API Credentials',
-            'Updated and re-encrypted Resend API secret key'
+            "Updated and re-encrypted {$config->provider} API secret key"
         );
 
         return response()->json([
-            'message' => 'Resend API Key updated and verified successfully.',
+            'message' => "{$config->provider} API Key updated and verified successfully.",
             'data' => $config->toMaskedResponse(),
         ]);
     }
@@ -249,12 +258,13 @@ class EmailConfigurationController extends Controller
     {
         EmailConfiguration::where('is_active', true)->update(['is_active' => false]);
 
+        $provider = $this->emailProvider->name();
         $this->logAudit(
             $request,
             'config_delete',
             'Email Delivery',
-            'Resend Gateway',
-            'Removed active Resend transactional email delivery configuration'
+            "{$provider} Gateway",
+            "Removed active {$provider} transactional email delivery configuration"
         );
 
         return response()->json([
@@ -263,7 +273,7 @@ class EmailConfigurationController extends Controller
     }
 
     /**
-     * Dispatches a test email via Resend to verify deliverability.
+     * Dispatches a test email via the provider to verify deliverability.
      */
     public function sendTestEmail(Request $request)
     {
@@ -279,7 +289,8 @@ class EmailConfigurationController extends Controller
 
         $apiKey = !empty($validated['apiKey']) ? trim($validated['apiKey']) : $config?->api_key;
         $fromName = !empty($validated['fromName']) ? trim($validated['fromName']) : ($config?->from_name ?? 'SBSI Support');
-        $fromEmail = !empty($validated['fromEmail']) ? trim($validated['fromEmail']) : ($config?->from_email ?? 'onboarding@resend.dev');
+        $fromEmail = !empty($validated['fromEmail']) ? trim($validated['fromEmail']) : ($config?->from_email ?? (string) config('mail.from.address'));
+        $provider = $this->emailProvider->name();
 
         if (empty($apiKey)) {
             return response()->json([
@@ -287,11 +298,23 @@ class EmailConfigurationController extends Controller
             ], 422);
         }
 
-        $result = $this->resendService->sendTestEmail($apiKey, $fromName, $fromEmail, $recipient);
+        // A key typed into the form but not saved yet is checked first, so a bad key gets the AC-2 message.
+        if (!empty($validated['apiKey'])) {
+            $verifyResult = $this->emailProvider->verifyApiKey($apiKey);
+            if (!$verifyResult['valid']) {
+                return response()->json([
+                    'message' => "{$provider} API Key verification failed.",
+                    'error' => $verifyResult['error'],
+                    'errors' => ['apiKey' => $verifyResult['error']],
+                ], 422);
+            }
+        }
+
+        $result = $this->emailProvider->sendTestEmail($apiKey, $fromName, $fromEmail, $recipient);
 
         if (!$result['success']) {
             return response()->json([
-                'message' => 'Failed to deliver test email via Resend.',
+                'message' => "Failed to deliver test email via {$provider}.",
                 'error' => $result['error'],
             ], 422);
         }
@@ -309,15 +332,18 @@ class EmailConfigurationController extends Controller
         );
 
         return response()->json([
-            'message' => "A test verification email from \"{$fromName}\" <{$fromEmail}> was successfully delivered to {$recipient} via Resend.",
-            'resend_id' => $result['id'],
+            'message' => "A test verification email from \"{$fromName}\" <{$fromEmail}> was successfully delivered to {$recipient} via {$provider}.",
+            'message_id' => $result['id'],
             'last_tested' => now()->format('M j, h:i A'),
         ]);
     }
 
     /**
      * Inter-service dispatch endpoint for other microservices (e.g. ticket-service)
-     * to send transactional emails via Resend using the active configuration.
+     * to send transactional emails via the provider using the active configuration.
+     *
+     * category=security (OTP, password reset, provisioning) skips the notification channel
+     * check so security mail is always sent. The route is internal token only (config.access).
      */
     public function dispatchEmail(Request $request)
     {
@@ -327,12 +353,15 @@ class EmailConfigurationController extends Controller
             'html' => 'required|string',
             'alert_key' => 'nullable|string',
             'event_key' => 'nullable|string',
+            'category' => 'nullable|string|in:' . self::CATEGORY_SECURITY . ',' . self::CATEGORY_NOTIFICATION,
         ]);
 
+        $isSecurityMail = ($validated['category'] ?? null) === self::CATEGORY_SECURITY;
+
         // TS103 Check delivery channel configuration: if in_app only, skip email dispatch
-        $alertKey = $request->input('alert_key')
+        $alertKey = $isSecurityMail ? null : ($request->input('alert_key')
             ?? $this->mapEventKeyToAlertKey($request->input('event_key'))
-            ?? $this->inferAlertKey($validated['subject']);
+            ?? $this->inferAlertKey($validated['subject']));
 
         if ($alertKey) {
             $channel = DB::table('notification_channels')->where('alert_key', $alertKey)->value('channel');
@@ -352,7 +381,7 @@ class EmailConfigurationController extends Controller
             ], 404);
         }
 
-        $result = $this->resendService->sendRawEmail(
+        $result = $this->emailProvider->sendRawEmail(
             $config->api_key,
             $config->from_name,
             $config->from_email,
@@ -361,15 +390,19 @@ class EmailConfigurationController extends Controller
             $validated['html']
         );
 
+        $provider = $this->emailProvider->name();
+
         if (!$result['success']) {
             return response()->json([
-                'message' => 'Failed to dispatch email via Resend.',
+                'status' => 'error',
+                'message' => "Failed to dispatch email via {$provider}.",
                 'error' => $result['error'],
             ], 502);
         }
 
         return response()->json([
-            'message' => 'Email dispatched successfully via Resend.',
+            'status' => 'success',
+            'message' => "Email dispatched successfully via {$provider}.",
             'id' => $result['id'],
         ]);
     }
@@ -478,7 +511,7 @@ class EmailConfigurationController extends Controller
             </div>
         ';
 
-        $result = $this->resendService->sendRawEmail(
+        $result = $this->emailProvider->sendRawEmail(
             $config->api_key,
             $config->from_name,
             $config->from_email,
@@ -487,17 +520,19 @@ class EmailConfigurationController extends Controller
             $html
         );
 
+        $provider = $this->emailProvider->name();
+
         if (!$result['success']) {
             return response()->json([
                 'status'  => 'error',
-                'message' => 'Failed to dispatch email via Resend.',
+                'message' => "Failed to dispatch email via {$provider}.",
                 'error'   => $result['error'],
             ], 502);
         }
 
         return response()->json([
             'status'  => 'success',
-            'message' => "Email for \"{$template->event_label}\" dispatched successfully via Resend.",
+            'message' => "Email for \"{$template->event_label}\" dispatched successfully via {$provider}.",
             'id'      => $result['id'],
         ]);
     }

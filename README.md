@@ -55,7 +55,7 @@ The system is architected as an event-driven, decoupled microservices suite fron
 | :--- | :--- | :--- |
 | **`customer-service`** | `8001` | Customer identity, OAuth2 / JWT authentication, client management, polymorphic auth provider. |
 | **`ticket-service`** | `8002` | Core ticket lifecycle state machine, SLA calculation, priority management, audit logging. |
-| **`notification-service`** | `8003` | Real-time Reverb WebSocket dispatching (`:6001`) and transactional email delivery (Resend / SMTP). |
+| **`notification-service`** | `8003` | Real-time Reverb WebSocket dispatching (`:6001`) and transactional email delivery (Brevo API / SMTP). |
 | **`analytics-service`** | `8004` | Customer satisfaction (CSAT) surveys, SLA compliance reporting, and predictive volume metrics. |
 | **`AI-service`** | `8005` | Google Gemini 2.0 Flash AI assistant, conversation persistence, sentiment triage, and direct fallback escalation. |
 | **`attachment-service`** | `8006` | File upload handling with mandatory ClamAV antivirus inspection (`:3310`) prior to storage. |
@@ -173,6 +173,6 @@ When working on specific feature areas or bugfixes, reference this quick map to 
 | **Live Chat & Messaging** | `services/messaging-service/app/Http/Controllers/MessageController.php`<br/>`services/messaging-service/app/Models/Message.php` | `frontend/web/src/pages/MessagingPage.jsx` | Store in MongoDB `messages`. Broadcast over Reverb (port 6002). |
 | **AI Support & Escalation** | `services/AI-service/app/Http/Controllers/GeminiChatController.php`<br/>`services/AI-service/app/Services/GeminiService.php` | `frontend/web/src/components/AIChatModal.jsx` | Use Gemini 2.0 Flash. Fallback strictly to manual ticket creation (`escalate: true`). |
 | **Predictive Analytics & CSAT** | `services/analytics-service/app/Http/Controllers/PredictiveAnalyticsController.php`<br/>`services/analytics-service/app/Http/Controllers/FeedbackController.php` | `frontend/web/src/pages/PredictiveAnalytics.jsx`<br/>`frontend/web/src/pages/AdminReports.jsx` | Read from local analytics MySQL tables. Render via Chart.js. |
-| **System Configuration & Keys** | `services/configuration-service/app/Http/Controllers/ConfigController.php`<br/>`services/configuration-service/app/Http/Controllers/ResendConfigController.php` | `frontend/web/src/pages/AdminSettings.jsx` | Validate credentials against live APIs. Protect RSA private keys. |
+| **System Configuration & Keys** | `services/configuration-service/app/Http/Controllers/EmailConfigurationController.php`<br/>`services/configuration-service/app/Services/BrevoService.php` | `frontend/web/src/pages/AdminSettings.jsx` | Validate credentials against live APIs. Protect RSA private keys. |
 | **Gateway & Reverse Proxy** | `nginx.conf`<br/>`nginx.prod.conf` | N/A | Maintain route parity between dev and prod configurations. |
 

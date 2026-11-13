@@ -12,7 +12,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // Transactional email provider (spec 0040: Brevo only).
+        $this->app->bind(\App\Contracts\EmailProvider::class, \App\Services\BrevoService::class);
     }
 
     /**

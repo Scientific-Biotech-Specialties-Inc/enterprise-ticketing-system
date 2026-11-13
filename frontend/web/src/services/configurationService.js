@@ -78,7 +78,7 @@ async function getServiceEncryptionKey() {
 
 /**
  * Fetch the current email delivery configuration.
- * Returns { is_configured: boolean, data: { provider, api_key: 're_•••••••••', from_name, from_email, last_tested } | null }
+ * Returns { is_configured: boolean, data: { provider, api_key: 'xkeysib-•••••••••', from_name, from_email, last_tested } | null }
  */
 export async function getEmailConfiguration() {
   const response = await configClient.get('/email');
@@ -149,7 +149,7 @@ export async function removeEmailConfiguration() {
 }
 
 /**
- * Dispatches a test verification email via Resend.
+ * Dispatches a test verification email via Brevo.
  */
 export async function sendTestEmail({ recipientEmail, apiKey, fromName, fromEmail }) {
   const headers = {};
