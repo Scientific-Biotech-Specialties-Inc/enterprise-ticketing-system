@@ -111,10 +111,25 @@ class TicketController extends Controller
             $request->merge(['machine_ID' => null]);
         }
 
+        // Spec 0038 AC-5: an external ticket may only link a machine registered to the
+        // creating customer (machines.client_ID). Internal tickets use storeInternalTicket().
+        $machineOwnedByCustomer = function (string $attribute, $value, \Closure $fail) use ($user) {
+            if ($value === null || $value === '') {
+                return;
+            }
+            $owned = \Illuminate\Support\Facades\DB::table('machines')
+                ->where('machine_ID', (int) $value)
+                ->where('client_ID', (int) $user->id)
+                ->exists();
+            if (!$owned) {
+                $fail('The selected machine is not registered to this customer.');
+            }
+        };
+
         $validated = $request->validate([
             'machine_ID' => $isServiceDept
-                ? ['required', 'integer', 'exists:machines,machine_ID']
-                : ['nullable', 'integer', 'exists:machines,machine_ID'],
+                ? ['required', 'integer', 'exists:machines,machine_ID', $machineOwnedByCustomer]
+                : ['nullable', 'integer', 'exists:machines,machine_ID', $machineOwnedByCustomer],
             'problem_category_ID' => ['required', 'integer', 'exists:problem_categories,problem_category_ID'],
             'priority_ID' => ['nullable', 'integer', 'exists:ticket_priorities,priority_ID'],
             'branch_id' => ['nullable', 'string', 'max:64', 'exists:branches,slug'],

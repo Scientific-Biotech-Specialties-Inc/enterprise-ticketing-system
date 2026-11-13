@@ -280,3 +280,42 @@ describe('SuperAdminTicketConfig - SLA business hours', () => {
     ])));
   });
 });
+
+describe('SuperAdminTicketConfig - Brevo email delivery (spec 0040)', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const router = await import('react-router-dom');
+    router.useParams.mockReturnValue({ group: 'notifications', subtab: 'email-delivery' });
+    router.useLocation.mockReturnValue({ pathname: '/ticketing/superadmin/config/notifications/email-delivery' });
+    configurationService.getMessagingConfiguration.mockResolvedValue({});
+    configurationService.getEmailConfiguration.mockResolvedValue({ is_configured: false, data: null });
+  });
+
+  const openAddForm = async () => {
+    render(<SuperAdminTicketConfig />);
+    fireEvent.click(await screen.findByRole('button', { name: /Add Email Configuration/i }));
+    expect(await screen.findByText('Add Brevo Email Configuration')).toBeInTheDocument();
+  };
+
+  it('labels the provider as Brevo API v3 and never mentions Resend', async () => {
+    await openAddForm();
+    expect(screen.getByText('Brevo API v3')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/^xkeysib-/)).toBeInTheDocument();
+    expect(screen.getByText('Must be a verified sender in your Brevo account.')).toBeInTheDocument();
+    expect(screen.queryByText(/Resend/)).not.toBeInTheDocument();
+  });
+
+  it('rejects a Brevo SMTP key with a specific message', async () => {
+    await openAddForm();
+    fireEvent.change(screen.getByPlaceholderText(/^xkeysib-/), { target: { value: 'xsmtpsib-abc123456789' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save Configuration/i }));
+    expect(await screen.findByText('This is a Brevo SMTP key. Paste an API v3 key instead.')).toBeInTheDocument();
+  });
+
+  it('rejects an old Resend style key', async () => {
+    await openAddForm();
+    fireEvent.change(screen.getByPlaceholderText(/^xkeysib-/), { target: { value: 're_oldkey123456789' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save Configuration/i }));
+    expect(await screen.findByText('Brevo API Key must start with "xkeysib-".')).toBeInTheDocument();
+  });
+});

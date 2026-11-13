@@ -28,8 +28,14 @@ class FeedbackController extends Controller
         return $principal ?: response()->json(['status' => 'error', 'message' => 'Unauthenticated.'], 401);
     }
 
-    /** Fetch a ticket from ticket-service as the caller. Returns [httpStatus, ticketArray|null]. */
-    private function fetchTicketAsCaller(Request $request, string $ticketId, int $timeout = 3): array
+    /**
+     * Fetch a ticket's ownership from ticket-service as the caller. Returns [httpStatus, ticketArray|null].
+     *
+     * Spec 0038 AC-35: uses the lightweight GET /tickets/{id}/ownership (ticket_ID, ticket_number,
+     * client_ID, status_name, is_internal), which reads two tables and makes no outbound calls,
+     * instead of the full ticket detail that timed out and never carried client_ID.
+     */
+    private function fetchTicketAsCaller(Request $request, string $ticketId, int $timeout = 5): array
     {
         // ticket-service resolves tickets by numeric primary key only. A display number such as
         // "TKT-0012" would raise a type error there and surface as a misleading 503.
@@ -42,7 +48,7 @@ class FeedbackController extends Controller
         if ($token = $this->callerToken($request)) {
             $http = $http->withToken($token);
         }
-        $res = $http->get("{$ticketServiceUrl}/api/tickets/" . rawurlencode($ticketId));
+        $res = $http->get("{$ticketServiceUrl}/api/tickets/" . rawurlencode($ticketId) . '/ownership');
         if (!$res->successful()) {
             return [$res->status(), null];
         }

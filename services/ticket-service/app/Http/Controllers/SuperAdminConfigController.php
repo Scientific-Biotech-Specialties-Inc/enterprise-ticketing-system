@@ -157,6 +157,9 @@ class SuperAdminConfigController extends Controller
             $updateData['description'] = $validated['description'];
         }
         if (array_key_exists('is_active', $validated)) {
+            if (!$validated['is_active'] && $category->is_active && !$this->otherActiveTicketCategoryExists($id)) {
+                return response()->json(['message' => 'At least one active ticket category must remain. Activate another category before deactivating this one.'], 422);
+            }
             $updateData['is_active'] = $validated['is_active'];
         }
 
@@ -200,8 +203,9 @@ class SuperAdminConfigController extends Controller
             return response()->json(['message' => 'Ticket category not found.'], 404);
         }
 
-        if ($category->is_system_default) {
-            return response()->json(['message' => 'System default ticket categories cannot be deleted.'], 422);
+        // No category is protected as a core default, but customers always need one to pick.
+        if (!$this->otherActiveTicketCategoryExists($id)) {
+            return response()->json(['message' => 'At least one active ticket category must remain. Add another category before deleting this one.'], 422);
         }
 
         $inUse = DB::table('tickets')->where('problem_category_ID', $id)->exists();
@@ -228,6 +232,17 @@ class SuperAdminConfigController extends Controller
         $this->cacheService->clearTicketCaches();
 
         return response()->json(['message' => 'Ticket category deleted successfully.']);
+    }
+
+    /**
+     * True when some other ticket category stays active, so removing or deactivating $id leaves at least one.
+     */
+    private function otherActiveTicketCategoryExists(int $id): bool
+    {
+        return DB::table('problem_categories')
+            ->where('problem_category_ID', '!=', $id)
+            ->where('is_active', true)
+            ->exists();
     }
 
     public function createSuperAdminEquipment(Request $request)
@@ -541,7 +556,15 @@ class SuperAdminConfigController extends Controller
         }
         if ($request->filled('branch_id')) {
             // Entries not tied to a ticket carry no branch, so they are excluded when narrowing by branch.
-            $query->where('t.branch_id', (int) $request->query('branch_id'));
+            // tickets.branch_id is a string that may hold the branch id, slug or code (NULL for the main
+            // branch), so match it the same way the admin dashboard does instead of by integer id only.
+            $branch = DB::table('branches')->where('id', (int) $request->query('branch_id'))->first();
+            $query->whereNotNull('t.ticket_ID');
+            if ($branch) {
+                app(\App\Services\TicketDashboardService::class)->applyBranchTicketFilter($query, $branch);
+            } else {
+                $query->whereRaw('1 = 0');
+            }
         }
         if ($request->filled('actor')) {
             $actor = '%' . $request->query('actor') . '%';
@@ -575,7 +598,20 @@ class SuperAdminConfigController extends Controller
         }
         $logs = $query->get();
 
-        $formattedLogs = $logs->map(function ($log) {
+        // Resolve a ticket's stored branch reference (id, slug or code) to its branch row.
+        $branchLookup = [];
+        foreach (DB::table('branches')->get(['id', 'slug', 'code', 'name']) as $b) {
+            foreach ([(string) $b->id, (string) $b->slug, (string) $b->code] as $key) {
+                if ($key !== '') {
+                    $branchLookup[strtolower($key)] ??= $b;
+                }
+            }
+        }
+
+        $formattedLogs = $logs->map(function ($log) use ($branchLookup) {
+            $ticketBranch = $log->ticket_branch_id !== null
+                ? ($branchLookup[strtolower((string) $log->ticket_branch_id)] ?? null)
+                : null;
             $userFullName = 'System';
             $role = 'System';
 
@@ -673,7 +709,8 @@ class SuperAdminConfigController extends Controller
                 'severity' => $detailsDecoded['severity'] ?? null,
                 'burst_count' => $detailsDecoded['burst_count'] ?? 1,
                 'event_type' => $log->action_type,
-                'branch_id' => $log->ticket_branch_id !== null ? (int) $log->ticket_branch_id : null,
+                'branch_id' => $ticketBranch ? (int) $ticketBranch->id : null,
+                'branch' => $ticketBranch->name ?? null,
             ];
         })->values();
 

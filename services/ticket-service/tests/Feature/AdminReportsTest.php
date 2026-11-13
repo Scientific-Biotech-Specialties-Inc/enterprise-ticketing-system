@@ -262,6 +262,10 @@ class AdminReportsTest extends TestCase
             'updated_at' => $now,
         ]);
 
+        // Spec 0039: employee figures come from the technician's own holding periods.
+        $this->period($t1, $this->technician->emp_id, $now->copy()->subHours(5), $now->copy()->subHours(5), $now->copy()->subHours(2), 'closed');
+        $this->period($t2, $this->technician->emp_id, $now->copy()->subHours(8), $now->copy()->subHours(8), $now->copy()->subHours(4), 'resolved');
+
         // Create an approved reassignment request originating from this employee
         DB::table('reassignment_requests')->insert([
             'ticket_id' => $t1,
@@ -290,6 +294,13 @@ class AdminReportsTest extends TestCase
                         'department',
                         'has_data',
                         'period_status',
+                        'performance_score',
+                        'score_status',
+                        'pending_count',
+                        'response_sla_rate',
+                        'response_met_count',
+                        'response_breached_count',
+                        'average_response_minutes',
                         'tickets_assigned',
                         'tickets_resolved',
                         'resolution_rate',
@@ -899,7 +910,7 @@ class AdminReportsTest extends TestCase
     public function test_employee_list_sorts_by_metric_and_keeps_no_data_rows_last(): void
     {
         $now = Carbon::now();
-        DB::table('tickets')->insert([
+        $sortTicket = DB::table('tickets')->insertGetId([
             'ticket_number' => 'TCK-SORT-001',
             'title' => 'Sort fixture',
             'description' => 'Sort fixture',
@@ -913,6 +924,8 @@ class AdminReportsTest extends TestCase
             'created_at' => $now->copy()->subDay(),
             'updated_at' => $now,
         ]);
+        // Spec 0039: an accepted, still open period gives the technician a 0% resolution rate.
+        $this->period($sortTicket, $this->technician->emp_id, $now->copy()->subDay(), $now->copy()->subDay()->addMinutes(10));
 
         foreach (['asc', 'desc'] as $dir) {
             $rows = $this->actingAs($this->admin, 'api')
@@ -939,5 +952,20 @@ class AdminReportsTest extends TestCase
         $this->actingAs($this->admin, 'api')
             ->getJson('/api/admin-reports/employees?preset=Last 7 Days&sort_by=not_a_column&force_refresh=true')
             ->assertOk();
+    }
+
+    /** Spec 0039: one holding period row for an employee on a ticket. */
+    private function period(int $ticketId, int $employeeId, Carbon $assignedAt, ?Carbon $acceptedAt = null, ?Carbon $releasedAt = null, ?string $reason = null): void
+    {
+        DB::table('ticket_assignment_periods')->insert([
+            'ticket_ID' => $ticketId,
+            'employee_ID' => $employeeId,
+            'assigned_at' => $assignedAt,
+            'accepted_at' => $acceptedAt,
+            'released_at' => $releasedAt,
+            'release_reason' => $reason,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
     }
 }

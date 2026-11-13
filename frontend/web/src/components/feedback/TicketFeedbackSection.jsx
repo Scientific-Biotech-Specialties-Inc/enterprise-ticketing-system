@@ -1,38 +1,36 @@
 import React, { useState, useEffect } from 'react';
 import { Pencil, X, Clock, CheckCircle2, Star, HelpCircle } from 'lucide-react';
 import EmployeeFeedbackCard from './EmployeeFeedbackCard';
-import { getTicketFeedback, getTicketEmployees, fetchFeedbackForTicket, feedbackTicketId } from '@/data/mockFeedbackData';
+import { getTicketEmployees, fetchFeedbackForTicket, feedbackTicketId } from '@/data/mockFeedbackData';
 
 export default function TicketFeedbackSection({ ticket, onLeaveFeedback, onEditFeedback, readOnly = false }) {
   const ticketId = feedbackTicketId(ticket);
-  const [feedback, setFeedback] = useState(() => getTicketFeedback(ticketId));
+  // Spec 0038 AC-36: saved feedback is read from GET /feedback/ticket/{id} only, never browser storage.
+  const [feedback, setFeedback] = useState(null);
   const [isDismissed, setIsDismissed] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
 
-  // Sync feedback on prop change, backend fetch, or custom events
   useEffect(() => {
     let isMounted = true;
-    const local = getTicketFeedback(ticketId);
-    if (local) setFeedback(local);
-
-    if (typeof fetchFeedbackForTicket === 'function') {
-      fetchFeedbackForTicket(ticketId)
-        ?.then((fb) => {
-          if (isMounted && fb) {
-            setFeedback(fb);
-          }
-        })
-        ?.catch(() => {});
-    }
+    setFeedback(null);
+    fetchFeedbackForTicket(ticketId)
+      .then((fb) => {
+        if (isMounted) setFeedback(fb || null);
+      })
+      .catch(() => {
+        if (isMounted) setFeedback(null);
+      });
 
     return () => {
       isMounted = false;
     };
-  }, [ticketId]);
+  }, [ticketId, reloadTick]);
 
+  // Submissions, edits, and deletes elsewhere on the page trigger a fresh API read.
   useEffect(() => {
     const handleUpdate = () => {
-      setFeedback(getTicketFeedback(ticketId));
       setIsDismissed(false);
+      setReloadTick((n) => n + 1);
     };
     window.addEventListener('customer_feedback_submitted', handleUpdate);
     window.addEventListener('customer_feedback_updated', handleUpdate);

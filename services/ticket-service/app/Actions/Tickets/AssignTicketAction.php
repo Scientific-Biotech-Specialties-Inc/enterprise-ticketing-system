@@ -79,7 +79,7 @@ class AssignTicketAction
                 'created_at' => now(),
             ]);
 
-            $this->cacheService->clearTicketCaches();
+            $this->cacheService->clearTicketCaches((int) $ticketId);
 
             $updatedTicket = DB::table('tickets')->where('ticket_ID', $ticketId)->first();
 

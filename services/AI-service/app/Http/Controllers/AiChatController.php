@@ -407,6 +407,12 @@ class AiChatController extends Controller
                     }
                 }
 
+                // A numbered intake answer ("1. machine 2. model ... 4. symptom") becomes "symptom (model)".
+                $intakeTitle = \App\Services\IntakeTitleBuilder::fromNumberedIntake($trimmed);
+                if ($intakeTitle !== null) {
+                    return $intakeTitle;
+                }
+
                 // Strip question numbers like "1.", "1)", "1 -", "Q1:", "Machine:"
                 $trimmed = preg_replace('/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $trimmed);
                 $trimmed = trim($trimmed);

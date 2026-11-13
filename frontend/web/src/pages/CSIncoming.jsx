@@ -1008,6 +1008,10 @@ export default function CSIncoming() {
                 });
               }
             } catch (err) {
+              // Spec 0038 AC-32: let the modal show a refused proof approval instead of hiding it.
+              if (['PROOF_NOT_VIEWED', 'PROOF_CHECK_UNAVAILABLE'].includes(err?.response?.data?.code)) {
+                throw err;
+              }
               console.error('Failed to update ticket status on backend:', err);
             }
           }}

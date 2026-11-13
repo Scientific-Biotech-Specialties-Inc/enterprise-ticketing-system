@@ -107,6 +107,16 @@ class AdminMetricsAccuracyTest extends TestCase
         ], $over));
     }
 
+    /** Spec 0039: one holding period row. */
+    private function period(int $ticketId, int $employeeId, Carbon $assignedAt, ?Carbon $acceptedAt = null, ?Carbon $releasedAt = null, ?string $reason = null): void
+    {
+        DB::table('ticket_assignment_periods')->insert([
+            'ticket_ID' => $ticketId, 'employee_ID' => $employeeId, 'assigned_at' => $assignedAt,
+            'accepted_at' => $acceptedAt, 'released_at' => $releasedAt, 'release_reason' => $reason,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+    }
+
     private function row(array $over): object
     {
         return (object) array_merge([
@@ -180,20 +190,30 @@ class AdminMetricsAccuracyTest extends TestCase
 
     // ─── AC-3, AC-4, AC-5, AC-6: real SLA rates by outcome date ───────────────────────────
 
-    public function test_employee_sla_rate_follows_the_outcome_rule_and_window(): void
+    /**
+     * Spec 0039 (AC-6, AC-11, AC-12) supersedes the spec 0031 per employee rule: employee SLA comes from
+     * the employee's own holding periods, counted by the period's assigned_at, not by outcome date.
+     */
+    public function test_employee_sla_rate_follows_assignment_periods(): void
     {
         $tech = $this->serviceTech->emp_id;
-        // Met: resolved yesterday before its deadline.
-        $this->ticket(['assigned_to' => $tech, 'ticket_status_ID' => 3, 'resolution_due_at' => now()->subHours(20), 'resolved_at' => now()->subDay()]);
-        // Breached: resolved after its deadline.
-        $this->ticket(['assigned_to' => $tech, 'ticket_status_ID' => 3, 'resolution_due_at' => now()->subDays(2), 'resolved_at' => now()->subDay()]);
-        // Breached: created 40 days ago, still open, due 3 days ago (counts in Last 7 Days by due date).
-        $this->ticket(['assigned_to' => $tech, 'ticket_status_ID' => 1, 'created_at' => now()->subDays(40), 'resolution_due_at' => now()->subDays(3)]);
-        // Excluded: open, not yet due; and no SLA at all.
-        $this->ticket(['assigned_to' => $tech, 'ticket_status_ID' => 2, 'resolution_due_at' => now()->addDays(2)]);
-        $this->ticket(['assigned_to' => $tech, 'ticket_status_ID' => 3, 'resolved_at' => now()->subHour()]);
-        // IT tech has only an open, not yet due ticket: no SLA data.
-        $this->ticket(['assigned_to' => $this->itTech->emp_id, 'ticket_status_ID' => 2, 'resolution_due_at' => now()->addDay()]);
+        // Met: resolved yesterday before its deadline, finished by the tech.
+        $met = $this->ticket(['assigned_to' => $tech, 'ticket_status_ID' => 3, 'resolution_due_at' => now()->subHours(20), 'resolved_at' => now()->subDay()]);
+        $this->period($met, $tech, now()->subDays(2), now()->subDays(2), now()->subDay(), 'resolved');
+        // Breached: resolved after its deadline while the tech held it.
+        $late = $this->ticket(['assigned_to' => $tech, 'ticket_status_ID' => 3, 'resolution_due_at' => now()->subDays(2), 'resolved_at' => now()->subDay()]);
+        $this->period($late, $tech, now()->subDays(3), now()->subDays(3), now()->subDay(), 'resolved');
+        // Breached: still open, due a day ago, held by the tech since 2 days ago.
+        $open = $this->ticket(['assigned_to' => $tech, 'ticket_status_ID' => 2, 'resolution_due_at' => now()->subDay()]);
+        $this->period($open, $tech, now()->subDays(2), now()->subDays(2));
+        // No outcome: open and not yet due.
+        $notDue = $this->ticket(['assigned_to' => $tech, 'ticket_status_ID' => 2, 'resolution_due_at' => now()->addDays(2)]);
+        $this->period($notDue, $tech, now()->subDay(), now()->subDay());
+        // Assigned before tracking began (no period row): counts for nobody, even though it breached.
+        $this->ticket(['assigned_to' => $tech, 'ticket_status_ID' => 1, 'resolution_due_at' => now()->subDays(3)]);
+        // IT tech has only an open, not yet due period: no SLA data.
+        $itTicket = $this->ticket(['assigned_to' => $this->itTech->emp_id, 'ticket_status_ID' => 2, 'resolution_due_at' => now()->addDay()]);
+        $this->period($itTicket, $this->itTech->emp_id, now()->subDay(), now()->subDay());
 
         $employees = collect($this->actingAs($this->admin, 'api')
             ->getJson('/api/admin/reports/employees?preset=Last 7 Days&force_refresh=true')
@@ -204,15 +224,17 @@ class AdminMetricsAccuracyTest extends TestCase
         $this->assertSame(1, $service['sla_met_count']);
         $this->assertSame(2, $service['sla_breached_count']);
         $this->assertEquals(33.3, $service['sla_compliance_rate']);
+        $this->assertSame(4, $service['tickets_assigned'], 'the pre tracking ticket is not counted');
 
         $it = $employees->firstWhere('employee_id', $this->itTech->emp_id);
         $this->assertNull($it['sla_compliance_rate'], 'no met or breached tickets means null, never 100');
 
-        // Today only: the met and breached resolutions happened yesterday, the open breach was due 3 days ago.
+        // Today only: every period started before today.
         $today = collect($this->actingAs($this->admin, 'api')
             ->getJson('/api/admin/reports/employees?preset=Today&force_refresh=true')
             ->json('employees'))->firstWhere('employee_id', $tech);
         $this->assertNull($today['sla_compliance_rate']);
+        $this->assertSame(0, $today['tickets_assigned']);
     }
 
     public function test_unassigned_breach_counts_overall_but_not_for_any_department(): void

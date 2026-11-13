@@ -26,10 +26,7 @@ export default function BranchSelector({
   const dropdownRef = useRef(null);
 
   const userRole = (authUser?.role || '').toLowerCase();
-  const userEmail = (authUser?.email || '').toLowerCase();
-  const isSuperAdminUser = isSuperAdmin ?? (
-    userRole === 'superadmin' || userRole === 'super admin' || userEmail === 'superadmin@example.com'
-  );
+  const isSuperAdminUser = isSuperAdmin ?? (userRole === 'superadmin' || userRole === 'super admin');
 
   const activeBranch = selectedBranch || GLOBAL_BRANCH;
 

@@ -138,7 +138,7 @@ class ReportExportServiceTest extends TestCase
     public function test_allowed_report_types_and_formats_match_the_spec(): void
     {
         $this->assertEqualsCanonicalizing(
-            ['ticket_volume', 'sla_compliance', 'department_performance', 'equipment_maintenance', 'csat_satisfaction', 'predictive_risk'],
+            ['ticket_volume', 'sla_compliance', 'department_performance', 'employee_performance', 'equipment_maintenance', 'csat_satisfaction', 'predictive_risk'],
             ReportExportService::REPORT_TYPES
         );
         $this->assertSame(['csv', 'xlsx', 'pdf'], ReportExportService::FORMATS);

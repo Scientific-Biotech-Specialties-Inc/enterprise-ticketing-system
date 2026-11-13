@@ -35,27 +35,17 @@ export function BranchProvider({ children }) {
   const [branches, setBranches] = useState(DEFAULT_BRANCHES);
   const [selectedBranchId, setSelectedBranchIdState] = useState(getStoredBranchId);
 
+  // Role-based only (role comes from the verified /me response); no email grants branch access.
   const isSuperAdmin = useMemo(() => {
     if (!authUser) return false;
     const role = (authUser.role || '').toLowerCase();
-    const email = (authUser.email || '').toLowerCase();
-    return (
-      role === 'superadmin' ||
-      role === 'super admin' ||
-      email === 'superadmin@example.com'
-    );
+    return role === 'superadmin' || role === 'super admin';
   }, [authUser]);
 
   const isSuperOrAdmin = useMemo(() => {
     if (!authUser) return false;
     const role = (authUser.role || '').toLowerCase();
-    const email = (authUser.email || '').toLowerCase();
-    return (
-      role === 'superadmin' ||
-      role === 'admin' ||
-      email === 'superadmin@example.com' ||
-      email === 'admin@example.com'
-    );
+    return role === 'superadmin' || role === 'admin';
   }, [authUser]);
 
   // Dynamically load live branches from ticket service on mount or role change

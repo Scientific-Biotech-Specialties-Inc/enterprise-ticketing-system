@@ -419,6 +419,10 @@ class SLAService
      */
     public function pauseClock(int $ticketId): bool
     {
+        // Spec 0039 (AC-4): pause every open assignment period. Runs even when the ticket clock was
+        // already paused, so period history never misses a hold; the recorder is idempotent.
+        (new AssignmentPeriodRecorder($this))->pause($ticketId);
+
         $ticket = DB::table('tickets')->where('ticket_ID', $ticketId)->first();
         if (!$ticket || $ticket->sla_paused_at !== null) {
             return false;
@@ -445,6 +449,9 @@ class SLAService
     public function resumeClock(int $ticketId): bool
     {
         return DB::transaction(function () use ($ticketId) {
+            // Spec 0039 (AC-4): resume paused assignment periods (idempotent, see pauseClock).
+            (new AssignmentPeriodRecorder($this))->resume($ticketId);
+
             $ticket = DB::table('tickets')->where('ticket_ID', $ticketId)->lockForUpdate()->first();
             if (!$ticket || empty($ticket->sla_paused_at)) {
                 return false;

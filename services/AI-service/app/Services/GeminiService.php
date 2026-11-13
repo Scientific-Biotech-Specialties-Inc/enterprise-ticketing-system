@@ -201,7 +201,11 @@ class GeminiService
                 'contents' => $contents,
                 'generationConfig' => [
                     'temperature' => 0.2,
-                    'maxOutputTokens' => 600,
+                    // Room for 3 to 5 steps plus the escalation JSON block, so the block is not cut off.
+                    'maxOutputTokens' => 1024,
+                    // Thinking tokens count against maxOutputTokens and add seconds of latency, which cut
+                    // replies off mid JSON. Troubleshooting steps grounded in KB sources do not need it.
+                    'thinkingConfig' => ['thinkingBudget' => 0],
                 ]
             ];
 
@@ -269,14 +273,24 @@ class GeminiService
         $ticketData = null;
         $cleanText = $rawText;
 
-        // Check for JSON escalation block: ```json { "escalate": true ... } ```
-        if (preg_match('/```json\s*(\{.*?\"escalate\"\s*:\s*true.*?\})\s*```/s', $rawText, $matches)) {
-            $escalate = true;
-            $jsonStr = $matches[1];
-            $cleanText = trim(str_replace($matches[0], '', $rawText));
+        // Find the escalation JSON block wherever it starts. Gemini does not always close it (the
+        // reply can hit the token limit mid block), tag it as json, or fence it at all, so match on
+        // the opening `{ "escalate":` and treat everything from there to the end as machine data.
+        // That data is never shown to the customer, even when it cannot be decoded.
+        if (preg_match('/(?:```[a-zA-Z]*\s*)?\{\s*"escalate"\s*:/', $rawText, $start, PREG_OFFSET_CAPTURE)) {
+            $offset = $start[0][1];
+            $block = substr($rawText, $offset);
+            $cleanText = trim(substr($rawText, 0, $offset));
 
-            $parsed = json_decode($jsonStr, true);
-            if (json_last_error() === JSON_ERROR_NONE && !empty($parsed)) {
+            $jsonStr = preg_replace('/^```[a-zA-Z]*\s*/', '', $block);
+            $lastBrace = strrpos($jsonStr, '}');
+            $parsed = $lastBrace !== false ? json_decode(substr($jsonStr, 0, $lastBrace + 1), true) : null;
+            if (!is_array($parsed)) {
+                $parsed = $this->extractPartialEscalationFields($jsonStr);
+            }
+
+            $escalate = ($parsed['escalate'] ?? false) === true;
+            if ($escalate) {
                 $rawTitle = $parsed['ticket_title'] ?? '';
                 $cleanTitle = preg_replace('/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i', '', $rawTitle);
                 $cleanTitle = trim($cleanTitle);
@@ -315,6 +329,21 @@ class GeminiService
             'escalate' => $escalate,
             'ticket_data' => $ticketData,
         ];
+    }
+
+    /**
+     * Recover the fields that survived from an escalation block that is not valid JSON
+     * (usually cut off by the output token limit). Only complete key/value pairs are kept.
+     */
+    protected function extractPartialEscalationFields(string $text): array
+    {
+        $fields = [];
+        preg_match_all('/"([a-z_]+)"\s*:\s*("(?:[^"\\\\]|\\\\.)*"|-?\d+(?:\.\d+)?|true|false|null)/i', $text, $pairs, PREG_SET_ORDER);
+        foreach ($pairs as $pair) {
+            $fields[$pair[1]] = json_decode($pair[2], true);
+        }
+
+        return $fields;
     }
 
     /**
@@ -380,6 +409,12 @@ class GeminiService
                         $content = ltrim($content, " ,.!?-");
                         break;
                     }
+                }
+
+                // A numbered intake answer ("1. machine 2. model ... 4. symptom") becomes "symptom (model)".
+                $intakeTitle = IntakeTitleBuilder::fromNumberedIntake($content);
+                if ($intakeTitle !== null) {
+                    return $intakeTitle;
                 }
 
                 // Strip question numbers like "1.", "1)", "1 -", "Q1:", "Machine:"
@@ -470,6 +505,7 @@ class GeminiService
                     'generationConfig' => [
                         'temperature' => 0.1,
                         'maxOutputTokens' => 200,
+                        'thinkingConfig' => ['thinkingBudget' => 0],
                     ]
                 ];
 
@@ -549,7 +585,8 @@ class GeminiService
                         'role' => 'user',
                         'parts' => [['text' => "Ticket Title: {$title}\nDescription: {$description}"]],
                     ]],
-                    'generationConfig' => ['temperature' => 0.1, 'maxOutputTokens' => 200],
+                    // No thinking: it used half the 200 token budget and pushed replies past the 6s timeout.
+                    'generationConfig' => ['temperature' => 0.1, 'maxOutputTokens' => 200, 'thinkingConfig' => ['thinkingBudget' => 0]],
                 ]);
 
             if ($response->successful()) {

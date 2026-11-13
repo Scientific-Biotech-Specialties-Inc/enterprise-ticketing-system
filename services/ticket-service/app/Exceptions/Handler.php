@@ -76,7 +76,7 @@ class Handler extends ExceptionHandler
 
     /**
      * Client errors (403, 404 and other 4xx) are expected outcomes, so they never expose file paths or stack
-     * traces even when APP_DEBUG is on. Real server errors keep the full debug detail.
+     * traces even when APP_DEBUG is on. Server errors return a generic message; details stay in the logs.
      */
     protected function convertExceptionToArray(Throwable $e)
     {
@@ -84,7 +84,9 @@ class Handler extends ExceptionHandler
             return ['message' => $e->getMessage() !== '' ? $e->getMessage() : 'Request could not be completed.'];
         }
 
-        return parent::convertExceptionToArray($e);
+        // Server errors never send SQL, file paths or stack traces to the browser, even with APP_DEBUG
+        // on. The full exception is still written to the log and the system alert by report().
+        return ['message' => 'Something went wrong on our side. Please try again in a moment.'];
     }
 
     protected function unauthenticated($request, AuthenticationException $exception)

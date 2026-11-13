@@ -24,6 +24,7 @@ class TicketStateMachine
     public const STATE_REOPENED = 'Reopened';
     public const STATE_ON_HOLD = 'On Hold/Pending';
     public const STATE_CANCELLED = 'Cancelled';
+    public const STATE_ESCALATED = 'Escalated';
 
     public const OWNER_CS = 'cs';
     public const OWNER_EMPLOYEE = 'employee';
@@ -32,7 +33,9 @@ class TicketStateMachine
     public const STATUS_ID_IN_PROGRESS = 2;
     public const STATUS_ID_RESOLVED = 3;
     public const STATUS_ID_CLOSED = 4;
-    public const STATUS_ID_CANCELLED = 5;
+    // Status 5 is Escalated, and Cancelled shares Discarded's id 9, matching ticket-service.
+    // (Before spec 0038 this was 5, which made every Escalated ticket look terminal here.)
+    public const STATUS_ID_CANCELLED = 9;
     public const STATUS_ID_ESCALATED = 5;
     public const STATUS_ID_PENDING_EVALUATION = 6;
     public const STATUS_ID_PENDING = 7;
@@ -68,6 +71,10 @@ class TicketStateMachine
         ],
         'Closed' => [
             'allowed' => ['Reopened'],
+            'type' => 'editable',
+        ],
+        'Escalated' => [
+            'allowed' => ['Assigned', 'In Progress (Employee-owned)', 'In Progress (CS-owned)', 'Resolved', 'Closed'],
             'type' => 'editable',
         ],
         'Reopened' => [
@@ -133,7 +140,9 @@ class TicketStateMachine
             case self::STATUS_ID_REOPENED:
                 return self::STATE_REOPENED;
 
-            case self::STATUS_ID_CANCELLED:
+            case self::STATUS_ID_ESCALATED:
+                return self::STATE_ESCALATED;
+
             case self::STATUS_ID_DISCARDED:
                 return self::STATE_CANCELLED;
 
@@ -147,8 +156,26 @@ class TicketStateMachine
                 if ($norm === 'on hold' || $norm === 'pending') return self::STATE_ON_HOLD;
                 if ($norm === 'pending assignment') return self::STATE_ASSIGNED;
                 if ($norm === 'reopened') return self::STATE_REOPENED;
+                if ($norm === 'escalated') return self::STATE_ESCALATED;
                 return self::STATE_OPEN;
         }
+    }
+
+    /**
+     * Where an On Hold ticket resumes to (spec 0038 AC-28 / AC-29). Mirrors
+     * ticket-service TicketStateMachine::resolveResumeTarget().
+     */
+    public function resolveResumeTarget($ticket): string
+    {
+        $heldFrom = $ticket ? (int) ($ticket->held_from_status_ID ?? 0) : 0;
+        if ($heldFrom === self::STATUS_ID_PENDING_ASSIGNMENT) {
+            return self::STATE_ASSIGNED;
+        }
+        if ($heldFrom === self::STATUS_ID_PENDING_EVALUATION) {
+            return self::STATE_IN_PROGRESS_EMPLOYEE;
+        }
+        $prev = $ticket ? ($ticket->previous_in_progress_owner ?? $ticket->in_progress_owner ?? null) : null;
+        return $prev === self::OWNER_CS ? self::STATE_IN_PROGRESS_CS : self::STATE_IN_PROGRESS_EMPLOYEE;
     }
 
     public function getAllowedTransitions(string $currentState): array
@@ -183,6 +210,7 @@ class TicketStateMachine
             return in_array($toState, [
                 self::STATE_IN_PROGRESS_CS,
                 self::STATE_IN_PROGRESS_EMPLOYEE,
+                self::STATE_ASSIGNED,
                 self::STATE_CANCELLED,
             ], true);
         }
@@ -217,7 +245,7 @@ class TicketStateMachine
         }
 
         if ($fromState === self::STATE_ON_HOLD) {
-            $validResumes = [self::STATE_IN_PROGRESS_CS, self::STATE_IN_PROGRESS_EMPLOYEE, self::STATE_CANCELLED];
+            $validResumes = [self::STATE_IN_PROGRESS_CS, self::STATE_IN_PROGRESS_EMPLOYEE, self::STATE_ASSIGNED, self::STATE_CANCELLED];
             if (!in_array($toState, $validResumes, true)) {
                 throw new InvalidTicketTransitionException(
                     $fromState,

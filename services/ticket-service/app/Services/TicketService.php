@@ -34,6 +34,12 @@ class TicketService
         $this->stateMachine = $stateMachine;
     }
 
+    /** Spec 0039: assignment period history writer. */
+    protected function periods(): AssignmentPeriodRecorder
+    {
+        return app(AssignmentPeriodRecorder::class);
+    }
+
     /**
      * Validation rule: reject HTML/script markup in free-text fields (stored XSS defence in depth).
      */
@@ -1253,8 +1259,13 @@ class TicketService
                 'e.role',
                 'ta.assignment_status',
                 'ta.assigned_at',
-                'ta.accepted_at'
+                'ta.accepted_at',
+                // Spec 0038 AC-7 / AC-8: per assignee activity and reminder cooldown.
+                'ta.completed_at',
+                'ta.last_reminder_sent_at'
             )
+            ->orderBy('ta.assigned_at')
+            ->orderBy('ta.assignment_ID')
             ->get();
 
         $assigned = $assignedEmployees->pluck('id')->map(fn($id) => (int)$id)->all();
@@ -1318,7 +1329,16 @@ class TicketService
             'assigned_employee' => $primaryAssignedName,
             'assigned_employee_name' => $primaryAssignedName,
             'assigned_to_name' => $primaryAssignedName,
-            'assigned_employees' => $assignedEmployees->toArray(),
+            // Spec 0038 security model: customers see assignee names and departments only.
+            'assigned_employees' => $isCustomer
+                ? $assignedEmployees->map(fn ($e) => [
+                    'id' => (int) $e->id,
+                    'name' => $e->name,
+                    'department' => $e->department,
+                    'assignment_status' => $e->assignment_status,
+                    'completed_at' => $e->completed_at,
+                ])->values()->all()
+                : $assignedEmployees->toArray(),
             'reassignmentRequested' => !empty($pendingReassign),
             'reassignmentReason' => $pendingReassign ? $pendingReassign->reason : null,
             'reassignmentRequestedBy' => $pendingReassign ? ($pendingReassign->requesting_employee_name ?: 'Assigned Employee') : null,
@@ -1498,6 +1518,12 @@ class TicketService
                 ];
             }
 
+            // Spec 0038 AC-32 / AC-33: CS must open every proof file before approving.
+            $proofGate = app(ProofReviewService::class)->approvalGateError($ticket, (int) $statusToSet, $user);
+            if ($proofGate !== null) {
+                return $proofGate;
+            }
+
             if ($statusToSet === 3 && $ticket->is_internal) {
                 $isCS = RoleHelper::isCsOrAdmin($user);
                 if (!$isCS) {
@@ -1640,6 +1666,16 @@ class TicketService
                             'created_at' => now(),
                             'updated_at' => now(),
                         ]);
+
+                        // Spec 0039 (AC-1, AC-3): everyone else stops holding it, the new assignee starts.
+                        $holders = DB::table(AssignmentPeriodRecorder::TABLE)
+                            ->where('ticket_ID', $ticketId)
+                            ->whereNull('released_at')
+                            ->where('employee_ID', '!=', $newAssignedTo)
+                            ->pluck('employee_ID')
+                            ->all();
+                        $this->periods()->release($ticketId, AssignmentPeriodRecorder::REASON_REASSIGNED, $holders);
+                        $this->periods()->open($ticketId, $newAssignedTo, (int) $assignedBy);
                     }
                 }
                 
@@ -1657,6 +1693,11 @@ class TicketService
                     }
                 }
 
+                // Spec 0039 (AC-3): Resolved, Closed or Discarded ends every holding period.
+                if ((int) $ticket->ticket_status_ID !== $statusToSet) {
+                    $this->periods()->releaseForStatus($ticketId, $statusToSet);
+                }
+
                 if ($actorType === 'employee') {
                     try {
                         $this->slaService->recordFirstResponse($ticketId, now());
@@ -1672,6 +1713,8 @@ class TicketService
                         $update['rejection_reason'] = null;
                         $update['assigned_to'] = null;
                         DB::table('ticket_assignments')->where('ticket_ID', $ticketId)->delete();
+                        // Spec 0039 (AC-3): the ticket goes back to CS with no assignee.
+                        $this->periods()->release($ticketId, AssignmentPeriodRecorder::REASON_RETURNED_TO_CS);
                     } else {
                         $update['resolved_at'] = null;
                         $update['closed_at'] = null;
@@ -1996,7 +2039,7 @@ class TicketService
             'priority_ID' => $validated['priority_ID'] ?? $ticket->priority_ID,
         ]);
 
-        $this->cacheService->clearTicketCaches();
+        $this->cacheService->clearTicketCaches((int) $ticketId);
         return ['status' => 200, 'data' => ['message' => 'Ticket updated successfully.']];
     }
 
@@ -2229,6 +2272,14 @@ class TicketService
      */
     public function resolveTicket(int $ticketId, $user): array
     {
+        $ticket = DB::table('tickets')->where('ticket_ID', $ticketId)->first();
+        if ($ticket) {
+            // Spec 0038 AC-32: proof review gate.
+            $proofGate = app(ProofReviewService::class)->approvalGateError($ticket, ProofReviewService::STATUS_RESOLVED, $user);
+            if ($proofGate !== null) {
+                return $proofGate;
+            }
+        }
         return $this->stateMachine->applyTransition($ticketId, 'resolve', [], $user);
     }
 
@@ -2266,6 +2317,12 @@ class TicketService
                     ];
                 }
             }
+        }
+
+        // Spec 0038 AC-32: proof review gate.
+        $proofGate = app(ProofReviewService::class)->approvalGateError($ticket, ProofReviewService::STATUS_CLOSED, $user);
+        if ($proofGate !== null) {
+            return $proofGate;
         }
 
         try {

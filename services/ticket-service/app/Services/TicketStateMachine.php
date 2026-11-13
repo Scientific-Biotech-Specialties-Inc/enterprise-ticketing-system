@@ -136,6 +136,26 @@ class TicketStateMachine
     /**
      * Resolve target state from user input, action name, or status ID.
      */
+    /**
+     * Where an On Hold ticket resumes to (spec 0038 AC-28). The same rule lives in
+     * employee-service's TicketStateMachine (AC-29).
+     *   held from Pending Assignment (10) -> Assigned (status 10)
+     *   held from Pending Evaluation (6)  -> In Progress (Employee-owned), status 6 restored
+     *   otherwise                         -> In Progress with the previous owner (today's rule)
+     */
+    public function resolveResumeTarget($ticket): string
+    {
+        $heldFrom = $ticket ? (int) ($ticket->held_from_status_ID ?? 0) : 0;
+        if ($heldFrom === self::STATUS_ID_PENDING_ASSIGNMENT) {
+            return self::STATE_ASSIGNED;
+        }
+        if ($heldFrom === self::STATUS_ID_PENDING_EVALUATION) {
+            return self::STATE_IN_PROGRESS_EMPLOYEE;
+        }
+        $prev = $ticket ? ($ticket->previous_in_progress_owner ?? $ticket->in_progress_owner) : null;
+        return $prev === self::OWNER_CS ? self::STATE_IN_PROGRESS_CS : self::STATE_IN_PROGRESS_EMPLOYEE;
+    }
+
     public function resolveTargetState(string|int $target, $ticket = null, array $context = []): string
     {
         if (is_numeric($target)) {
@@ -180,12 +200,7 @@ class TicketStateMachine
         if ($lower === 'accept') return self::STATE_IN_PROGRESS_EMPLOYEE;
         if ($lower === 'hold') return self::STATE_ON_HOLD;
         if ($lower === 'resume') {
-            // If held from Pending Assignment (status 10), resume back to Assigned
-            if ($ticket && (int)($ticket->held_from_status_ID ?? 0) === self::STATUS_ID_PENDING_ASSIGNMENT) {
-                return self::STATE_ASSIGNED;
-            }
-            $prev = $ticket ? ($ticket->previous_in_progress_owner ?? $ticket->in_progress_owner) : null;
-            return $prev === self::OWNER_CS ? self::STATE_IN_PROGRESS_CS : self::STATE_IN_PROGRESS_EMPLOYEE;
+            return $this->resolveResumeTarget($ticket);
         }
         if ($lower === 'resolve') return self::STATE_RESOLVED;
         if ($lower === 'close') return self::STATE_CLOSED;
@@ -506,6 +521,11 @@ class TicketStateMachine
                 if ($currentState === self::STATE_ASSIGNED) {
                     $auditAction = 'accept';
                 } elseif ($currentState === self::STATE_ON_HOLD) {
+                    // AC-28: a ticket held from Pending Evaluation resumes to Pending Evaluation.
+                    // Proof attachments and proof_rejected are left untouched.
+                    if ((int) ($ticketRecord->held_from_status_ID ?? 0) === self::STATUS_ID_PENDING_EVALUATION) {
+                        $updateFields['ticket_status_ID'] = self::STATUS_ID_PENDING_EVALUATION;
+                    }
                     $auditAction = 'resume';
                 } else {
                     $auditAction = 'in_progress';
@@ -559,6 +579,15 @@ class TicketStateMachine
             $updateFields['priority_ID'] = $context['priority_ID'];
         }
 
+        // AC-29: a resume is audit logged with from On Hold and to the restored status.
+        if ($auditAction === 'resume' && isset($updateFields['ticket_status_ID'])) {
+            $auditDetails['from_status'] = 'On Hold';
+            $auditDetails['to_status'] = DB::table('ticket_statuses')
+                ->where('ticket_status_ID', $updateFields['ticket_status_ID'])
+                ->value('status_name');
+            $auditDetails['held_from_status_ID'] = $ticketRecord->held_from_status_ID ?? null;
+        }
+
         // Execute database updates inside transaction
         DB::transaction(function () use (
             $ticketId,
@@ -572,6 +601,17 @@ class TicketStateMachine
             $context
         ) {
             DB::table('tickets')->where('ticket_ID', $ticketId)->update($updateFields);
+
+            // Spec 0039: assignment period history, in this same transaction (AC-21).
+            $periods = app(AssignmentPeriodRecorder::class);
+            if (isset($updateFields['ticket_status_ID'])) {
+                // AC-3: Resolved, Closed or Discarded ends every holding period.
+                $periods->releaseForStatus((int) $ticketId, (int) $updateFields['ticket_status_ID']);
+            }
+            if ($auditAction === 'accept' && $actorId > 0) {
+                // AC-2: an employee accepting through the transition endpoint.
+                $periods->accept((int) $ticketId, (int) $actorId);
+            }
 
             // 1. Leaving On Hold -> resume SLA clock
             if ($currentState === self::STATE_ON_HOLD) {
@@ -649,8 +689,8 @@ class TicketStateMachine
             ]);
         });
 
-        // Cache invalidation
-        $this->cacheService->clearTicketCaches();
+        // Cache invalidation (with the ticket id, so the customer's counts key is deleted directly)
+        $this->cacheService->clearTicketCaches((int) $ticketId);
 
         // Broadcast real-time change event
         try {

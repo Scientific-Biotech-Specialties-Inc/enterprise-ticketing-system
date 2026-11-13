@@ -40,7 +40,14 @@ class FeedbackVerifiedIdentityTest extends TestCase
     {
         Http::fake([
             '*feedback-form/status*' => Http::response(['is_enabled' => true], 200),
-            '*/api/tickets/*' => Http::response(['ticket' => ['ticket_ID' => 5001, 'client_ID' => $ownerId, 'status_name' => $status]], 200),
+            // Spec 0038 AC-34: the real GET /tickets/{id}/ownership response shape (flat, not wrapped).
+            '*/api/tickets/*/ownership' => Http::response([
+                'ticket_ID' => 5001,
+                'ticket_number' => 'TKT-0001',
+                'client_ID' => $ownerId,
+                'status_name' => $status,
+                'is_internal' => false,
+            ], 200),
         ]);
     }
 

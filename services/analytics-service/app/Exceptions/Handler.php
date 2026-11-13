@@ -27,4 +27,17 @@ class Handler extends ExceptionHandler
             //
         });
     }
+
+    /**
+     * Client errors (4xx) keep their message. Server errors never send SQL, file paths or stack
+     * traces to the browser, even with APP_DEBUG on; the full exception is still logged by report().
+     */
+    protected function convertExceptionToArray(Throwable $e)
+    {
+        if ($e instanceof \Symfony\Component\HttpKernel\Exception\HttpExceptionInterface && $e->getStatusCode() < 500) {
+            return ['message' => $e->getMessage() !== '' ? $e->getMessage() : 'Request could not be completed.'];
+        }
+
+        return ['message' => 'Something went wrong on our side. Please try again in a moment.'];
+    }
 }

@@ -299,7 +299,9 @@ export async function saveFeedback(ticketId, ratings, comments, overallComment, 
     await assertFeedbackResponse(res);
   } catch (err) {
     if (err?.isHttpError) throw err;
-    console.warn('Analytics service offline. Feedback persisted locally:', err);
+    // Spec 0038 AC-37: never save feedback locally as if it succeeded.
+    console.warn('Analytics service unreachable. Feedback was not saved:', err);
+    throw new Error('Feedback cannot be verified right now. Please try again shortly.');
   }
 
   return persistLocal();
@@ -359,7 +361,9 @@ export async function updateFeedback(ticketId, ratings, comments, overallComment
     await assertFeedbackResponse(res);
   } catch (err) {
     if (err?.isHttpError) throw err;
-    console.warn('Analytics service offline. Feedback update persisted locally:', err);
+    // Spec 0038 AC-37: never save feedback locally as if it succeeded.
+    console.warn('Analytics service unreachable. Feedback update was not saved:', err);
+    throw new Error('Feedback cannot be verified right now. Please try again shortly.');
   }
 
   return persistLocal();
@@ -402,18 +406,23 @@ export async function deleteFeedback(ticketId) {
   return true;
 }
 
+/**
+ * Saved feedback for a ticket, read from the analytics API only (spec 0038 AC-36).
+ * Returns null when there is none or it cannot be read. Nothing is read from browser
+ * storage; a successful read is still mirrored there for the customer ticket list badge.
+ */
 export async function fetchFeedbackForTicket(ticketId) {
   if (!ticketId) return null;
-  const local = getTicketFeedback(ticketId);
+  const local = null;
   const token = tokenStore.getToken();
-  if (!token) return local;
+  if (!token) return null;
 
   try {
     let res = await fetch(`/api/ticketing/analytics/feedback/ticket/${ticketId}`, {
       headers: { Accept: 'application/json', ...authHeaders() },
     });
     if (res.status === 401 || res.status === 403) {
-      return local;
+      return null;
     }
     if (!res.ok && res.status === 404) {
       const strId = String(ticketId);
@@ -474,7 +483,7 @@ export async function fetchFeedbackForTicket(ticketId) {
   } catch (err) {
     // Analytics service offline or network issue
   }
-  return local;
+  return null;
 }
 
 export const FEEDBACK_MASTER_ENABLED_KEY = 'feedback_form_master_enabled';

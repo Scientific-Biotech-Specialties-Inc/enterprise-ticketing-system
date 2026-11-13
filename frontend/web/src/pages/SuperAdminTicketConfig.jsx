@@ -122,6 +122,7 @@ import {
   getStoredBranchSlaPolicies,
   setStoredBranchSlaPolicies,
 } from '@/data/branchCategoryConfig';
+import { BREVO_API_KEY_MASK, getBrevoApiKeyFormatError } from '@/utils/brevoApiKey';
 
 export const GROUP_CLASSIFICATION = 'classification';
 export const GROUP_LIFECYCLE = 'lifecycle';
@@ -287,7 +288,7 @@ export const SUBTAB_METADATA = {
   },
   [NOTIF_SUBTAB_EMAIL_DELIVERY]: {
     icon: Send,
-    subtitle: 'SMTP / Resend API delivery configuration',
+    subtitle: 'Brevo API and SMTP delivery configuration',
   },
   [NOTIF_SUBTAB_EMAIL_TEMPLATES]: {
     icon: Mail,
@@ -1615,7 +1616,7 @@ export default function SuperAdminTicketConfig() {
   const isEmailConfigured = Boolean(emailConfig && (emailConfig.isConfigured || emailConfig.is_configured));
   const [isAddingEmailConfig, setIsAddingEmailConfig] = useState(false);
   const [newEmailConfig, setNewEmailConfig] = useState({
-    provider: 'Resend',
+    provider: 'Brevo',
     apiKey: '',
     fromName: '',
     fromEmail: '',
@@ -1696,7 +1697,7 @@ export default function SuperAdminTicketConfig() {
     if (!isEmailConfigured) {
       showConfirm(
         'Email Delivery Not Configured',
-        'Resend transactional email delivery is not configured yet. Would you like to configure your Resend API credentials now?',
+        'Brevo transactional email delivery is not configured yet. Would you like to configure your Brevo API credentials now?',
         () => {
           closeNotif();
           handleSelectSubTab(NOTIF_SUBTAB_EMAIL_DELIVERY);
@@ -1826,8 +1827,8 @@ export default function SuperAdminTicketConfig() {
             from_name: data.fromName || data.from_name || '',
             fromEmail: data.fromEmail || data.from_email || '',
             from_email: data.fromEmail || data.from_email || '',
-            apiKey: data.apiKey || data.api_key || 're_•••••••••',
-            api_key: data.apiKey || data.api_key || 're_•••••••••',
+            apiKey: data.apiKey || data.api_key || BREVO_API_KEY_MASK,
+            api_key: data.apiKey || data.api_key || BREVO_API_KEY_MASK,
             lastTested: data.lastTested || data.last_tested || null,
             last_tested: data.lastTested || data.last_tested || null,
           });
@@ -2149,8 +2150,10 @@ export default function SuperAdminTicketConfig() {
     setOpenMenuId(null);
     setMenuPos(null);
     if (tab === TAB_TICKET_CATEGORIES) {
-      if (item.is_system_default) {
-        showError('Action Prohibited', `"${item.name}" is a core system default ticket category and cannot be deleted.`);
+      // No category is a protected default, but at least one active category must stay for customers to pick.
+      const otherActive = (items.ticketCategories || []).some((c) => c.id !== item.id && c.is_active);
+      if (!otherActive) {
+        showError('Action Prohibited', `"${item.name}" is the last active ticket category. Add another category before deleting this one.`);
         return;
       }
       showConfirm(
@@ -4094,8 +4097,8 @@ export default function SuperAdminTicketConfig() {
     const errors = {};
     if (!newEmailConfig.apiKey || !newEmailConfig.apiKey.trim()) {
       errors.apiKey = 'API Key is required and cannot be null or empty.';
-    } else if (!newEmailConfig.apiKey.trim().startsWith('re_')) {
-      errors.apiKey = 'Resend API Key must start with "re_".';
+    } else if (getBrevoApiKeyFormatError(newEmailConfig.apiKey)) {
+      errors.apiKey = getBrevoApiKeyFormatError(newEmailConfig.apiKey);
     } else if (newEmailConfig.apiKey.trim().length < 8) {
       errors.apiKey = 'API Key must be at least 8 characters.';
     }
@@ -4137,16 +4140,16 @@ export default function SuperAdminTicketConfig() {
             from_name: configData.fromName || configData.from_name || newEmailConfig.fromName.trim(),
             fromEmail: configData.fromEmail || configData.from_email || newEmailConfig.fromEmail.trim(),
             from_email: configData.fromEmail || configData.from_email || newEmailConfig.fromEmail.trim(),
-            apiKey: configData.apiKey || configData.api_key || 're_•••••••••',
-            api_key: configData.apiKey || configData.api_key || 're_•••••••••',
+            apiKey: configData.apiKey || configData.api_key || BREVO_API_KEY_MASK,
+            api_key: configData.apiKey || configData.api_key || BREVO_API_KEY_MASK,
             lastTested: configData.lastTested || configData.last_tested || null,
             last_tested: configData.lastTested || configData.last_tested || null,
           });
           setIsAddingEmailConfig(false);
-          setNewEmailConfig({ provider: 'Resend', apiKey: '', fromName: '', fromEmail: '' });
+          setNewEmailConfig({ provider: 'Brevo', apiKey: '', fromName: '', fromEmail: '' });
           showSuccess(
             'Email Configuration Saved',
-            'Resend email delivery gateway has been verified and configured successfully.'
+            'Brevo email delivery gateway has been verified and configured successfully.'
           );
         } catch (err) {
           const errMsg = err?.response?.data?.errors?.apiKey || err?.response?.data?.message || err?.message || 'Failed to verify and save email configuration.';
@@ -4165,6 +4168,8 @@ export default function SuperAdminTicketConfig() {
     const errors = {};
     if (!newEmailConfig.apiKey || !newEmailConfig.apiKey.trim()) {
       errors.apiKey = 'API Key is required to send a test email.';
+    } else if (getBrevoApiKeyFormatError(newEmailConfig.apiKey)) {
+      errors.apiKey = getBrevoApiKeyFormatError(newEmailConfig.apiKey);
     }
     if (!newEmailConfig.fromName || !newEmailConfig.fromName.trim()) {
       errors.fromName = 'From Name is required to send a test email.';
@@ -4189,8 +4194,9 @@ export default function SuperAdminTicketConfig() {
       setChangeApiKeyError('API Key is required and cannot be null or empty.');
       return;
     }
-    if (!changeApiKeyInput.trim().startsWith('re_')) {
-      setChangeApiKeyError('Resend API Key must start with "re_".');
+    const changeKeyFormatError = getBrevoApiKeyFormatError(changeApiKeyInput);
+    if (changeKeyFormatError) {
+      setChangeApiKeyError(changeKeyFormatError);
       return;
     }
     if (changeApiKeyInput.trim().length < 8) {
@@ -4211,15 +4217,15 @@ export default function SuperAdminTicketConfig() {
             ...configData,
             isConfigured: true,
             is_configured: true,
-            apiKey: 're_•••••••••',
-            api_key: 're_•••••••••',
+            apiKey: BREVO_API_KEY_MASK,
+            api_key: BREVO_API_KEY_MASK,
           }));
           setShowChangeApiKeyModal(false);
           setChangeApiKeyInput('');
           setChangeApiKeyError(null);
-          showSuccess('API Key Updated', 'Resend API key has been verified and changed successfully.');
+          showSuccess('API Key Updated', 'Brevo API key has been verified and changed successfully.');
         } catch (err) {
-          const errMsg = err?.response?.data?.errors?.apiKey || err?.response?.data?.message || err?.message || 'Failed to verify new API key with Resend.';
+          const errMsg = err?.response?.data?.errors?.apiKey || err?.response?.data?.message || err?.message || 'Failed to verify new API key with Brevo.';
           setChangeApiKeyError(errMsg);
         }
       },
@@ -4267,12 +4273,12 @@ export default function SuperAdminTicketConfig() {
         from_name: configData.fromName || configData.from_name || currentFromName.trim(),
         fromEmail: configData.fromEmail || configData.from_email || currentFromEmail.trim(),
         from_email: configData.fromEmail || configData.from_email || currentFromEmail.trim(),
-        apiKey: configData.apiKey || configData.api_key || 're_•••••••••',
-        api_key: configData.apiKey || configData.api_key || 're_•••••••••',
+        apiKey: configData.apiKey || configData.api_key || BREVO_API_KEY_MASK,
+        api_key: configData.apiKey || configData.api_key || BREVO_API_KEY_MASK,
       });
       showSuccess(
         'Email Configuration Saved',
-        'Transactional email sender settings for Resend have been updated successfully.'
+        'Transactional email sender settings for Brevo have been updated successfully.'
       );
     } catch (err) {
       const errMsg = err?.response?.data?.message || err?.message || 'Failed to update email configuration.';
@@ -4283,7 +4289,7 @@ export default function SuperAdminTicketConfig() {
   const handleRemoveEmailConfig = () => {
     showConfirm(
       'Remove Email Configuration?',
-      'Are you sure you want to remove the Resend email configuration? Email alerts will be suspended until a new configuration is added.',
+      'Are you sure you want to remove the Brevo email configuration? Email alerts will be suspended until a new configuration is added.',
       async () => {
         closeNotif();
         try {
@@ -4337,11 +4343,11 @@ export default function SuperAdminTicketConfig() {
       }
       showSuccess(
         'Test Email Sent',
-        res.message || `A test verification email was successfully delivered to ${testEmailRecipient} via Resend.`
+        res.message || `A test verification email was successfully delivered to ${testEmailRecipient} via Brevo.`
       );
     } catch (err) {
       setIsTestingEmail(false);
-      const errMsg = err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Failed to dispatch test email through Resend.';
+      const errMsg = err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Failed to dispatch test email through Brevo.';
       setEmailConfigErrors((prev) => ({ ...prev, testEmail: errMsg }));
     }
   };
@@ -7317,7 +7323,7 @@ export default function SuperAdminTicketConfig() {
                   )}
                 </div>
                 <p className="text-sm text-gray-500 mt-1">
-                  Configure Resend transactional email delivery provider, API credentials, and default sender identity for ticket alerts.
+                  Configure Brevo transactional email delivery provider, API credentials, and default sender identity for ticket alerts.
                 </p>
               </div>
 
@@ -7349,7 +7355,7 @@ export default function SuperAdminTicketConfig() {
                     </div>
                     <h3 className="text-lg font-bold text-gray-900 mb-1">No Email Configuration</h3>
                     <p className="text-sm text-gray-500 max-w-md mb-6">
-                      No transactional email delivery gateway is configured yet. Add your Resend account credentials to enable automated ticket alerts, status updates, and notifications.
+                      No transactional email delivery gateway is configured yet. Add your Brevo account credentials to enable automated ticket alerts, status updates, and notifications.
                     </p>
                     <button
                       type="button"
@@ -7373,19 +7379,19 @@ export default function SuperAdminTicketConfig() {
                         </div>
                         <div>
                           <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Transactional Gateway</p>
-                          <h3 className="text-lg font-bold text-gray-900">Add Resend Email Configuration</h3>
+                          <h3 className="text-lg font-bold text-gray-900">Add Brevo Email Configuration</h3>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="inline-flex items-center gap-1.5 rounded-lg border border-[#252578]/15 bg-[#252578]/5 px-3 py-1 text-xs font-bold text-[#252578]">
                           <Key size={13} />
-                          Resend API v1
+                          Brevo API v3
                         </span>
                       </div>
                     </div>
 
                     <div className="p-5 sm:p-8 flex flex-col gap-6">
-                      {/* Provider Field (Fixed to Resend) */}
+                      {/* Provider Field (Fixed to Brevo) */}
                       <div className="flex flex-col gap-2">
                         <label className="text-sm font-bold text-gray-800 flex items-center justify-between">
                           <span>Provider</span>
@@ -7394,7 +7400,7 @@ export default function SuperAdminTicketConfig() {
                         <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3 text-sm font-semibold text-gray-800">
                           <div className="flex items-center gap-2.5">
                             <span className="flex h-2 w-2 rounded-full bg-emerald-500" />
-                            <span>Resend</span>
+                            <span>Brevo</span>
                             <span className="text-xs font-normal text-gray-500">(Modern Developer-First Email API)</span>
                           </div>
                           <span className="text-xs font-medium text-gray-400 bg-gray-200/60 px-2 py-0.5 rounded-md">Fixed</span>
@@ -7405,7 +7411,7 @@ export default function SuperAdminTicketConfig() {
                       <div className="flex flex-col gap-2">
                         <label className="text-sm font-bold text-gray-800 flex items-center justify-between">
                           <span>API Key <span className="text-red-500">*</span></span>
-                          <span className="text-xs font-normal text-gray-400">Secret key from Resend API dashboard</span>
+                          <span className="text-xs font-normal text-gray-400">API v3 key from Brevo (SMTP &amp; API settings)</span>
                         </label>
                         <div className="relative flex items-center">
                           <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-gray-400">
@@ -7424,7 +7430,7 @@ export default function SuperAdminTicketConfig() {
                                 });
                               }
                             }}
-                            placeholder="re_••••••••••••••••••••••••"
+                            placeholder="xkeysib-••••••••••••••••••••••••"
                             className={`w-full rounded-xl border pl-10 pr-11 py-3 text-sm font-mono outline-none transition-all ${
                               newEmailConfigErrors.apiKey
                                 ? 'border-red-300 bg-red-50/30 text-red-900 focus:ring-2 focus:ring-red-200'
@@ -7511,7 +7517,7 @@ export default function SuperAdminTicketConfig() {
                           {newEmailConfigErrors.fromEmail ? (
                             <p className="text-xs font-medium text-red-600 mt-0.5">{newEmailConfigErrors.fromEmail}</p>
                           ) : (
-                            <p className="text-xs text-gray-400">Must be a verified sending domain or email configured in your Resend account.</p>
+                            <p className="text-xs text-gray-400">Must be a verified sender in your Brevo account.</p>
                           )}
                         </div>
                       </div>
@@ -7573,13 +7579,13 @@ export default function SuperAdminTicketConfig() {
                     <div className="flex items-center gap-2">
                       <span className="inline-flex items-center gap-1.5 rounded-lg border border-[#252578]/15 bg-[#252578]/5 px-3 py-1 text-xs font-bold text-[#252578]">
                         <Key size={13} />
-                        Resend API v1
+                        Brevo API v3
                       </span>
                     </div>
                   </div>
 
                   <div className="p-5 sm:p-8 flex flex-col gap-6">
-                    {/* Provider Field (Fixed to Resend) */}
+                    {/* Provider Field (Fixed to Brevo) */}
                     <div className="flex flex-col gap-2">
                       <label className="text-sm font-bold text-gray-800 flex items-center justify-between">
                         <span>Provider</span>
@@ -7588,14 +7594,14 @@ export default function SuperAdminTicketConfig() {
                       <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3 text-sm font-semibold text-gray-800">
                         <div className="flex items-center gap-2.5">
                           <span className="flex h-2 w-2 rounded-full bg-emerald-500" />
-                          <span>Resend</span>
+                          <span>Brevo</span>
                           <span className="text-xs font-normal text-gray-500">(Modern Developer-First Email API)</span>
                         </div>
                         <span className="text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-md">Active</span>
                       </div>
                     </div>
 
-                    {/* API Key Field (Masked - only shows re_•••••••••) */}
+                    {/* API Key Field (Masked - only shows xkeysib-•••••••••) */}
                     <div className="flex flex-col gap-2">
                       <label className="text-sm font-bold text-gray-800 flex items-center justify-between">
                         <span>API Key</span>
@@ -7611,8 +7617,8 @@ export default function SuperAdminTicketConfig() {
                           type="text"
                           readOnly
                           disabled
-                          value="re_•••••••••"
-                          aria-label="Masked Resend API Key"
+                          value={BREVO_API_KEY_MASK}
+                          aria-label="Masked Brevo API Key"
                           className="w-full rounded-xl border border-gray-200 bg-gray-100/80 py-3 pl-10 pr-36 font-mono text-sm text-gray-600 select-none cursor-not-allowed tracking-wider"
                         />
                         <button
@@ -7703,7 +7709,7 @@ export default function SuperAdminTicketConfig() {
                         {emailConfigErrors.fromEmail ? (
                           <p className="text-xs font-medium text-red-600 mt-0.5">{emailConfigErrors.fromEmail}</p>
                         ) : (
-                          <p className="text-xs text-gray-400">Must be a verified sending domain or email configured in your Resend account.</p>
+                          <p className="text-xs text-gray-400">Must be a verified sender in your Brevo account.</p>
                         )}
                       </div>
                     </div>
@@ -11027,14 +11033,13 @@ export default function SuperAdminTicketConfig() {
                   <th className="px-3 py-2.5">ID</th>
                   <th className="px-3 py-2.5">Name</th>
                   {tab === TAB_TICKET_CATEGORIES && <th className="px-3 py-2.5">Description</th>}
-                  {tab === TAB_TICKET_CATEGORIES && <th className="px-3 py-2.5">Type</th>}
                   <th className="px-3 py-2.5 text-center w-16"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={tab === TAB_TICKET_CATEGORIES ? 5 : 3} className="px-3 py-8 text-center text-xs text-muted-slate">
+                    <td colSpan={tab === TAB_TICKET_CATEGORIES ? 4 : 3} className="px-3 py-8 text-center text-xs text-muted-slate">
                       No {tab === TAB_TICKET_CATEGORIES ? 'ticket categories' : tab === TAB_EQUIPMENT ? 'categories' : 'priorities'} found.
                     </td>
                   </tr>
@@ -11052,19 +11057,6 @@ export default function SuperAdminTicketConfig() {
                     {tab === TAB_TICKET_CATEGORIES && (
                       <td className="px-3 py-2.5 text-xs text-muted-slate max-w-xs truncate">
                         {item.description || '—'}
-                      </td>
-                    )}
-                    {tab === TAB_TICKET_CATEGORIES && (
-                      <td className="px-3 py-2.5 text-xs">
-                        {item.is_system_default ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 border border-blue-200">
-                            Core Default
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-0.5 text-[11px] font-semibold text-gray-600 border border-gray-200">
-                            Custom
-                          </span>
-                        )}
                       </td>
                     )}
                     <td className="px-3 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
@@ -11101,17 +11093,10 @@ export default function SuperAdminTicketConfig() {
                 className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 rounded-t-xl">
                 Edit
               </button>
-              {tab === TAB_TICKET_CATEGORIES && t.is_system_default ? (
-                <button disabled title="System default categories cannot be deleted"
-                  className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-gray-400 cursor-not-allowed rounded-b-xl opacity-60">
-                  Delete
-                </button>
-              ) : (
-                <button onClick={() => { handleDelete(t); }}
-                  className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 rounded-b-xl">
-                  Delete
-                </button>
-              )}
+              <button onClick={() => { handleDelete(t); }}
+                className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 rounded-b-xl">
+                Delete
+              </button>
             </div>
           ) : null;
         })(),
@@ -11404,7 +11389,7 @@ export default function SuperAdminTicketConfig() {
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-gray-900">Send Test Email</h3>
-                  <p className="text-xs text-gray-500">Verify your Resend delivery gateway setup</p>
+                  <p className="text-xs text-gray-500">Verify your Brevo delivery gateway setup</p>
                 </div>
               </div>
               <button
@@ -11431,7 +11416,7 @@ export default function SuperAdminTicketConfig() {
                 <p className="text-xs font-semibold text-red-600">{emailConfigErrors.testEmail}</p>
               )}
               <p className="text-[11px] text-gray-400">
-                A sample verification alert will be sent from <span className="font-semibold text-gray-600">{emailConfig?.fromName || emailConfig?.from_name || newEmailConfig.fromName || 'SBSI Support'}</span> ({emailConfig?.fromEmail || emailConfig?.from_email || newEmailConfig.fromEmail || 'support@sbs-med.com'}) via Resend.
+                A sample verification alert will be sent from <span className="font-semibold text-gray-600">{emailConfig?.fromName || emailConfig?.from_name || newEmailConfig.fromName || 'SBSI Support'}</span> ({emailConfig?.fromEmail || emailConfig?.from_email || newEmailConfig.fromEmail || 'support@sbs-med.com'}) via Brevo.
               </p>
             </div>
 
@@ -11477,8 +11462,8 @@ export default function SuperAdminTicketConfig() {
                   <Key size={20} />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-gray-900">Change Resend API Key</h3>
-                  <p className="text-xs text-gray-500">Enter a new secret key from your Resend dashboard</p>
+                  <h3 className="text-base font-bold text-gray-900">Change Brevo API Key</h3>
+                  <p className="text-xs text-gray-500">Enter a new secret key from your Brevo account (SMTP &amp; API settings)</p>
                 </div>
               </div>
               <button
@@ -11509,7 +11494,7 @@ export default function SuperAdminTicketConfig() {
                     setChangeApiKeyInput(e.target.value);
                     setChangeApiKeyError(null);
                   }}
-                  placeholder="re_••••••••••••••••••••••••"
+                  placeholder="xkeysib-••••••••••••••••••••••••"
                   autoFocus
                   className={`w-full rounded-xl border pl-10 pr-11 py-2.5 text-sm font-mono outline-none transition-all ${
                     changeApiKeyError
@@ -11530,7 +11515,7 @@ export default function SuperAdminTicketConfig() {
                 <p className="text-xs font-semibold text-red-600">{changeApiKeyError}</p>
               )}
               <p className="text-[11px] text-amber-600 font-medium">
-                ⚠️ Once you save, you cannot see the API key again. It will be permanently masked as <span className="font-mono font-semibold text-gray-700">re_•••••••••</span>.
+                ⚠️ Once you save, you cannot see the API key again. It will be permanently masked as <span className="font-mono font-semibold text-gray-700">{BREVO_API_KEY_MASK}</span>.
               </p>
             </div>
 

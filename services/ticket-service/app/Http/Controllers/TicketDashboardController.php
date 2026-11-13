@@ -190,6 +190,8 @@ class TicketDashboardController extends Controller
             'date_to' => $request->query('date_to'),
             'branch' => $request->query('branch'),
             'branch_id' => $request->query('branch_id'),
+            'sort_by' => $request->query('sort_by'),
+            'sort_dir' => $request->query('sort_dir'),
         ];
 
         $forceRefresh = filter_var($request->query('forceRefresh', $request->query('force_refresh', false)), FILTER_VALIDATE_BOOLEAN);

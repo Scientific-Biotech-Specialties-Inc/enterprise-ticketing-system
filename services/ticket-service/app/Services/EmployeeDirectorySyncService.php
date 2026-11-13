@@ -172,16 +172,19 @@ class EmployeeDirectorySyncService
     }
 
     /**
-     * Branch mapping kept from the original EmployeeDirectoryController sync: North Luzon names map to
-     * branch 2, everything else to the main branch 1 (the ids ticket rows already use).
+     * Maps the Auth Module branch to the local branch by name (Auth and local ids are numbered
+     * independently). Unknown or missing names keep the original default, main branch 1.
      *
      * @return array{0: int, 1: string}
      */
     protected function resolveBranch(array $u): array
     {
-        $branchName = (string) ($u['branch'] ?? ($u['branch_details']['name'] ?? ''));
-        if ($branchName !== '' && stripos($branchName, 'north') !== false) {
-            return [2, 'North Luzon Hub'];
+        $branchName = trim((string) ($u['branch'] ?? ($u['branch_details']['name'] ?? '')));
+        if ($branchName !== '') {
+            $local = DB::table('branches')->whereRaw('LOWER(name) = ?', [strtolower($branchName)])->first(['id', 'name']);
+            if ($local) {
+                return [(int) $local->id, $local->name];
+            }
         }
 
         return [1, 'Main Branch'];

@@ -147,7 +147,8 @@ describe('CS SLA Display and Employee Reminder Tests', () => {
     await waitFor(() => {
       expect(ticketService.sendTicketReminder).toHaveBeenCalledWith(
         991,
-        'Please update customer before end of day.'
+        'Please update customer before end of day.',
+        501
       );
     });
   });
@@ -166,7 +167,7 @@ describe('CS SLA Display and Employee Reminder Tests', () => {
     fireEvent.click(modalSubmitBtn);
 
     await waitFor(() => {
-      expect(ticketService.sendTicketReminder).toHaveBeenCalledWith(991, '');
+      expect(ticketService.sendTicketReminder).toHaveBeenCalledWith(991, '', 501);
     });
   });
 
@@ -215,9 +216,13 @@ describe('CS SLA Display and Employee Reminder Tests', () => {
   });
 
   it('enforces 60-minute anti-spam cooldown on Send Reminder button', () => {
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+    const fresh = getFreshTicket();
+    // Spec 0038 AC-8: the cooldown is per assignee, read from that assignee's own time.
     const recentReminderTicket = {
-      ...getFreshTicket(),
-      last_reminder_sent_at: new Date(Date.now() - 15 * 60 * 1000).toISOString(), // 15 mins ago
+      ...fresh,
+      last_reminder_sent_at: fifteenMinutesAgo,
+      assigned_employees: fresh.assigned_employees.map((e) => ({ ...e, last_reminder_sent_at: fifteenMinutesAgo })),
     };
 
     render(<TicketSummary ticket={recentReminderTicket} employees={[]} onClose={vi.fn()} />);
@@ -297,7 +302,7 @@ describe('Customer Feedback Lifecycle Tests (Submit, Dismiss, Edit, Delete)', ()
     expect(screen.getByText('Rate Your Experience')).toBeInTheDocument();
   });
 
-  it('renders submitted feedback and allows edit within 48-hour window', () => {
+  it('renders submitted feedback and allows edit within 48-hour window', async () => {
     const recentFeedback = {
       submitted: true,
       submittedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2 hours ago
@@ -305,12 +310,13 @@ describe('Customer Feedback Lifecycle Tests (Submit, Dismiss, Edit, Delete)', ()
       comments: { 101: 'Outstanding support!' },
       overallComment: 'Resolved smoothly.',
     };
-    mockFeedbackData.getTicketFeedback.mockReturnValue(recentFeedback);
+    // Spec 0038 AC-36: saved feedback comes from the API, not browser storage.
+    mockFeedbackData.fetchFeedbackForTicket.mockResolvedValue(recentFeedback);
 
     const onEditMock = vi.fn();
     render(<TicketFeedbackSection ticket={resolvedTicket} onLeaveFeedback={vi.fn()} onEditFeedback={onEditMock} />);
 
-    expect(screen.getByText('Customer Feedback')).toBeInTheDocument();
+    expect(await screen.findByText('Customer Feedback')).toBeInTheDocument();
     expect(screen.getByText(/editable for/i)).toBeInTheDocument();
 
     const editBtn = screen.getByRole('button', { name: /edit/i });
@@ -320,36 +326,36 @@ describe('Customer Feedback Lifecycle Tests (Submit, Dismiss, Edit, Delete)', ()
     expect(onEditMock).toHaveBeenCalledWith(recentFeedback);
   });
 
-  it('spec 0034 AC-12: the customer portal has no delete feedback action', () => {
+  it('spec 0034 AC-12: the customer portal has no delete feedback action', async () => {
     const recentFeedback = {
       submitted: true,
       submittedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
       ratings: { 101: 5 },
       comments: { 101: 'Great support!' },
     };
-    mockFeedbackData.getTicketFeedback.mockReturnValue(recentFeedback);
+    mockFeedbackData.fetchFeedbackForTicket.mockResolvedValue(recentFeedback);
 
     render(<TicketFeedbackSection ticket={resolvedTicket} onLeaveFeedback={vi.fn()} />);
 
     // Edit stays available inside the 48 hour window, delete is for admins only (done in the backend).
-    expect(screen.getByRole('button', { name: /edit/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /edit/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Delete Feedback?')).not.toBeInTheDocument();
     expect(mockFeedbackData.deleteFeedback).not.toHaveBeenCalled();
   });
 
-  it('locks feedback actions when 48-hour edit window is expired', () => {
+  it('locks feedback actions when 48-hour edit window is expired', async () => {
     const expiredFeedback = {
       submitted: true,
       submittedAt: new Date(Date.now() - 50 * 60 * 60 * 1000).toISOString(), // 50 hours ago
       ratings: { 101: 4 },
       comments: { 101: 'Good work' },
     };
-    mockFeedbackData.getTicketFeedback.mockReturnValue(expiredFeedback);
+    mockFeedbackData.fetchFeedbackForTicket.mockResolvedValue(expiredFeedback);
 
     render(<TicketFeedbackSection ticket={resolvedTicket} onLeaveFeedback={vi.fn()} />);
 
-    expect(screen.getByText(/feedback locked \(48h edit window closed\)/i)).toBeInTheDocument();
+    expect(await screen.findByText(/feedback locked \(48h edit window closed\)/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /edit/i })).not.toBeInTheDocument();
   });

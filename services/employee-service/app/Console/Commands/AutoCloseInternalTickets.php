@@ -57,6 +57,9 @@ class AutoCloseInternalTickets extends Command
                     'updated_at' => $now,
                 ]);
 
+                // Spec 0039 (AC-3): Closed ends any holding period still open.
+                app(\App\Services\AssignmentPeriodRecorder::class)->releaseForStatus((int) $ticket->ticket_ID, 4, $now);
+
                 DB::table('ticket_audit_logs')->insert([
                     'ticket_ID' => $ticket->ticket_ID,
                     'action_type' => 'status_change',

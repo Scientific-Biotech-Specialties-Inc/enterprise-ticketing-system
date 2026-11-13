@@ -107,7 +107,7 @@ export default function FieldGrid({
             {equipment}
             {assetId && (
               <span className="block text-xs font-mono text-[#5A6178] mt-0.5">
-                Asset ID: {assetId}
+                Serial ID: {assetId}
               </span>
             )}
           </p>

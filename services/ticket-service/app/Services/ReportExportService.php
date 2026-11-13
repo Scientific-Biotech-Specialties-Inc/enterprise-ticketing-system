@@ -18,6 +18,7 @@ class ReportExportService
         'ticket_volume',
         'sla_compliance',
         'department_performance',
+        'employee_performance',
         'equipment_maintenance',
         'csat_satisfaction',
         'predictive_risk',

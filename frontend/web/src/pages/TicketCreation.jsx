@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import NotificationModal from '@/components/NotificationModal';
 import TitleCasingModal from '@/components/TitleCasingModal';
@@ -25,6 +25,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { PersistentBanner } from '@/components/ui/alert-banner';
+import { resolveRegisteredMachine } from '@/utils/machineMatching';
 import { useToast } from '@/context/ToastContext';
 import {
   ArrowLeft,
@@ -94,22 +95,9 @@ export default function TicketCreation() {
       const exists = machineList.some((m) => Number(m.machine_ID) === numericVal);
       if (exists) return numericVal;
     }
-    const search = String(val).trim().toLowerCase();
-    if (!search) return '';
-    const matched = machineList.find((m) => {
-      const name = (m.machine_name || '').toLowerCase();
-      const model = (m.model || '').toLowerCase();
-      const brand = (m.brand || '').toLowerCase();
-      const serial = (m.serial_number || '').toLowerCase();
-      return (
-        name === search ||
-        model === search ||
-        (name && search.includes(name)) ||
-        (model && search.includes(model)) ||
-        (brand && search.includes(brand)) ||
-        (serial && search.includes(serial))
-      );
-    });
+    // Spec 0038 AC-1: a machine string from the AI flow only links one of the customer's
+    // registered machines by exact serial, then model, then name. A brand never counts.
+    const matched = resolveRegisteredMachine(machineList, [String(val)]);
     return matched ? matched.machine_ID : '';
   }, []);
 
@@ -323,6 +311,29 @@ export default function TicketCreation() {
         });
     }
   }, [location.state, options.machines, options.problem_categories, draftId, resolveMachineId, resolveCategoryId]);
+
+  // A description prefilled from the AI chat never fires the blur handler, and the chat's free
+  // text category (e.g. "Hardware") rarely matches a configured category name. Ask the classifier
+  // once, against the real category list, so the dropdown is preselected without customer input.
+  const prefillSuggestedRef = useRef(false);
+  useEffect(() => {
+    if (prefillSuggestedRef.current || formData.origin !== 'ai_chatbot') return;
+    const categories = options.problem_categories || [];
+    const desc = (formData.description || '').trim();
+    if (formData.problem_category_ID || categories.length === 0 || desc.length < 20) return;
+
+    prefillSuggestedRef.current = true;
+    setLastClassifiedText(desc);
+    suggestProblemCategory(formData.title || '', desc, categories)
+      .then((suggestion) => {
+        if (!suggestion?.category_id) return;
+        setFormData((prev) => (
+          prev.problem_category_ID ? prev : { ...prev, problem_category_ID: suggestion.category_id }
+        ));
+        setAiCategoryHint(suggestion);
+      })
+      .catch(() => {});
+  }, [formData.origin, formData.description, formData.title, formData.problem_category_ID, options.problem_categories]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;

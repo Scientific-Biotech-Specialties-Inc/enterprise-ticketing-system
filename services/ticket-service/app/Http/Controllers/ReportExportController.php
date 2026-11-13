@@ -50,6 +50,8 @@ class ReportExportController extends Controller
             'date_to' => $input['date_to'] ?? null,
             'branch' => $input['branch'] ?? null,
             'branch_id' => $input['branch_id'] ?? null,
+            'sort_by' => $input['sort_by'] ?? null,
+            'sort_dir' => $input['sort_dir'] ?? null,
         ];
 
         // Same call the preview makes, so branch scoping (403) and the row snapshot are identical.
