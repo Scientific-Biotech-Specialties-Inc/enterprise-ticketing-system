@@ -4,18 +4,18 @@ namespace App\Http\Controllers;
 
 use App\Models\EmailConfiguration;
 use App\Models\EmailTemplate;
-use App\Services\ResendService;
+use App\Contracts\EmailProvider;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class EmailTemplateController extends Controller
 {
-    protected ResendService $resendService;
+    protected EmailProvider $emailProvider;
 
-    public function __construct(ResendService $resendService)
+    public function __construct(EmailProvider $emailProvider)
     {
-        $this->resendService = $resendService;
+        $this->emailProvider = $emailProvider;
     }
 
     /**
@@ -221,7 +221,7 @@ class EmailTemplateController extends Controller
         $config = EmailConfiguration::where('is_active', true)->latest()->first();
         if (!$config || empty($config->api_key)) {
             return response()->json([
-                'message' => 'Email delivery is not configured yet. Please configure your Resend credentials in the Email Delivery tab first.',
+                'message' => 'Email delivery is not configured yet. Please configure your ' . $this->emailProvider->name() . ' credentials in the Email Delivery tab first.',
             ], 422);
         }
 
@@ -268,7 +268,7 @@ class EmailTemplateController extends Controller
             </div>
         ';
 
-        $result = $this->resendService->sendRawEmail(
+        $result = $this->emailProvider->sendRawEmail(
             $config->api_key,
             $config->from_name ?? 'SBSI Support',
             $config->from_email ?? 'support@sbs-med.com',
@@ -279,7 +279,7 @@ class EmailTemplateController extends Controller
 
         if (!$result['success']) {
             return response()->json([
-                'message' => 'Failed to dispatch test template email through Resend.',
+                'message' => 'Failed to dispatch test template email through ' . $this->emailProvider->name() . '.',
                 'error'   => $result['error'],
             ], 422);
         }
@@ -294,7 +294,7 @@ class EmailTemplateController extends Controller
 
         return response()->json([
             'message'   => "Test email for \"{$template->event_label}\" successfully delivered to {$recipient}.",
-            'resend_id' => $result['id'],
+            'message_id' => $result['id'],
         ]);
     }
 }

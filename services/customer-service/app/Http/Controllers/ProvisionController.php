@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Client;
 use App\Models\ClientCredential;
 use App\Mail\CustomerProvisionedMail;
+use App\Services\Mail\ConfigServiceMailer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -78,8 +79,14 @@ class ProvisionController extends Controller
 
         // Send Email notification
         try {
-            Mail::to($client->email)->send(new CustomerProvisionedMail($client, $temporaryPassword));
-        } catch (\Exception $e) {
+            // Spec 0040: configuration-service (Brevo API) first, Brevo SMTP relay as backup.
+            app(ConfigServiceMailer::class)->send(
+                $client->email,
+                new CustomerProvisionedMail($client, $temporaryPassword),
+                null,
+                ConfigServiceMailer::CATEGORY_SECURITY
+            );
+        } catch (\Throwable $e) {
             Log::error('Failed to send provision email: ' . $e->getMessage());
         }
 
