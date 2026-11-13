@@ -133,9 +133,12 @@ return new class extends Migration
             ->whereNotIn('ticket_status_ID', [3, 4, 5, 9])
             ->exists();
 
-        if (!$hasOpenBioTicket) {
-            $clientId = DB::table('clients')->value('id') ?? 1;
-            $machineId = DB::table('machines')->value('machine_ID') ?? 1;
+        $clientId = Schema::hasTable('clients') ? DB::table('clients')->value('id') : null;
+        $machineId = Schema::hasTable('machines') ? DB::table('machines')->value('machine_ID') : null;
+
+        // On a fresh database there is no client or machine yet, so the demo row
+        // would violate the foreign keys. Skip it instead of failing the migration.
+        if (!$hasOpenBioTicket && $clientId && $machineId) {
             DB::table('tickets')->insert([
                 'ticket_number' => 'LUZ-DEMO-0001',
                 'title' => 'Biomedical Facility Air Filtration Unit Offline',

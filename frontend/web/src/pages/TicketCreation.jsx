@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import NotificationModal from '@/components/NotificationModal';
 import TitleCasingModal from '@/components/TitleCasingModal';
@@ -311,6 +311,29 @@ export default function TicketCreation() {
         });
     }
   }, [location.state, options.machines, options.problem_categories, draftId, resolveMachineId, resolveCategoryId]);
+
+  // A description prefilled from the AI chat never fires the blur handler, and the chat's free
+  // text category (e.g. "Hardware") rarely matches a configured category name. Ask the classifier
+  // once, against the real category list, so the dropdown is preselected without customer input.
+  const prefillSuggestedRef = useRef(false);
+  useEffect(() => {
+    if (prefillSuggestedRef.current || formData.origin !== 'ai_chatbot') return;
+    const categories = options.problem_categories || [];
+    const desc = (formData.description || '').trim();
+    if (formData.problem_category_ID || categories.length === 0 || desc.length < 20) return;
+
+    prefillSuggestedRef.current = true;
+    setLastClassifiedText(desc);
+    suggestProblemCategory(formData.title || '', desc, categories)
+      .then((suggestion) => {
+        if (!suggestion?.category_id) return;
+        setFormData((prev) => (
+          prev.problem_category_ID ? prev : { ...prev, problem_category_ID: suggestion.category_id }
+        ));
+        setAiCategoryHint(suggestion);
+      })
+      .catch(() => {});
+  }, [formData.origin, formData.description, formData.title, formData.problem_category_ID, options.problem_categories]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;

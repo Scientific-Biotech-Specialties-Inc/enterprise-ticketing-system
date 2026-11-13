@@ -8,6 +8,11 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // ticket-service owns this table and may have created it already.
+        if (Schema::hasTable('ticket_attachments')) {
+            return;
+        }
+
         Schema::create('ticket_attachments', function (Blueprint $table) {
             $table->bigIncrements('attachment_id');
             $table->foreignId('ticket_id')->nullable()->constrained('tickets', 'ticket_ID')->cascadeOnDelete();

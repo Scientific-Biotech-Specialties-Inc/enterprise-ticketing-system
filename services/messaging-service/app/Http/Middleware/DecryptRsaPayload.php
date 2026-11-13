@@ -46,8 +46,6 @@ class DecryptRsaPayload
                     return response()->json(['message' => 'Failed to decrypt payload.'], 400);
                 }
 
-                \Illuminate\Support\Facades\Log::info("Decrypted $field: '" . $decrypted . "'");
-
                 // Replace the encrypted value with the decrypted one in the request
                 $request->merge([$field => $decrypted]);
             }

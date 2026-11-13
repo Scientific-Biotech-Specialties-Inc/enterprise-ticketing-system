@@ -111,16 +111,16 @@ class TicketReferenceSeeder extends Seeder
         DB::table('problem_categories')->upsert([
             [
                 'problem_category_ID' => 1,
-                'category_name' => 'Machine Failure',
-                'description' => 'The equipment will not power on or is not operating as expected.',
+                'category_name' => 'Software',
+                'description' => 'Software, application, login, or system access issues.',
                 'is_active' => true,
                 'created_at' => $now,
                 'updated_at' => $now,
             ],
             [
                 'problem_category_ID' => 2,
-                'category_name' => 'Calibration Required',
-                'description' => 'The device needs calibration or accuracy verification.',
+                'category_name' => 'Service',
+                'description' => 'Equipment service, repair, calibration, or maintenance requests.',
                 'is_active' => true,
                 'created_at' => $now,
                 'updated_at' => $now,

@@ -14,6 +14,11 @@ export const formatProperTitleCase = (str) => {
     'ai', 'id', 'uv', 'pc', 'ram', 'cpu', 'usb', 'sla', 'xl', 'cs', 'it', 'api', 'db', 'sql'
   ]);
 
+  // When the whole title is shouted ("PRINTER NOT WORKING") every word gets recased. Otherwise words the
+  // customer typed with capitals inside (model codes like BC-5390, acronyms like LIS) are kept as typed.
+  const letters = trimmed.replace(/[^a-zA-Z]/g, '');
+  const isShouting = letters.length > 4 && letters === letters.toUpperCase();
+
   const words = trimmed.split(/\s+/);
   return words.map((word, index) => {
     // Keep numbers or code-like tokens (e.g. #123, 106)
@@ -26,7 +31,9 @@ export const formatProperTitleCase = (str) => {
     const lower = cleanWord.toLowerCase();
     let formattedClean = '';
 
-    if (acronyms.has(lower)) {
+    if (!isShouting && (/\d/.test(cleanWord) || /[A-Z]/.test(cleanWord.slice(1)))) {
+      formattedClean = cleanWord.charAt(0).toUpperCase() + cleanWord.slice(1);
+    } else if (acronyms.has(lower)) {
       formattedClean = lower.toUpperCase();
     } else if (index > 0 && index < words.length - 1 && minorWords.has(lower)) {
       formattedClean = lower;

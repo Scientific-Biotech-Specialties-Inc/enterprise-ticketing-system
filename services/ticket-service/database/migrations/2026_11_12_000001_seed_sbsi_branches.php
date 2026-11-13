@@ -56,10 +56,14 @@ return new class extends Migration
             return;
         }
 
+        $hasAddress = Schema::hasColumn('branches', 'address');
         $now = now();
 
         foreach (self::RENAMES as $legacyName => $spec) {
             $attrs = $spec['new'] + ['slug' => Str::slug($spec['new']['name']), 'is_active' => true, 'updated_at' => $now];
+            if (!$hasAddress) {
+                unset($attrs['address']);
+            }
 
             $target = DB::table('branches')->where('name', $attrs['name'])->first();
             if ($target) {
@@ -81,6 +85,9 @@ return new class extends Migration
 
         foreach (self::NEW_BRANCHES as $branch) {
             $attrs = $branch + ['slug' => Str::slug($branch['name']), 'is_active' => true, 'updated_at' => $now];
+            if (!$hasAddress) {
+                unset($attrs['address']);
+            }
             $existing = DB::table('branches')->where('name', $attrs['name'])->first();
             if ($existing) {
                 DB::table('branches')->where('id', $existing->id)->update($attrs);
@@ -97,12 +104,13 @@ return new class extends Migration
         }
 
         $now = now();
+        $hasAddress = Schema::hasColumn('branches', 'address');
 
         foreach (self::RENAMES as $legacyName => $spec) {
             $renamed = DB::table('branches')->where('name', $spec['new']['name'])->first();
             $legacyTaken = DB::table('branches')->where('name', $legacyName)->exists();
             if ($renamed && !$legacyTaken) {
-                DB::table('branches')->where('id', $renamed->id)->update($spec['old'] + [
+                DB::table('branches')->where('id', $renamed->id)->update(array_intersect_key($spec['old'], $hasAddress ? $spec['old'] : ['slug' => 1, 'code' => 1, 'region' => 1]) + [
                     'name' => $legacyName,
                     'updated_at' => $now,
                 ]);

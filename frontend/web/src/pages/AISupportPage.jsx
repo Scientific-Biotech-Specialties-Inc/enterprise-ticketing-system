@@ -1057,7 +1057,8 @@ function AISupportPage() {
               title: c.title ? c.title.replace(/^(?:\d+[\.\)\-:](?!\d)|\b[qQ]\d+[:\.]|\b(?:machine|problem|issue|item)[:\-])\s*/i, '').trim() : 'AI Support Session'
             }));
           setConversations(prev => {
-            const activeDraft = prev.find(c => String(c.id).startsWith('draft-'));
+            // Keep a local draft only while it is still the open chat; once sent it exists on the server.
+            const activeDraft = prev.find(c => String(c.id).startsWith('draft-') && c.id === activeConvIdRef.current);
             return activeDraft ? [activeDraft, ...cleanConvs] : cleanConvs;
           });
         }
@@ -1201,6 +1202,13 @@ function AISupportPage() {
         }
         if (returnedConvId !== activeConversationId) {
           setActiveConversationId(returnedConvId);
+          // The server created the real conversation (with a proper title), so the local
+          // "New Conversation" draft is replaced instead of lingering in the sidebar.
+          if (String(sendingConvId).startsWith('draft-')) {
+            activeConvIdRef.current = returnedConvId;
+            delete conversationStateRef.current[sendingConvId];
+            setConversations(prev => prev.filter(c => c.id !== sendingConvId));
+          }
         }
 
         if (res.data.is_duplicate && res.data.conversation_id) {

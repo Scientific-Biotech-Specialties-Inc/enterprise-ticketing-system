@@ -2150,8 +2150,10 @@ export default function SuperAdminTicketConfig() {
     setOpenMenuId(null);
     setMenuPos(null);
     if (tab === TAB_TICKET_CATEGORIES) {
-      if (item.is_system_default) {
-        showError('Action Prohibited', `"${item.name}" is a core system default ticket category and cannot be deleted.`);
+      // No category is a protected default, but at least one active category must stay for customers to pick.
+      const otherActive = (items.ticketCategories || []).some((c) => c.id !== item.id && c.is_active);
+      if (!otherActive) {
+        showError('Action Prohibited', `"${item.name}" is the last active ticket category. Add another category before deleting this one.`);
         return;
       }
       showConfirm(
@@ -11031,14 +11033,13 @@ export default function SuperAdminTicketConfig() {
                   <th className="px-3 py-2.5">ID</th>
                   <th className="px-3 py-2.5">Name</th>
                   {tab === TAB_TICKET_CATEGORIES && <th className="px-3 py-2.5">Description</th>}
-                  {tab === TAB_TICKET_CATEGORIES && <th className="px-3 py-2.5">Type</th>}
                   <th className="px-3 py-2.5 text-center w-16"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={tab === TAB_TICKET_CATEGORIES ? 5 : 3} className="px-3 py-8 text-center text-xs text-muted-slate">
+                    <td colSpan={tab === TAB_TICKET_CATEGORIES ? 4 : 3} className="px-3 py-8 text-center text-xs text-muted-slate">
                       No {tab === TAB_TICKET_CATEGORIES ? 'ticket categories' : tab === TAB_EQUIPMENT ? 'categories' : 'priorities'} found.
                     </td>
                   </tr>
@@ -11056,19 +11057,6 @@ export default function SuperAdminTicketConfig() {
                     {tab === TAB_TICKET_CATEGORIES && (
                       <td className="px-3 py-2.5 text-xs text-muted-slate max-w-xs truncate">
                         {item.description || '—'}
-                      </td>
-                    )}
-                    {tab === TAB_TICKET_CATEGORIES && (
-                      <td className="px-3 py-2.5 text-xs">
-                        {item.is_system_default ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 border border-blue-200">
-                            Core Default
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-0.5 text-[11px] font-semibold text-gray-600 border border-gray-200">
-                            Custom
-                          </span>
-                        )}
                       </td>
                     )}
                     <td className="px-3 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
@@ -11105,17 +11093,10 @@ export default function SuperAdminTicketConfig() {
                 className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 rounded-t-xl">
                 Edit
               </button>
-              {tab === TAB_TICKET_CATEGORIES && t.is_system_default ? (
-                <button disabled title="System default categories cannot be deleted"
-                  className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-gray-400 cursor-not-allowed rounded-b-xl opacity-60">
-                  Delete
-                </button>
-              ) : (
-                <button onClick={() => { handleDelete(t); }}
-                  className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 rounded-b-xl">
-                  Delete
-                </button>
-              )}
+              <button onClick={() => { handleDelete(t); }}
+                className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 rounded-b-xl">
+                Delete
+              </button>
             </div>
           ) : null;
         })(),

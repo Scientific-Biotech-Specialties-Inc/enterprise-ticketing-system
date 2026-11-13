@@ -8,6 +8,11 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // ticket-service owns this table and may have created it already.
+        if (Schema::hasTable('proof_of_completion')) {
+            return;
+        }
+
         Schema::create('proof_of_completion', function (Blueprint $table) {
             $table->bigIncrements('proof_ID');
             $table->foreignId('assignment_ID')->nullable()->constrained('ticket_assignments', 'assignment_ID')->cascadeOnDelete();
