@@ -886,14 +886,15 @@ class MessageController extends Controller
                             }
 
                             if ($recipientEmail) {
-                                $configServiceUrl = env('CONFIGURATION_SERVICE_URL', 'http://configuration-service:8000');
-                                \Illuminate\Support\Facades\Http::timeout(5)->withHeaders(['X-Internal-Token' => (string) env('INTERNAL_TOKEN', '')])->retry(2, 100)->post("{$configServiceUrl}/api/email/dispatch", [
-                                    'to' => $recipientEmail,
-                                    'subject' => $notificationTitle,
-                                    'html' => "<p><strong>{$senderName}</strong> ({$senderRole}) posted a new message on ticket #{$ticket_id}:</p><blockquote>" . e($previewText) . "</blockquote><p><a href=\"" . url($deepLink) . "\">View ticket conversation</a></p>",
-                                    'alert_key' => 'new_message',
-                                    'event_key' => 'new_message',
-                                ]);
+                                // Spec 0040: configuration-service (Brevo API) first, Brevo SMTP relay as backup.
+                                app(\App\Services\Mail\ConfigServiceMailer::class)->sendHtml(
+                                    $recipientEmail,
+                                    $notificationTitle,
+                                    "<p><strong>{$senderName}</strong> ({$senderRole}) posted a new message on ticket #{$ticket_id}:</p><blockquote>" . e($previewText) . "</blockquote><p><a href=\"" . url($deepLink) . "\">View ticket conversation</a></p>",
+                                    'new_message',
+                                    \App\Services\Mail\ConfigServiceMailer::CATEGORY_NOTIFICATION,
+                                    'new_message'
+                                );
                             }
                         } catch (\Throwable $mailEx) {
                             \Illuminate\Support\Facades\Log::warning("Email notification dispatch for recipient {$recipient['type']}:{$recipient['id']} failed: " . $mailEx->getMessage());
