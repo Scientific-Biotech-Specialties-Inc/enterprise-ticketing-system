@@ -9,6 +9,7 @@
     use App\Models\RefreshToken;
     use App\Mail\ForgotPasswordOtpMail;
     use App\Mail\FirstLoginOtpMail;
+    use App\Services\Mail\ConfigServiceMailer;
     use Illuminate\Support\Facades\Hash;
     use Illuminate\Support\Facades\Mail;
     use Illuminate\Support\Facades\Log;
@@ -357,7 +358,13 @@
                     'mail_host' => config('mail.mailers.smtp.host'),
                 ]);
 
-                $result = Mail::to($email)->send(new ForgotPasswordOtpMail($client, $otp, self::PASSWORD_RESET_OTP_MINUTES));
+                // Spec 0040: configuration-service (Brevo API) first, Brevo SMTP relay as backup.
+                $result = app(ConfigServiceMailer::class)->send(
+                    $email,
+                    new ForgotPasswordOtpMail($client, $otp, self::PASSWORD_RESET_OTP_MINUTES),
+                    null,
+                    ConfigServiceMailer::CATEGORY_SECURITY
+                );
                 
                 Log::info('AuthService.requestPasswordResetOtp:after_mail_send', [
                     'email' => $email,
@@ -534,7 +541,13 @@
                     'mail_host' => config('mail.mailers.smtp.host'),
                 ]);
 
-                Mail::to($email)->send(new FirstLoginOtpMail($name, $otp, self::PASSWORD_RESET_OTP_MINUTES));
+                // Spec 0040: configuration-service (Brevo API) first, Brevo SMTP relay as backup.
+                app(ConfigServiceMailer::class)->send(
+                    $email,
+                    new FirstLoginOtpMail($name, $otp, self::PASSWORD_RESET_OTP_MINUTES),
+                    null,
+                    ConfigServiceMailer::CATEGORY_SECURITY
+                );
                 
                 Log::info('AuthService.sendFirstLoginOtp:after_mail_send', [
                     'email' => $email,

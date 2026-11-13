@@ -88,13 +88,15 @@ services:
       REVERB_HOST: reverb
       REVERB_PORT: 6001
       MAIL_MAILER: smtp
-      MAIL_HOST: smtp.gmail.com
-      MAIL_PORT: 587
+      MAIL_HOST: ${MAIL_HOST:-smtp-relay.brevo.com}
+      MAIL_PORT: ${MAIL_PORT:-587}
       MAIL_USERNAME: ${MAIL_USERNAME}
       MAIL_PASSWORD: ${MAIL_PASSWORD}
-      MAIL_ENCRYPTION: tls
+      MAIL_ENCRYPTION: ${MAIL_ENCRYPTION:-tls}
       MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS}
-      MAIL_FROM_NAME: "Enterprise Ticketing System"
+      MAIL_FROM_NAME: "${MAIL_FROM_NAME:-Enterprise Ticketing System}"
+      CONFIGURATION_SERVICE_URL: ${CONFIGURATION_SERVICE_URL:-http://configuration-service:8000}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
     command: >
       sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d upload_max_filesize=20M -d post_max_size=25M artisan serve --host=0.0.0.0 --port=8000"
     depends_on:
@@ -239,6 +241,14 @@ services:
       # artisan serve is single threaded by default. File views now wait on an access check
       # here, so a slow dashboard request must not block it (same as analytics-service).
       PHP_CLI_SERVER_WORKERS: 4
+      MAIL_MAILER: smtp
+      MAIL_HOST: ${MAIL_HOST:-smtp-relay.brevo.com}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      MAIL_ENCRYPTION: ${MAIL_ENCRYPTION:-tls}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS}
+      MAIL_FROM_NAME: "${MAIL_FROM_NAME:-Enterprise Ticketing System}"
     command: >
       sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d variables_order=EGPCS -d upload_max_filesize=20M -d post_max_size=25M artisan serve --no-reload --host=0.0.0.0 --port=8000"
     depends_on:
@@ -320,6 +330,14 @@ services:
       REVERB_PORT: 6001
       # Shared service to service token (same value as ticket-service).
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      MAIL_MAILER: smtp
+      MAIL_HOST: ${MAIL_HOST:-smtp-relay.brevo.com}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      MAIL_ENCRYPTION: ${MAIL_ENCRYPTION:-tls}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS}
+      MAIL_FROM_NAME: "${MAIL_FROM_NAME:-Enterprise Ticketing System}"
     command: >
       sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && rm -f bootstrap/cache/*.php && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d variables_order=EGPCS -d upload_max_filesize=20M -d post_max_size=25M artisan serve --no-reload --host=0.0.0.0 --port=8000"
     depends_on:
@@ -610,6 +628,14 @@ services:
       REVERB_PORT: 6002
       # Shared service to service token (same value as ticket-service).
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      MAIL_MAILER: smtp
+      MAIL_HOST: ${MAIL_HOST:-smtp-relay.brevo.com}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      MAIL_ENCRYPTION: ${MAIL_ENCRYPTION:-tls}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS}
+      MAIL_FROM_NAME: "${MAIL_FROM_NAME:-Enterprise Ticketing System}"
     command: >
       sh -lc "if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi && if [ -f uploads.ini ]; then cp uploads.ini /usr/local/etc/php/conf.d/uploads.ini; fi && if [ ! -f vendor/autoload.php ]; then composer install --no-interaction --prefer-dist --optimize-autoloader; fi && if grep -q '^APP_KEY=$' .env; then php artisan key:generate --force; fi && php -d variables_order=EGPCS artisan serve --no-reload --host=0.0.0.0 --port=8000"
     depends_on:

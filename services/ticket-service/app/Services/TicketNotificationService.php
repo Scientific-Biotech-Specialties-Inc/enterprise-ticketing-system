@@ -654,7 +654,8 @@ class TicketNotificationService
     }
 
     /**
-     * Dispatches email via configuration-service (Resend), falling back to SMTP.
+     * Dispatches email via configuration-service (Brevo API), falling back to the Brevo SMTP
+     * relay (Laravel Mail) on timeout, connection error, non 2xx, or a 2xx with status=error (spec 0040).
      */
     protected function dispatchEmail(string $recipientEmail, TicketNotificationMail $mailable, ?string $alertKey = null): void
     {
@@ -667,20 +668,31 @@ class TicketNotificationService
 
         try {
             $configUrl = env('CONFIGURATION_SERVICE_URL', 'http://configuration-service:8000');
-            $response = Http::timeout(6)->withHeaders(['X-Internal-Token' => (string) env('INTERNAL_TOKEN', '')])->retry(3, 100)->post("{$configUrl}/api/email/dispatch", [
+            $response = Http::timeout(6)->withHeaders(['X-Internal-Token' => (string) env('INTERNAL_TOKEN', '')])->retry(3, 100, null, false)->post("{$configUrl}/api/email/dispatch", [
                 'to' => $recipientEmail,
                 'subject' => $mailable->subject ?? 'Ticket Notification',
                 'html' => $mailable->render(),
                 'alert_key' => $key,
+                'category' => 'notification',
             ]);
 
-            if ($response->successful()) {
-                Log::info("Ticket notification email dispatched via Resend to {$recipientEmail}");
+            if ($response->successful() && $response->json('status') !== 'error') {
+                Log::info("Ticket notification email [{$key}] handled by configuration-service (status: " . ($response->json('status') ?? 'success') . ')');
                 return;
             }
+
+            $reason = 'HTTP ' . $response->status() . ($response->json('error') ? ': ' . $response->json('error') : '');
         } catch (\Throwable $e) {
-            Log::warning("Configuration service email dispatch failed, falling back to SMTP: {$e->getMessage()}");
+            $reason = class_basename($e) . ': ' . $e->getMessage();
         }
+
+        $at = strrpos($recipientEmail, '@');
+        Log::warning('Email sent through SMTP backup because configuration-service failed', [
+            'service' => 'ticket-service',
+            'recipient_domain' => $at === false ? 'unknown' : strtolower(substr($recipientEmail, $at + 1)),
+            'category' => 'notification',
+            'reason' => $reason,
+        ]);
 
         Mail::to($recipientEmail)->send($mailable);
     }

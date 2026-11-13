@@ -89,15 +89,16 @@ services:
       REVERB_APP_SECRET: ${REVERB_APP_SECRET:-local}
       REVERB_HOST: reverb
       REVERB_PORT: 6001
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
       MAIL_MAILER: smtp
-      MAIL_HOST: ${MAIL_HOST:-smtp.gmail.com}
+      MAIL_HOST: ${MAIL_HOST:-smtp-relay.brevo.com}
       MAIL_PORT: ${MAIL_PORT:-587}
       MAIL_USERNAME: ${MAIL_USERNAME}
       MAIL_PASSWORD: ${MAIL_PASSWORD}
       MAIL_ENCRYPTION: ${MAIL_ENCRYPTION:-tls}
       MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS}
-      MAIL_FROM_NAME: "Enterprise Ticketing System"
-      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      MAIL_FROM_NAME: "${MAIL_FROM_NAME:-Enterprise Ticketing System}"
+      CONFIGURATION_SERVICE_URL: ${CONFIGURATION_SERVICE_URL:-http://configuration-service:8000}
     depends_on:
       db:
         condition: service_healthy
@@ -213,6 +214,14 @@ services:
       REVERB_APP_SECRET: ${REVERB_APP_SECRET:-local}
       REVERB_HOST: reverb
       REVERB_PORT: 6001
+      MAIL_MAILER: smtp
+      MAIL_HOST: ${MAIL_HOST:-smtp-relay.brevo.com}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      MAIL_ENCRYPTION: ${MAIL_ENCRYPTION:-tls}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS}
+      MAIL_FROM_NAME: "${MAIL_FROM_NAME:-Enterprise Ticketing System}"
     depends_on:
       db:
         condition: service_healthy
@@ -290,6 +299,14 @@ services:
       REVERB_PORT: 6001
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
       PHP_CLI_SERVER_WORKERS: 4
+      MAIL_MAILER: smtp
+      MAIL_HOST: ${MAIL_HOST:-smtp-relay.brevo.com}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      MAIL_ENCRYPTION: ${MAIL_ENCRYPTION:-tls}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS}
+      MAIL_FROM_NAME: "${MAIL_FROM_NAME:-Enterprise Ticketing System}"
     depends_on:
       db:
         condition: service_healthy
@@ -558,6 +575,14 @@ services:
       REVERB_HOST: messaging-reverb
       REVERB_PORT: 6002
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      MAIL_MAILER: smtp
+      MAIL_HOST: ${MAIL_HOST:-smtp-relay.brevo.com}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      MAIL_ENCRYPTION: ${MAIL_ENCRYPTION:-tls}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS}
+      MAIL_FROM_NAME: "${MAIL_FROM_NAME:-Enterprise Ticketing System}"
     depends_on:
       mongodb:
         condition: service_healthy
