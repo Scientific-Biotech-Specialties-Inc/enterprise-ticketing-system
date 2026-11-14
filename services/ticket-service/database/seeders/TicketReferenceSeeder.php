@@ -247,6 +247,7 @@ class TicketReferenceSeeder extends Seeder
             [
                 'id' => 1,
                 'name' => 'Service',
+                'code' => 'SVC',
                 'description' => 'Service and support team',
                 'is_active' => true,
                 'created_at' => $now,
@@ -255,6 +256,7 @@ class TicketReferenceSeeder extends Seeder
             [
                 'id' => 2,
                 'name' => 'IT',
+                'code' => 'IT',
                 'description' => 'IT and technical support',
                 'is_active' => true,
                 'created_at' => $now,

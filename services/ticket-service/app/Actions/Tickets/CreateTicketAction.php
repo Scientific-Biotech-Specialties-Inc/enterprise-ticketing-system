@@ -31,7 +31,7 @@ class CreateTicketAction
      * @param int|null $departmentId
      * @return array
      */
-    public function execute(array $validated, $user, ?int $departmentId = 2): array
+    public function execute(array $validated, $user, ?int $departmentId = null): array
     {
         if (!$user instanceof Client) {
             throw new \LogicException('Only authenticated customers can create external tickets.');
@@ -44,17 +44,11 @@ class CreateTicketAction
 
         $externalTypeId = DB::table('ticket_types')->where('type_name', 'External')->value('ticket_type_ID') ?? 2;
 
-        $deptCodeParam = null;
-        if ($departmentId) {
-            $deptName = DB::table('departments')->where('id', $departmentId)->value('name') ?? '';
-            if (stripos($deptName, 'IT') !== false) {
-                $deptCodeParam = 'IT';
-            } elseif (stripos($deptName, 'Service') !== false) {
-                $deptCodeParam = 'SVC';
-            } elseif (!empty($deptName)) {
-                $deptCodeParam = strtoupper(substr(preg_replace('/[^A-Za-z0-9]/', '', $deptName), 0, 4));
-            }
-        }
+        // Spec 0043 (AC-7): the department segment is the department's own code, read at creation.
+        // An unclassified ticket has no department, so the segment is left out.
+        $deptCodeParam = $departmentId
+            ? (DB::table('departments')->where('id', $departmentId)->value('code') ?: null)
+            : null;
         $ticketNumber = $this->numberGeneratorService->generateNextTicketNumber($deptCodeParam);
 
         $defaults = TicketConfigurationService::getDefaultsConfig();
@@ -79,7 +73,7 @@ class CreateTicketAction
             $ticketData = [
                 'ticket_number' => $ticketNumber,
                 'machine_ID' => !empty($validated['machine_ID']) ? (int) $validated['machine_ID'] : null,
-                'problem_category_ID' => $validated['problem_category_ID'],
+                'problem_category_ID' => $validated['problem_category_ID'] ?? null,
                 'created_by' => $clientId,
                 'requested_by' => null,
                 'assigned_to' => null,
@@ -108,8 +102,8 @@ class CreateTicketAction
                 $priorityName = DB::table('ticket_priorities')->where('priority_ID', $priorityId)->value('priority_name') ?? 'Low';
                 $this->slaService->assignSlaToTicket(
                     $ticketId,
-                    (int) $departmentId,
-                    (int) $validated['problem_category_ID'],
+                    (int) ($departmentId ?? 0),
+                    isset($validated['problem_category_ID']) ? (int) $validated['problem_category_ID'] : null,
                     $priorityName,
                     now(),
                     $defaults['slaPolicy'] ?? 'dynamic',
@@ -153,6 +147,8 @@ class CreateTicketAction
         // ticket_attachments.ticket_id, whose foreign key on tickets would wait on our uncommitted
         // row while we wait on the HTTP call, stalling ticket creation until the 30s timeout.
         $attachmentIds = $validated['attachments'] ?? [];
+        // Spec 0043 AC-14 instrumentation: times the steps between commit and the `created` broadcast.
+        $bindStartedAt = microtime(true);
         if (!empty($attachmentIds)) {
             try {
                 Http::post('http://attachment-service:8000/api/bind', [
@@ -165,7 +161,16 @@ class CreateTicketAction
             }
         }
 
+        $bindMs = (int) round((microtime(true) - $bindStartedAt) * 1000);
+
         $this->dispatchCreatedSideEffects($result, $validated, $clientId, $finalTitle, $ticketNumber);
+
+        Log::info('CreateTicketAction: created broadcast timing', [
+            'ticket_ID' => $result['ticket_id'],
+            'attachment_count' => count($attachmentIds),
+            'bind_ms' => $bindMs,
+            'commit_to_side_effects_done_ms' => (int) round((microtime(true) - $bindStartedAt) * 1000),
+        ]);
 
         return $result;
     }
@@ -198,7 +203,9 @@ class CreateTicketAction
                 $ticketId
             );
 
-            $categoryName = DB::table('problem_categories')->where('problem_category_ID', $validated['problem_category_ID'])->value('category_name') ?? '';
+            $categoryName = !empty($validated['problem_category_ID'])
+                ? (DB::table('problem_categories')->where('problem_category_ID', $validated['problem_category_ID'])->value('category_name') ?? '')
+                : 'Unclassified';
             $priorityName = DB::table('ticket_priorities')->where('priority_ID', $ticketRow['priority_ID'] ?? ($validated['priority_ID'] ?? 1))->value('priority_name') ?? '';
             $this->notificationService->sendCustomerEmail(
                 $clientId,

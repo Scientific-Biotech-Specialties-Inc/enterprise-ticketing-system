@@ -80,6 +80,15 @@ export default function EmployeeHistoryDetail() {
 
   // Feedback State
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  // Spec 0043 (AC-19): My Tickets' "Give Feedback" lands here with the modal already open.
+  const openFeedbackOnArrival = Boolean(state?.openFeedback);
+  useEffect(() => {
+    if (openFeedbackOnArrival && ticket && ticket.status === 'Closed') {
+      setShowFeedbackModal(true);
+    }
+    // Only on arrival with the ticket loaded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openFeedbackOnArrival, ticket?.status]);
   const [editingFeedback, setEditingFeedback] = useState(null);
 
   const [windowConfig, setWindowConfig] = useState(() => {

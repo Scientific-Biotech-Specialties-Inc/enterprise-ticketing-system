@@ -70,6 +70,14 @@ class SLAService
         }
 
         if (empty($ticket->is_internal)) {
+            // Spec 0043: a classified customer ticket belongs to its category's department.
+            if (!empty($ticket->problem_category_ID)) {
+                $resolvedDept = app(CategoryDepartmentResolver::class)->resolve((int) $ticket->problem_category_ID);
+                if ($resolvedDept) {
+                    return $resolvedDept['id'];
+                }
+            }
+
             // Customer tickets are created against the department sent by the client
             // (e.g. Service = 1), which is not stored on the ticket. Reuse the department
             // of the SLA rule assigned at creation so recalculation stays consistent.

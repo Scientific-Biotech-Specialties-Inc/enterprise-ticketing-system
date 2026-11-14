@@ -1549,23 +1549,6 @@ class SuperAdminConfigController extends Controller
                 'regex:/^[A-Za-z0-9_-]{1,16}$/',
             ],
             'includeDeptCode' => 'sometimes|boolean',
-            'deptCode' => [
-                'nullable',
-                'required_if:includeDeptCode,true,1',
-                function ($attribute, $value, $fail) use ($payload) {
-                    $includeDept = filter_var($payload['includeDeptCode'] ?? false, FILTER_VALIDATE_BOOLEAN);
-                    if ($includeDept) {
-                        $trimmed = trim((string)$value);
-                        if (empty($trimmed)) {
-                            $fail('A branch or department code is required when the department code segment is enabled.');
-                            return;
-                        }
-                        if (!preg_match('/^[A-Za-z0-9_-]{1,16}$/', $trimmed)) {
-                            $fail('Department code can only contain alphanumeric characters, hyphens, and underscores.');
-                        }
-                    }
-                },
-            ],
             'dateSegment' => 'required|string|in:none,YYYY,YYYYMM,YYYYMMDD',
             'digitLength' => [
                 'required',
@@ -1603,7 +1586,6 @@ class SuperAdminConfigController extends Controller
         $sanitized = [
             'prefix' => strtoupper(trim($validated['prefix'])),
             'includeDeptCode' => (bool) ($validated['includeDeptCode'] ?? false),
-            'deptCode' => strtoupper(trim($validated['deptCode'] ?? '')),
             'dateSegment' => $validated['dateSegment'],
             'digitLength' => (int) $validated['digitLength'],
         ];
@@ -1626,7 +1608,7 @@ class SuperAdminConfigController extends Controller
             $updated['prefix'],
             $updated['digitLength'],
             $updated['dateSegment'],
-            $updated['includeDeptCode'] ? ", dept code '{$updated['deptCode']}'" : ''
+            $updated['includeDeptCode'] ? ', department code segment on' : ''
         );
 
         // Audit Log entry in ticket-service

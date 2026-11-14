@@ -33,6 +33,7 @@ class InternalSlaRecalculationTest extends TestCase
 
         $this->deptId = (int) DB::table('departments')->insertGetId([
             'name' => 'SLA Regression Dept ' . uniqid(),
+            'code' => 'T' . strtoupper(substr(uniqid(), -8)), 
             'created_at' => now(),
             'updated_at' => now(),
         ]);

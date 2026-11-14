@@ -3,6 +3,8 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { Search, RotateCcw, Loader2, AlertTriangle, Clock, CheckCircle2, PauseCircle, ArrowUpDown } from 'lucide-react';
 import Pagination from '@/components/Pagination';
 import { TicketSummary, AssignModal } from '@/components/CSModals';
+import AssigneeChips, { assigneeListFor } from '@/components/AssigneeChips';
+import { ticketNeedsClassification, CLASSIFY_BEFORE_ASSIGN } from '@/components/ClassifyTicketPanel';
 import SlaStatusBadge, { getTicketSlaStatus, getTicketSlaDueDate } from '@/components/sla/SlaStatusBadge';
 import { formatDisplayDate, parseUTCDate } from '@/utils/dateUtils';
 import { useAuth } from '@/context/AuthContext';
@@ -579,12 +581,18 @@ export default function CSIncoming() {
       });
 
       // Optimistically update tickets immediately so the UI reflects Pending Assignment with zero delay
+      const chosenIds = (updated.assigned || []).map(Number);
       const refreshedTicket = {
         ...updated,
         ticket_ID: targetTicketId,
         status: 'Pending Assignment',
         assigned: updated.assigned,
         accepted: false,
+        // Spec 0043 (AC-18): show every chosen employee right away, not only the first.
+        assigned_employees: chosenIds.map((id) => {
+          const emp = employees.find((e) => Number(e.id) === id);
+          return { id, name: emp?.name || `Employee #${id}`, department: emp?.department || null, assignment_status: 'assigned' };
+        }),
       };
 
       setTickets((prev) =>
@@ -903,8 +911,13 @@ export default function CSIncoming() {
                         )}
                       </div>
                     </TableCell>
-                    <TableCell className="font-medium text-foreground max-w-[18rem] truncate">
-                      {t.title}
+                    <TableCell className="font-medium text-foreground max-w-[18rem]">
+                      <div className="truncate">{t.title}</div>
+                      {t.status === 'Pending Assignment' && assigneeListFor(t).length > 0 && (
+                        <div className="mt-1 font-normal">
+                          <AssigneeChips ticket={t} />
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Badge variant={getStatusBadgeVariant(t.priority || 'Medium')}>
@@ -912,7 +925,14 @@ export default function CSIncoming() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {t.category}
+                      {ticketNeedsClassification(t) ? (
+                        <span
+                          className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border border-amber-300 bg-amber-50 text-amber-800"
+                          title={CLASSIFY_BEFORE_ASSIGN}
+                        >
+                          Needs Classification
+                        </span>
+                      ) : t.category}
                     </TableCell>
                     <TableCell>
                       <Badge variant={getStatusBadgeVariant(getDisplayStatus(t))}>
@@ -1028,6 +1048,12 @@ export default function CSIncoming() {
           onClose={() => setModal(null)}
           onSave={handleSave}
           onCloseTicket={handleCloseWithoutAssigning}
+          onClassified={(fields) => {
+            const targetId = modal.ticket.ticket_ID;
+            setTickets((prev) => prev.map((t) => (
+              (targetId && t.ticket_ID === targetId) || t.id === modal.ticket.id ? { ...t, ...fields } : t
+            )));
+          }}
         />
       )}
     </div>

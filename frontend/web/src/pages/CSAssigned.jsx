@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import AssigneeChips from '@/components/AssigneeChips';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Search, Loader2, Filter, RotateCcw, X, AlertTriangle, Clock, CheckCircle2, PauseCircle, HelpCircle, ArrowUpDown, Bell } from 'lucide-react';
 import Pagination from '@/components/Pagination';
@@ -753,53 +754,7 @@ export default function CSAssigned() {
                       {renderSlaBadge(t)}
                     </TableCell>
                     <TableCell className="max-w-[16rem]">
-                      {(() => {
-                        const list = Array.isArray(t.assigned_employees) && t.assigned_employees.length > 0
-                          ? t.assigned_employees
-                          : (t.assigned_employee ? [{ name: t.assigned_employee, assignment_status: t.accepted ? 'accepted' : 'assigned' }] : []);
-
-                        if (list.length === 0) {
-                          return <span className="text-xs text-muted-foreground italic font-normal">Unassigned</span>;
-                        }
-
-                        const acceptedCount = list.filter((e) => e.assignment_status === 'accepted').length;
-
-                        return (
-                          <div className="flex flex-col gap-1">
-                            {list.length > 1 && (
-                              <span className="text-[10px] font-semibold tracking-wider uppercase text-muted-foreground">
-                                {acceptedCount} of {list.length} Accepted
-                              </span>
-                            )}
-                            <div className="flex flex-wrap gap-1.5">
-                              {list.map((emp, i) => {
-                                const isAcc = emp.assignment_status === 'accepted';
-                                const isReassign = emp.assignment_status === 'reassign_requested';
-                                return (
-                                  <span
-                                    key={emp.id || i}
-                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium border ${
-                                      isAcc
-                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                        : isReassign
-                                        ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                        : 'bg-slate-50 text-slate-700 border-slate-200'
-                                    }`}
-                                    title={isAcc ? 'Accepted' : isReassign ? 'Reassignment Requested' : 'Pending Acceptance'}
-                                  >
-                                    <span
-                                      className={`w-1.5 h-1.5 rounded-full ${
-                                        isAcc ? 'bg-emerald-500' : isReassign ? 'bg-amber-500' : 'bg-slate-400'
-                                      }`}
-                                    />
-                                    <span className="truncate max-w-[130px]">{emp.name}</span>
-                                  </span>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })()}
+                      <AssigneeChips ticket={t} />
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                       {formatDisplayDate(t.updated_at || t.last_update || t.lastUpdate || t.date || t.created_at)}

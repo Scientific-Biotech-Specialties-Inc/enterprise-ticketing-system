@@ -58,12 +58,10 @@ class TicketNumberGeneratorService
         $includeDept = (bool) ($config['includeDeptCode'] ?? false);
         $dept = null;
         if ($includeDept) {
-            // The SuperAdmin-configured code is authoritative. A caller-supplied code is only
-            // used as a fallback, sanitized to the same structural rules as the configured one.
-            $configured = strtoupper(trim((string) ($config['deptCode'] ?? '')));
-            $fallback = strtoupper(preg_replace('/[^A-Za-z0-9_-]/', '', (string) $departmentCode) ?? '');
-            $resolved = $configured !== '' ? $configured : $fallback;
-            $dept = substr($resolved !== '' ? $resolved : 'DEPT', 0, 16);
+            // Spec 0043 (AC-7): the segment is the ticket's own department code (departments.code).
+            // No department (an unclassified ticket) means the segment is left out.
+            $sanitized = strtoupper(preg_replace('/[^A-Za-z0-9_-]/', '', (string) $departmentCode) ?? '');
+            $dept = $sanitized !== '' ? substr($sanitized, 0, 16) : null;
         }
 
         $dateSegment = $config['dateSegment'] ?? 'none';

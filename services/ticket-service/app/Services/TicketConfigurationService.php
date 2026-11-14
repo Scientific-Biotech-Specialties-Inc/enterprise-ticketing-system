@@ -35,7 +35,6 @@ class TicketConfigurationService
     public const DEFAULT_NUMBER_FORMAT = [
         'prefix' => 'TKT',
         'includeDeptCode' => false,
-        'deptCode' => '',
         'dateSegment' => 'none',
         'digitLength' => 4,
     ];
@@ -684,7 +683,6 @@ class TicketConfigurationService
                     return [
                         'prefix' => strtoupper(trim($val['prefix'] ?? 'TKT')),
                         'includeDeptCode' => (bool) ($val['includeDeptCode'] ?? false),
-                        'deptCode' => strtoupper(trim($val['deptCode'] ?? '')),
                         'dateSegment' => in_array($val['dateSegment'] ?? '', ['none', 'YYYY', 'YYYYMM', 'YYYYMMDD'], true)
                             ? $val['dateSegment']
                             : 'none',
@@ -723,7 +721,6 @@ class TicketConfigurationService
         $clean = [
             'prefix' => strtoupper(trim($val['prefix'] ?? $payload['prefix'] ?? 'TKT')),
             'includeDeptCode' => (bool) ($val['includeDeptCode'] ?? $payload['includeDeptCode'] ?? false),
-            'deptCode' => strtoupper(trim($val['deptCode'] ?? $payload['deptCode'] ?? '')),
             'dateSegment' => in_array($val['dateSegment'] ?? $payload['dateSegment'] ?? '', ['none', 'YYYY', 'YYYYMM', 'YYYYMMDD'], true)
                 ? ($val['dateSegment'] ?? $payload['dateSegment'])
                 : 'none',
@@ -756,7 +753,6 @@ class TicketConfigurationService
         $clean = [
             'prefix' => strtoupper(trim($val['prefix'] ?? 'TKT')),
             'includeDeptCode' => (bool) ($val['includeDeptCode'] ?? false),
-            'deptCode' => strtoupper(trim($val['deptCode'] ?? '')),
             'dateSegment' => (string) ($val['dateSegment'] ?? 'none'),
             'digitLength' => (int) ($val['digitLength'] ?? 4),
         ];

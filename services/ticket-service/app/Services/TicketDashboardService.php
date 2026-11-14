@@ -94,7 +94,7 @@ class TicketDashboardService
                 ->leftJoin('machines as m', 'm.machine_ID', '=', 't.machine_ID')
                 ->leftJoin('machine_categories as mc', 'mc.category_ID', '=', 'm.category_ID')
                 ->join('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
-                ->join('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
+                ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
                 ->leftJoin('ticket_priorities as tp', 'tp.priority_ID', '=', 't.priority_ID')
                 ->leftJoin('employees as e', 'e.emp_id', '=', 't.assigned_to')
                 // Spec 0038 AC-13: join only the first active assignment per ticket, so a
@@ -124,7 +124,7 @@ class TicketDashboardService
                     't.created_at',
                     't.updated_at',
                     't.assigned_to',
-                    'pc.category_name',
+                    DB::raw("COALESCE(pc.category_name, 'Unclassified') as category_name"),
                     'tp.priority_name',
                     DB::raw("COALESCE(CONCAT(e.first_name, ' ', e.last_name), CONCAT(e_ta.first_name, ' ', e_ta.last_name)) as assigned_employee_name")
                 )
@@ -156,7 +156,11 @@ class TicketDashboardService
                 $query->where('t.problem_category_ID', (int) $filters['category_id']);
             } elseif (!empty($filters['category'])) {
                 $catVal = trim($filters['category']);
-                $query->where('pc.category_name', $catVal);
+                if ($catVal === 'Unclassified') {
+                    $query->whereNull('t.problem_category_ID');
+                } else {
+                    $query->where('pc.category_name', $catVal);
+                }
             }
 
             if (!empty($filters['machine_id'])) {
@@ -234,9 +238,10 @@ class TicketDashboardService
             ]);
 
         $categories = DB::table('tickets as t')
-            ->join('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
+            ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
             ->where('t.created_by', $createdBy)
             ->where('t.is_internal', false)
+            ->whereNotNull('t.problem_category_ID')
             ->select('pc.problem_category_ID', 'pc.category_name')
             ->distinct()
             ->get();
@@ -403,7 +408,7 @@ class TicketDashboardService
 
         $fetchQuery = function () use ($perPage, $typeFilter, $page, $filters) {
             $query = DB::table('tickets as t')
-                ->join('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
+                ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
                 ->join('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
                 ->leftJoin('branches as b', 'b.id', '=', 't.branch_id')
                 ->leftJoin('clients as c', 'c.id', '=', 't.created_by')
@@ -436,7 +441,9 @@ class TicketDashboardService
                     't.sla_ID',
                     't.branch_sla_policy_id',
                     't.branch_priority_override_id',
-                    'pc.category_name',
+                    't.problem_category_ID',
+                    't.machine_ID',
+                    DB::raw("COALESCE(pc.category_name, 'Unclassified') as category_name"),
                     'ts.status_name',
                     'tp.priority_name',
                     'e.department',
@@ -511,7 +518,11 @@ class TicketDashboardService
             }
 
             if (!empty($filters['category'])) {
-                $query->where('pc.category_name', trim($filters['category']));
+                if (trim($filters['category']) === 'Unclassified') {
+                    $query->whereNull('t.problem_category_ID');
+                } else {
+                    $query->where('pc.category_name', trim($filters['category']));
+                }
             }
 
             if (!empty($filters['customer_id'])) {
@@ -687,6 +698,10 @@ class TicketDashboardService
                     'title' => $row->title,
                     'description' => $row->description ?? '',
                     'category' => $row->category_name,
+                    // Spec 0043 (AC-20): NULL category means CS must classify before assigning.
+                    'problem_category_ID' => $row->problem_category_ID !== null ? (int) $row->problem_category_ID : null,
+                    'needs_classification' => $row->problem_category_ID === null,
+                    'machine_ID' => $row->machine_ID !== null ? (int) $row->machine_ID : null,
                     'status' => $row->status_name,
                     'priority' => $row->priority_name,
                     'department' => $row->department,
@@ -900,7 +915,7 @@ class TicketDashboardService
         // Spec 0037: the CS queue pages its rows on the server, so dropdown choices
         // come from here rather than from whichever tickets are on screen.
         $categories = DB::table('tickets as t')
-            ->join('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
+            ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
             ->distinct()
             ->orderBy('pc.category_name')
             ->pluck('pc.category_name')
@@ -1115,7 +1130,7 @@ class TicketDashboardService
                 't.priority_ID',
                 'tp.priority_name',
                 't.problem_category_ID',
-                'pc.category_name',
+                DB::raw("COALESCE(pc.category_name, 'Unclassified') as category_name"),
                 't.machine_ID',
                 'm.machine_name',
                 'm.serial_number',
@@ -1590,7 +1605,7 @@ class TicketDashboardService
     protected function computeRecurringCategories(object $branch, Carbon $dateFrom, Carbon $dateTo, int $totalTickets): array
     {
         $query = DB::table('tickets as t')
-            ->join('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
+            ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
             ->join('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
             ->where('ts.status_name', '!=', 'Discarded')
             ->whereBetween('t.created_at', [$dateFrom, $dateTo]);
@@ -1598,7 +1613,7 @@ class TicketDashboardService
         $this->applyBranchTicketFilter($query, $branch);
 
         $results = $query
-            ->select('pc.category_name as name', DB::raw('COUNT(*) as count'))
+            ->select(DB::raw("COALESCE(pc.category_name, 'Unclassified') as name"), DB::raw('COUNT(*) as count'))
             ->groupBy('pc.category_name')
             ->orderByDesc('count')
             ->limit(6)
@@ -2031,7 +2046,7 @@ class TicketDashboardService
                 'm.machine_ID',
                 'm.machine_name',
                 'm.serial_number',
-                'pc.category_name',
+                DB::raw("COALESCE(pc.category_name, 'Unclassified') as category_name"),
                 'ts.status_name',
                 't.created_at',
                 't.resolved_at',
@@ -2188,7 +2203,7 @@ class TicketDashboardService
                 't.priority_ID',
                 'tp.priority_name',
                 't.problem_category_ID',
-                'pc.category_name',
+                DB::raw("COALESCE(pc.category_name, 'Unclassified') as category_name"),
                 't.machine_ID',
                 'm.machine_name',
                 'm.serial_number',

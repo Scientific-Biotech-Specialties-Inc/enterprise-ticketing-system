@@ -199,14 +199,13 @@ class GeminiService
                     ]
                 ],
                 'contents' => $contents,
-                'generationConfig' => [
+                // Thinking tokens count against maxOutputTokens and add seconds of latency, which cut
+                // replies off mid JSON. Troubleshooting steps grounded in KB sources do not need it.
+                'generationConfig' => $this->withThinkingOff([
                     'temperature' => 0.2,
                     // Room for 3 to 5 steps plus the escalation JSON block, so the block is not cut off.
                     'maxOutputTokens' => 1024,
-                    // Thinking tokens count against maxOutputTokens and add seconds of latency, which cut
-                    // replies off mid JSON. Troubleshooting steps grounded in KB sources do not need it.
-                    'thinkingConfig' => ['thinkingBudget' => 0],
-                ]
+                ]),
             ];
 
             $response = Http::withHeaders([
@@ -502,11 +501,10 @@ class GeminiService
                             'parts' => [['text' => "Ticket Title: {$title}\nDescription: {$description}"]]
                         ]
                     ],
-                    'generationConfig' => [
+                    'generationConfig' => $this->withThinkingOff([
                         'temperature' => 0.1,
                         'maxOutputTokens' => 200,
-                        'thinkingConfig' => ['thinkingBudget' => 0],
-                    ]
+                    ]),
                 ];
 
                 $response = Http::withHeaders(['Content-Type' => 'application/json', 'x-goog-api-key' => $this->apiKey])
@@ -542,6 +540,22 @@ class GeminiService
 
         // Resilient heuristic classification fallback
         return $this->heuristicClassifyDepartment($title, $description);
+    }
+
+    /**
+     * Turn Gemini thinking off in a way the configured model accepts.
+     *
+     * Full flash models think by default and need `thinkingBudget: 0`, or thinking eats the token
+     * budget (MAX_TOKENS, 10s+). Flash lite models do not think by default and reject
+     * `thinkingBudget: 0` with HTTP 400 INVALID_ARGUMENT, so they get no thinking setting at all.
+     */
+    protected function withThinkingOff(array $generationConfig): array
+    {
+        if (!str_contains(strtolower((string) $this->model), 'lite')) {
+            $generationConfig['thinkingConfig'] = ['thinkingBudget' => 0];
+        }
+
+        return $generationConfig;
     }
 
     /**
@@ -586,8 +600,12 @@ class GeminiService
                         'parts' => [['text' => "Ticket Title: {$title}\nDescription: {$description}"]],
                     ]],
                     // No thinking: it used half the 200 token budget and pushed replies past the 6s timeout.
-                    'generationConfig' => ['temperature' => 0.1, 'maxOutputTokens' => 200, 'thinkingConfig' => ['thinkingBudget' => 0]],
+                    'generationConfig' => $this->withThinkingOff(['temperature' => 0.1, 'maxOutputTokens' => 200]),
                 ]);
+
+            if (!$response->successful()) {
+                Log::warning('Gemini category classification returned HTTP ' . $response->status() . '; leaving category unclassified.');
+            }
 
             if ($response->successful()) {
                 $raw = $response->json('candidates.0.content.parts.0.text') ?? '';

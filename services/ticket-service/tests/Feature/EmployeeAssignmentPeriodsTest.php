@@ -74,7 +74,7 @@ class EmployeeAssignmentPeriodsTest extends TestCase
         DB::table('users')->updateOrInsert(['id' => 1], ['name' => 'System', 'email' => 'sys@spec0039.test', 'password' => 'x', 'created_at' => now(), 'updated_at' => now()]);
 
         $departmentId = (int) (DB::table('departments')->value('id')
-            ?? DB::table('departments')->insertGetId(['name' => 'Service', 'is_active' => 1, 'created_at' => now(), 'updated_at' => now()]));
+            ?? DB::table('departments')->insertGetId(['name' => 'Service', 'code' => 'SVC', 'is_active' => 1, 'created_at' => now(), 'updated_at' => now()]));
         $this->slaRuleId = DB::table('sla_rules')->insertGetId([
             // Only ever read by id; a priority no ticket uses keeps it out of other tests' rule lookups.
             'department_id' => $departmentId, 'category_id' => 1, 'priority' => self::RULE_PRIORITY,

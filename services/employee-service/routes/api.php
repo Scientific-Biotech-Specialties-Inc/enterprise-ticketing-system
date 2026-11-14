@@ -5,6 +5,7 @@ use App\Http\Controllers\EmployeeDirectoryController;
 use App\Http\Controllers\EmployeeAssignmentController;
 use App\Http\Controllers\EmployeeReassignmentController;
 use App\Http\Controllers\WorkLogController;
+use App\Http\Controllers\DepartmentController;
 
 /*
 |--------------------------------------------------------------------------
@@ -40,6 +41,11 @@ Route::middleware(['auth.subsystem'])->group(function () {
     Route::post('/tickets/{ticketId}/reassign-request', [EmployeeReassignmentController::class, 'reassignRequest']);
     Route::post('/tickets/{ticketId}/reassign-respond', [EmployeeReassignmentController::class, 'reassignRespond']);
     Route::get('/reassignment-requests', [EmployeeReassignmentController::class, 'reassignmentRequests']);
+
+    // Spec 0043: department codes (superadmin only, checked in the controller)
+    Route::get('/departments/code-suggestion', [DepartmentController::class, 'suggestCode']);
+    Route::post('/departments', [DepartmentController::class, 'store']);
+    Route::put('/departments/{id}', [DepartmentController::class, 'update'])->whereNumber('id');
 
     // Work Logs
     Route::get('/employee/worklogs', [WorkLogController::class, 'index']);

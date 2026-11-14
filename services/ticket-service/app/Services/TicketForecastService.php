@@ -375,8 +375,9 @@ class TicketForecastService
 
         // 1. Problem Categories
         $recentCategoriesQuery = DB::table('tickets as t')
-            ->join('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
-            ->whereBetween('t.created_at', [$recentStart, $recentEnd]);
+            ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
+            ->whereBetween('t.created_at', [$recentStart, $recentEnd])
+            ->whereNotNull('t.problem_category_ID');
         $this->dashboardService->applyBranchTicketFilter($recentCategoriesQuery, $branch);
         $recentCategories = $recentCategoriesQuery
             ->select('pc.problem_category_ID as id', 'pc.category_name as name', DB::raw('COUNT(*) as total'))
@@ -384,8 +385,9 @@ class TicketForecastService
             ->get();
 
         $baselineCategoriesQuery = DB::table('tickets as t')
-            ->join('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
-            ->whereBetween('t.created_at', [$baselineStart, $baselineEnd]);
+            ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
+            ->whereBetween('t.created_at', [$baselineStart, $baselineEnd])
+            ->whereNotNull('t.problem_category_ID');
         $this->dashboardService->applyBranchTicketFilter($baselineCategoriesQuery, $branch);
         $baselineCategories = $baselineCategoriesQuery
             ->select('pc.problem_category_ID as id', DB::raw('COUNT(*) as total'))

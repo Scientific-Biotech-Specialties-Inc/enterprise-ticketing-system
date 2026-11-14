@@ -61,6 +61,7 @@ class TicketActionsTest extends TestCase
             DB::table('departments')->insert([
                 'id' => 2,
                 'name' => 'Service Department',
+                'code' => 'SVCD',
                 'is_active' => true,
                 'created_at' => now(),
                 'updated_at' => now(),

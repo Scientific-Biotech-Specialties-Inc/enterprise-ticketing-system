@@ -32,7 +32,6 @@ vi.mock('@/context/ToastContext', () => ({
 
 vi.mock('@/components/NotificationModal', () => ({ default: () => null }));
 vi.mock('@/components/TitleCasingModal', () => ({ default: () => null }));
-vi.mock('@/components/AIDepartmentModal', () => ({ default: () => null }));
 
 const MB = 1024 * 1024;
 

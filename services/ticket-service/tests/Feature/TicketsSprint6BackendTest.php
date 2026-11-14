@@ -282,8 +282,8 @@ class TicketsSprint6BackendTest extends TestCase
         DB::table('priorities')->updateOrInsert(['priority_ID' => 2], ['priority_name' => 'Medium']);
         DB::table('priorities')->updateOrInsert(['priority_ID' => 3], ['priority_name' => 'High']);
 
-        DB::table('departments')->updateOrInsert(['id' => 1], ['name' => 'Service', 'is_active' => true]);
-        DB::table('departments')->updateOrInsert(['id' => 2], ['name' => 'IT', 'is_active' => true]);
+        DB::table('departments')->updateOrInsert(['id' => 1], ['name' => 'Service', 'code' => 'SVC', 'is_active' => true]);
+        DB::table('departments')->updateOrInsert(['id' => 2], ['name' => 'IT', 'code' => 'IT', 'is_active' => true]);
     }
 
     // =========================================================================

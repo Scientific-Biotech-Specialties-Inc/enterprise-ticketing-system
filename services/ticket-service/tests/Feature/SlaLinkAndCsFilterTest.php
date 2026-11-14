@@ -38,7 +38,7 @@ class SlaLinkAndCsFilterTest extends TestCase
         $this->seedBranch($this->branch, 'Spec 37 Branch');
 
         $this->deptId = (int) DB::table('departments')->insertGetId([
-            'name' => 'Spec37 Dept ' . uniqid(), 'created_at' => now(), 'updated_at' => now(),
+            'name' => 'Spec37 Dept ' . uniqid(), 'code' => 'T' . strtoupper(substr(uniqid(), -8)), 'created_at' => now(), 'updated_at' => now(),
         ]);
 
         if (!DB::table('ticket_priorities')->whereRaw('LOWER(priority_name) = ?', ['high'])->exists()) {

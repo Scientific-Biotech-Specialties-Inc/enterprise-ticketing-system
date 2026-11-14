@@ -149,13 +149,14 @@ class FeedbackQuestionController extends Controller
             ? $questions->first()->category
             : $requestedCategory;
 
-        // 4. Fallback: return all enabled questions across any category if none found
+        // 4. Spec 0043 (AC-12): an unknown or missing category loads the general `Others` set.
         if ($questions->isEmpty()) {
-            $questions = FeedbackQuestion::where('is_enabled', true)
+            $questions = FeedbackQuestion::where('category', 'Others')
+                ->where('is_enabled', true)
                 ->orderBy('order_position', 'asc')
                 ->orderBy('id', 'asc')
                 ->get();
-            $resolvedCategory = $requestedCategory;
+            $resolvedCategory = 'Others';
         }
 
         return response()->json([
@@ -329,7 +330,7 @@ class FeedbackQuestionController extends Controller
             $prefix = strtolower($m[1]);
             $index = (int) $m[2];
             $cat = match ($prefix) {
-                'it' => 'IT',
+                'it' => 'Software',
                 'svc', 'service' => 'Service',
                 default => 'Others',
             };
@@ -354,16 +355,8 @@ class FeedbackQuestionController extends Controller
 
         // 3. Match by category if provided
         if ($category) {
-            $normCat = ucfirst(strtolower(trim($category)));
-            if (!in_array($normCat, ['IT', 'Service', 'Others'])) {
-                if (stripos($category, 'it') !== false) {
-                    $normCat = 'IT';
-                } elseif (stripos($category, 'service') !== false) {
-                    $normCat = 'Service';
-                } else {
-                    $normCat = 'Others';
-                }
-            }
+            // Spec 0043 (AC-13): use the stored category name as is; unknown names map to `Others`.
+            $normCat = FeedbackQuestion::whereRaw('LOWER(category) = ?', [strtolower(trim($category))])->value('category') ?? 'Others';
 
             $q = FeedbackQuestion::where('category', $normCat)
                 ->orderBy('order_position', 'asc')
@@ -398,7 +391,7 @@ class FeedbackQuestionController extends Controller
 
         // If question not found by ID or slug, upsert a new question for the category
         if (!$question) {
-            $cat = $validated['category'] ?? $categoryParam ?? 'IT';
+            $cat = $validated['category'] ?? $categoryParam ?? 'Others';
             $text = trim($validated['text'] ?? 'Customer Satisfaction Question');
             $responseType = $validated['response_type'] ?? $validated['responseType'] ?? 'Star Rating';
             $isEnabled = $validated['is_enabled'] ?? $validated['isEnabled'] ?? true;
@@ -649,7 +642,7 @@ class FeedbackQuestionController extends Controller
         $category = $request->input('category');
 
         $defaults = [
-            'IT' => [
+            'Software' => [
                 [
                     'text'           => "How would you rate the technician's technical knowledge?",
                     'response_type'  => 'Star Rating',
