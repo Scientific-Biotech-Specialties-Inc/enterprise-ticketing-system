@@ -87,6 +87,7 @@ jobs:
           build-args: |
             VITE_BASE_PATH=/ticketing/
             VITE_APP_MODE=employee
+            VITE_CUSTOMER_PORTAL_URL=${{ vars.CUSTOMER_PORTAL_URL }}
           push: true
           tags: |
             ${{ env.REGISTRY_ORG }}/ticketing-web:${{ github.sha }}
@@ -109,6 +110,55 @@ jobs:
             --name ticketing-web \
             --resource-group "${{ env.RG }}" \
             --image "${{ env.REGISTRY_ORG }}/ticketing-web:${{ github.sha }}"
+
+  deploy-customer-web:
+    name: Build & Deploy Customer Web (Customer Portal)
+    # Separate container app and URL from the employee portal. Customers authenticate only against
+    # customer-service and never reach the central auth module.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push customer-ticketing-web (Customer Mode)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend/web
+          file: ./frontend/web/Dockerfile
+          build-args: |
+            VITE_BASE_PATH=/
+            VITE_APP_MODE=customer
+          push: true
+          tags: |
+            ${{ env.REGISTRY_ORG }}/customer-ticketing-web:${{ github.sha }}
+            ${{ env.REGISTRY_ORG }}/customer-ticketing-web:latest
+          cache-from: type=gha,scope=customer-web
+          cache-to: type=gha,mode=max,scope=customer-web
+
+      - name: Azure login (OIDC)
+        continue-on-error: true
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Roll customer-ticketing-web in Azure
+        continue-on-error: true
+        run: |
+          az containerapp update \
+            --name customer-ticketing-web \
+            --resource-group "${{ env.RG }}" \
+            --image "${{ env.REGISTRY_ORG }}/customer-ticketing-web:${{ github.sha }}"
 
   deploy-services:
     name: Build & Deploy Microservice

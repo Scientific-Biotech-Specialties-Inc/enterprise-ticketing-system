@@ -14,6 +14,9 @@ ARG VITE_REVERB_HOST=localhost
 ARG VITE_REVERB_PORT=6001
 ARG VITE_BASE_PATH=/
 ARG VITE_APP_MODE=customer
+# Public URL of the customer portal. The employee build uses it to send customer accounts to their own
+# portal. Empty keeps the localhost port fallback (5005 -> 5006) in WrongPortal/AuthContext.
+ARG VITE_CUSTOMER_PORTAL_URL=
 
 # Expose them to the build process
 ENV VITE_API_URL=$VITE_API_URL
@@ -24,6 +27,7 @@ ENV VITE_REVERB_HOST=$VITE_REVERB_HOST
 ENV VITE_REVERB_PORT=$VITE_REVERB_PORT
 ENV VITE_BASE_PATH=$VITE_BASE_PATH
 ENV VITE_APP_MODE=$VITE_APP_MODE
+ENV VITE_CUSTOMER_PORTAL_URL=$VITE_CUSTOMER_PORTAL_URL
 
 RUN npm run build
 

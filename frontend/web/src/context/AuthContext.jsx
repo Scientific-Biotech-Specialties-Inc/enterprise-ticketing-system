@@ -556,7 +556,10 @@ export function AuthProvider({ children }) {
 
 
   // Login with email and password
-  const login = useCallback(async (email, password, mode = 'customer') => {
+  const login = useCallback(async (email, password, requestedMode = 'customer') => {
+    // The customer site only ever authenticates against customer-service; it can never hand off
+    // to the central SSO / auth module, whatever mode a caller asks for.
+    const mode = IS_CUSTOMER_SITE ? 'customer' : requestedMode;
     if (mode === 'employee') {
       if (typeof window !== 'undefined') {
         window.location.href = '/';
