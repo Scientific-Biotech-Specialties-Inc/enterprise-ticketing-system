@@ -117,7 +117,6 @@ class TicketNumberFormatTest extends TestCase
                 'value' => [
                     'prefix',
                     'includeDeptCode',
-                    'deptCode',
                     'dateSegment',
                     'digitLength',
                 ],
@@ -188,17 +187,16 @@ class TicketNumberFormatTest extends TestCase
         $res->assertStatus(422)
             ->assertJsonValidationErrors(['prefix']);
 
-        // Dept code enabled but empty
+        // Spec 0043 (AC-8): the department segment no longer takes a global code,
+        // so enabling it without a deptCode is valid.
         $res = $this->actingAs($this->superAdmin)
             ->putJson('/api/superadmin/number-format', [
                 'prefix' => 'TKT',
                 'includeDeptCode' => true,
-                'deptCode' => '',
                 'dateSegment' => 'none',
                 'digitLength' => 4,
             ]);
-        $res->assertStatus(422)
-            ->assertJsonValidationErrors(['deptCode']);
+        $res->assertStatus(200);
 
         // Invalid date segment
         $res = $this->actingAs($this->superAdmin)
@@ -222,7 +220,6 @@ class TicketNumberFormatTest extends TestCase
         $newFormat = [
             'prefix' => 'INC',
             'includeDeptCode' => true,
-            'deptCode' => 'OPS',
             'dateSegment' => 'YYYYMM',
             'digitLength' => 5,
         ];
@@ -237,7 +234,8 @@ class TicketNumberFormatTest extends TestCase
             return $event->newFormat['prefix'] === 'INC'
                 && $event->newFormat['digitLength'] === 5
                 && $event->newFormat['dateSegment'] === 'YYYYMM'
-                && $event->newFormat['deptCode'] === 'OPS';
+                && $event->newFormat['includeDeptCode'] === true
+                && !array_key_exists('deptCode', $event->newFormat);
         });
 
         // Verify Audit Log recorded in database

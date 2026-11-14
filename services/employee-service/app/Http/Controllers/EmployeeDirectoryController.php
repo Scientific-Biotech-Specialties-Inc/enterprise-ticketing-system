@@ -630,10 +630,14 @@ class EmployeeDirectoryController extends Controller
      */
     public function getDepartments(Request $request)
     {
+        // Spec 0043: each department carries its unique code. include_inactive=1 lists every row
+        // for the superadmin departments table; the default stays active only.
         $rows = DB::table('departments')
-            ->where('is_active', true)
+            ->when(!$request->boolean('include_inactive'), fn ($q) => $q->where('is_active', true))
             ->orderBy('name')
-            ->get(['id', 'name']);
+            ->get(['id', 'name', 'code', 'is_active'])
+            ->map(fn ($d) => ['id' => (int) $d->id, 'name' => $d->name, 'code' => $d->code, 'is_active' => (bool) $d->is_active])
+            ->values();
 
         return response()->json([
             'departments' => $rows,

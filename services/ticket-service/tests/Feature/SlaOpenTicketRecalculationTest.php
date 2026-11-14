@@ -39,7 +39,7 @@ class SlaOpenTicketRecalculationTest extends TestCase
             }
         }
 
-        $deptId = (int) DB::table('departments')->insertGetId(['name' => 'Recalc Dept ' . uniqid(), 'created_at' => now(), 'updated_at' => now()]);
+        $deptId = (int) DB::table('departments')->insertGetId(['name' => 'Recalc Dept ' . uniqid(), 'code' => 'T' . strtoupper(substr(uniqid(), -8)), 'created_at' => now(), 'updated_at' => now()]);
         $this->ruleId = (int) DB::table('sla_rules')->insertGetId([
             'department_id' => $deptId, 'category_id' => null, 'priority' => 'High',
             'response_time_limit' => 15, 'resolution_time_limit' => 120,

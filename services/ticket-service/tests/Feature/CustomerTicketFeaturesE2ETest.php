@@ -220,7 +220,7 @@ class CustomerTicketFeaturesE2ETest extends TestCase
         DB::table('ticket_statuses')->updateOrInsert(['ticket_status_ID' => 1], ['status_name' => 'Open']);
         DB::table('ticket_statuses')->updateOrInsert(['ticket_status_ID' => 2], ['status_name' => 'In Progress']);
         DB::table('ticket_priorities')->updateOrInsert(['priority_ID' => 1], ['priority_name' => 'Low']);
-        DB::table('departments')->updateOrInsert(['id' => 1], ['name' => 'Service', 'is_active' => true]);
+        DB::table('departments')->updateOrInsert(['id' => 1], ['name' => 'Service', 'code' => 'SVC', 'is_active' => true]);
 
         // Seed a ticket for test customer
         DB::table('tickets')->insert([

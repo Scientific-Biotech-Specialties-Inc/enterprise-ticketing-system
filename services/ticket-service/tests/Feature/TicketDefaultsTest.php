@@ -63,6 +63,7 @@ class TicketDefaultsTest extends TestCase
         if (!$deptId) {
             DB::table('departments')->insertOrIgnore([
                 'name' => 'Customer Service',
+                'code' => 'CS',
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);

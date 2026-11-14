@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import DepartmentCodesPanel from '@/components/DepartmentCodesPanel';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Search, Plus, MoreVertical, Clock, Save, Building2, ChevronRight, ChevronDown, ChevronUp, ArrowLeft, CheckCircle2, Edit3, Trash2, Power, AlertCircle, RotateCcw, GitBranch, ArrowRight, Lock, Info, ShieldCheck, ShieldAlert, FileUp, Check, HardDrive, Bell, Users, UserCheck, Mail, Layers, Star, MessageSquare, Hash, Eye, Calendar, Tag, EyeOff, Send, Key, RefreshCw, X, Sparkles, Sliders, Settings, Table, ArrowUpDown } from 'lucide-react';
 import { createPortal } from 'react-dom';
@@ -309,7 +310,6 @@ export const SUBTAB_METADATA = {
 export const TS094_DEFAULT_FORMAT = {
   prefix: 'TKT',
   includeDeptCode: false,
-  deptCode: '',
   dateSegment: 'none',
   digitLength: 4,
 };
@@ -346,7 +346,6 @@ export const getCachedNumberFormatConfig = () => {
         return {
           prefix: String(parsed.prefix || 'TKT').toUpperCase(),
           includeDeptCode: Boolean(parsed.includeDeptCode ?? false),
-          deptCode: String(parsed.deptCode || '').toUpperCase(),
           dateSegment: String(parsed.dateSegment || 'none'),
           digitLength: Number(parsed.digitLength ?? 4),
         };
@@ -367,7 +366,9 @@ export const TS094_DATE_OPTIONS = [
 // TS104: Feedback Form Configuration Constants
 // ==========================================
 // Category source is provisional — pending confirmation with PM on whether this should map to the Departments API or remain a dedicated Feedback Form category concept. Do not assume these values match items.departments.
-export const FEEDBACK_CATEGORIES = ['IT', 'Service', 'Others'];
+// Spec 0043 (AC-12): feedback sets follow the live problem categories; `Others` is the general set.
+export const FEEDBACK_GENERAL_CATEGORY = 'Others';
+export const FEEDBACK_CATEGORIES = [FEEDBACK_GENERAL_CATEGORY];
 
 export const TS104_RESPONSE_TYPES = ['Star Rating', 'Yes / No', 'Multiple Choice', 'Checkbox', 'Free Text'];
 
@@ -1524,7 +1525,6 @@ export default function SuperAdminTicketConfig() {
         const loadedFormat = {
           prefix: String(val.prefix || 'TKT').toUpperCase(),
           includeDeptCode: Boolean(val.includeDeptCode ?? false),
-          deptCode: String(val.deptCode || '').toUpperCase(),
           dateSegment: String(val.dateSegment || 'none'),
           digitLength: Number(val.digitLength ?? 4),
         };
@@ -1564,13 +1564,21 @@ export default function SuperAdminTicketConfig() {
   // feedbackQuestions is keyed by category name from the DB (dynamic, not hardcoded)
   const [feedbackQuestions, setFeedbackQuestions] = useState(TS104_DEFAULT_QUESTIONS);
   // feedbackCategories is derived from Ticket Categories (items.ticketCategories), NOT equipment categories!
-  const [knownFeedbackCategories, setKnownFeedbackCategories] = useState([]);
+  const [, setKnownFeedbackCategories] = useState([]);
   const feedbackCategories = useMemo(() => {
-    const ticketCatNames = (items.ticketCategories || []).map((c) => c.name);
-    const all = Array.from(new Set([...ticketCatNames, ...knownFeedbackCategories, ...FEEDBACK_CATEGORIES]));
-    return all.length > 0 ? all : FEEDBACK_CATEGORIES;
-  }, [items.ticketCategories, knownFeedbackCategories]);
+    // Live active problem categories plus `Others`; never a hardcoded IT / Service list.
+    const ticketCatNames = (items.ticketCategories || [])
+      .filter((c) => c.is_active !== false && c.is_active !== 0)
+      .map((c) => c.name)
+      .filter(Boolean);
+    return Array.from(new Set([...ticketCatNames, FEEDBACK_GENERAL_CATEGORY]));
+  }, [items.ticketCategories]);
   const [activeFeedbackCategory, setActiveFeedbackCategory] = useState(FEEDBACK_CATEGORIES[0]);
+  useEffect(() => {
+    if (!feedbackCategories.includes(activeFeedbackCategory)) {
+      setActiveFeedbackCategory(feedbackCategories[0]);
+    }
+  }, [feedbackCategories, activeFeedbackCategory]);
   const [editingQuestion, setEditingQuestion] = useState(null);
   const [feedbackInlineError, setFeedbackInlineError] = useState('');
 
@@ -1904,7 +1912,6 @@ export default function SuperAdminTicketConfig() {
         const loadedFormat = {
           prefix: String(val.prefix || 'TKT').toUpperCase(),
           includeDeptCode: Boolean(val.includeDeptCode ?? false),
-          deptCode: String(val.deptCode || '').toUpperCase(),
           dateSegment: String(val.dateSegment || 'none'),
           digitLength: Number(val.digitLength ?? 4),
         };
@@ -3428,16 +3435,19 @@ export default function SuperAdminTicketConfig() {
     return String(1).padStart(padLen, '0');
   }, [numberFormatConfig.digitLength]);
 
+  // Spec 0043 (AC-8): the preview uses the code of the department picked in the table.
+  const [previewDeptCode, setPreviewDeptCode] = useState('');
+
   const livePreviewTicketNumber = useMemo(() => {
     const p = (numberFormatConfig.prefix || '').trim().toUpperCase() || 'TKT';
     const dCode = numberFormatConfig.includeDeptCode
-      ? (numberFormatConfig.deptCode || '').trim().toUpperCase() || 'DEPT'
+      ? (previewDeptCode || 'DEPT')
       : null;
     const datePart = livePreviewDatePart;
     const seqPart = livePreviewSeqPart;
 
     return [p, dCode, datePart, seqPart].filter(Boolean).join('-');
-  }, [numberFormatConfig.prefix, numberFormatConfig.includeDeptCode, numberFormatConfig.deptCode, livePreviewDatePart, livePreviewSeqPart]);
+  }, [numberFormatConfig.prefix, numberFormatConfig.includeDeptCode, previewDeptCode, livePreviewDatePart, livePreviewSeqPart]);
 
   const validateNumberFormat = (config) => {
     const errors = {};
@@ -3447,15 +3457,6 @@ export default function SuperAdminTicketConfig() {
       errors.prefix = 'A prefix is required.';
     } else if (!/^[A-Za-z0-9_-]+$/.test(config.prefix.trim())) {
       errors.prefix = 'Prefix can only contain letters, numbers, hyphens, and underscores.';
-    }
-
-    // Branch/Department code validation (if enabled)
-    if (config.includeDeptCode) {
-      if (!config.deptCode || !config.deptCode.trim()) {
-        errors.deptCode = 'Please enter a department code or disable this segment.';
-      } else if (!/^[A-Za-z0-9_-]+$/.test(config.deptCode.trim())) {
-        errors.deptCode = 'Department code can only contain letters, numbers, and hyphens.';
-      }
     }
 
     // Sequential digit length validation
@@ -3489,26 +3490,6 @@ export default function SuperAdminTicketConfig() {
     numberFormatDraftDirtyRef.current = true;
     setNumberFormatDraftDirty(true);
     setNumberFormatConfig((prev) => ({ ...prev, includeDeptCode: checked }));
-    if (numberFormatErrors.deptCode) {
-      setNumberFormatErrors((prev) => {
-        const next = { ...prev };
-        delete next.deptCode;
-        return next;
-      });
-    }
-  };
-
-  const handleDeptCodeChange = (val) => {
-    numberFormatDraftDirtyRef.current = true;
-    setNumberFormatDraftDirty(true);
-    setNumberFormatConfig((prev) => ({ ...prev, deptCode: val }));
-    if (numberFormatErrors.deptCode) {
-      setNumberFormatErrors((prev) => {
-        const next = { ...prev };
-        delete next.deptCode;
-        return next;
-      });
-    }
   };
 
   const handleDateSegmentChange = (val) => {
@@ -3549,7 +3530,6 @@ export default function SuperAdminTicketConfig() {
         const normalized = {
           prefix: (numberFormatConfig.prefix || 'TKT').trim().toUpperCase(),
           includeDeptCode: Boolean(numberFormatConfig.includeDeptCode),
-          deptCode: numberFormatConfig.includeDeptCode ? (numberFormatConfig.deptCode || '').trim().toUpperCase() : '',
           dateSegment: numberFormatConfig.dateSegment,
           digitLength: parseInt(String(numberFormatConfig.digitLength).trim(), 10),
         };
@@ -3560,7 +3540,6 @@ export default function SuperAdminTicketConfig() {
           const cleanSaved = {
             prefix: String(saved.prefix || normalized.prefix).toUpperCase(),
             includeDeptCode: Boolean(saved.includeDeptCode ?? normalized.includeDeptCode),
-            deptCode: String(saved.deptCode || normalized.deptCode).toUpperCase(),
             dateSegment: String(saved.dateSegment || normalized.dateSegment),
             digitLength: Number(saved.digitLength || normalized.digitLength),
           };
@@ -3608,7 +3587,6 @@ export default function SuperAdminTicketConfig() {
           const cleanSaved = {
             prefix: String(saved.prefix || TS094_DEFAULT_FORMAT.prefix).toUpperCase(),
             includeDeptCode: Boolean(saved.includeDeptCode ?? TS094_DEFAULT_FORMAT.includeDeptCode),
-            deptCode: String(saved.deptCode || TS094_DEFAULT_FORMAT.deptCode).toUpperCase(),
             dateSegment: String(saved.dateSegment || TS094_DEFAULT_FORMAT.dateSegment),
             digitLength: Number(saved.digitLength || TS094_DEFAULT_FORMAT.digitLength),
           };
@@ -9201,7 +9179,7 @@ export default function SuperAdminTicketConfig() {
                 </span>
                 {numberFormatConfig.includeDeptCode && (
                   <span className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2.5 py-1 text-amber-300 font-mono">
-                    <span className="text-slate-400 font-sans text-[10px]">Dept:</span> {numberFormatConfig.deptCode?.trim().toUpperCase() || 'DEPT'}
+                    <span className="text-slate-400 font-sans text-[10px]">Dept:</span> {previewDeptCode || 'DEPT'}
                   </span>
                 )}
                 {numberFormatConfig.dateSegment !== 'none' && (
@@ -9277,37 +9255,17 @@ export default function SuperAdminTicketConfig() {
                       </label>
                     </div>
 
-                    <div className={`space-y-1.5 transition-all ${numberFormatConfig.includeDeptCode ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
-                      <label htmlFor="dept-code-input" className="text-xs font-semibold text-gray-700 uppercase tracking-wider block">
-                        Branch / Department Code {numberFormatConfig.includeDeptCode && <span className="text-red-500">*</span>}
-                      </label>
-                      <input
-                        id="dept-code-input"
-                        type="text"
-                        maxLength={10}
-                        disabled={!numberFormatConfig.includeDeptCode}
-                        value={numberFormatConfig.deptCode}
-                        onChange={(e) => handleDeptCodeChange(e.target.value)}
-                        placeholder="e.g. IT, SVC, HQ"
-                        className={`w-full rounded-xl border bg-white px-4 py-2.5 text-sm font-semibold uppercase text-gray-800 outline-none focus:ring-2 focus:ring-[#252578] shadow-2xs transition-all ${
-                          numberFormatErrors.deptCode ? 'border-red-300 ring-1 ring-red-300' : 'border-gray-200'
-                        }`}
-                      />
-                      {numberFormatErrors.deptCode ? (
-                        <p className="text-xs font-semibold text-red-600 flex items-center gap-1 mt-1">
-                          <AlertCircle size={13} /> {numberFormatErrors.deptCode}
-                        </p>
-                      ) : (
-                        <p className="text-xs text-gray-500">
-                          Enter a short code manually (e.g. IT, SVC) — departments don't have a standardized code yet.
-                        </p>
-                      )}
-                    </div>
+                    <DepartmentCodesPanel
+                      enabled={numberFormatConfig.includeDeptCode}
+                      onSelectCode={setPreviewDeptCode}
+                    />
                   </div>
                 </div>
               </div>
 
               <div className="pt-3 border-t border-gray-100 text-xs text-gray-400">
+                Each department's code goes into new ticket numbers. Unclassified tickets leave the department segment out.
+              </div>              <div className="pt-3 border-t border-gray-100 text-xs text-gray-400">
                 Current system behavior omits department codes from ticket numbers.
               </div>
             </div>
@@ -9414,7 +9372,7 @@ export default function SuperAdminTicketConfig() {
                   {numberFormatConfig.includeDeptCode ? (
                     <>
                       <CheckCircle2 size={13} className="text-amber-600" />
-                      {numberFormatConfig.deptCode?.trim().toUpperCase() || 'DEPT'}
+                      {previewDeptCode || 'DEPT'}
                     </>
                   ) : (
                     <span className="text-gray-400 font-sans text-xs font-semibold">Excluded</span>

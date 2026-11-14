@@ -1,4 +1,6 @@
 import { safeUrl } from '@/utils/safeUrl';
+import AssigneeChips from '@/components/AssigneeChips';
+import ClassifyTicketPanel, { ticketNeedsClassification, CLASSIFY_BEFORE_ASSIGN } from '@/components/ClassifyTicketPanel';
 import { attachmentUrl } from '@/utils/attachmentFiles';
 import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -250,30 +252,47 @@ export function ReclassifyEditModal({
   currentPriority,
   categories = [],
   priorities = ['Low', 'Medium', 'High', 'Critical'],
+  customerMachines = [],
+  hasMachine = true,
   onReviewChanges,
 }) {
-  const [selectedCategory, setSelectedCategory] = useState(currentCategory || '');
+  const [selectedCategory, setSelectedCategory] = useState(currentCategory === 'Unclassified' ? '' : (currentCategory || ''));
   const [selectedPriority, setSelectedPriority] = useState(currentPriority || 'Low');
+  const [selectedMachine, setSelectedMachine] = useState('');
   const [error, setError] = useState('');
+  // Spec 0043 (AC-20): Service needs one of the customer's machines when the ticket has none.
+  const needsMachine = String(selectedCategory).toLowerCase() === 'service'
+    && selectedCategory !== currentCategory
+    && !hasMachine;
   useLockBodyScroll(isOpen);
 
   useEffect(() => {
-    setSelectedCategory(currentCategory || '');
+    setSelectedCategory(currentCategory === 'Unclassified' ? '' : (currentCategory || ''));
     setSelectedPriority(currentPriority || 'Low');
+    setSelectedMachine('');
     setError('');
   }, [currentCategory, currentPriority, isOpen]);
 
   if (!isOpen) return null;
 
   const handleNext = () => {
+    if (!selectedCategory) {
+      setError('Choose a category.');
+      return;
+    }
     if (selectedCategory === currentCategory && selectedPriority === currentPriority) {
       setError('Please change at least one value (Category or Priority) to proceed.');
+      return;
+    }
+    if (needsMachine && !selectedMachine) {
+      setError("Choose one of the customer's registered machines for a Service ticket.");
       return;
     }
     setError('');
     onReviewChanges({
       newCategory: selectedCategory,
       newPriority: selectedPriority,
+      newMachineId: needsMachine ? selectedMachine : null,
     });
   };
 
@@ -305,6 +324,7 @@ export function ReclassifyEditModal({
               }}
               className="w-full text-xs sm:text-sm border border-gray-200 rounded-xl px-3 py-2.5 bg-white text-gray-800 outline-none focus:ring-2 focus:ring-[#252578]/30"
             >
+              <option value="">Select a category</option>
               {categories.map((c) => {
                 const name = typeof c === 'string' ? c : (c.category_name || c.label || c.name);
                 return (
@@ -315,6 +335,25 @@ export function ReclassifyEditModal({
               })}
             </select>
           </div>
+
+          {needsMachine && (
+            <div>
+              <label htmlFor="reclassify-machine" className="block text-xs font-semibold text-gray-700 mb-1.5">
+                Customer Machine
+              </label>
+              <select
+                id="reclassify-machine"
+                value={selectedMachine}
+                onChange={(e) => { setSelectedMachine(e.target.value); setError(''); }}
+                className="w-full text-xs sm:text-sm border border-gray-200 rounded-xl px-3 py-2.5 bg-white text-gray-800 outline-none focus:ring-2 focus:ring-[#252578]/30"
+              >
+                <option value="">Select a machine</option>
+                {customerMachines.map((m) => (
+                  <option key={m.machine_ID} value={m.machine_ID}>{m.label || `${m.machine_name} - ${m.serial_number}`}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-semibold text-gray-700 mb-1.5">
@@ -968,8 +1007,8 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
   };
 
   // Reclassification Handlers
-  const handleReviewReclassify = ({ newCategory, newPriority }) => {
-    setReclassifyPendingValues({ newCategory, newPriority });
+  const handleReviewReclassify = ({ newCategory, newPriority, newMachineId = null }) => {
+    setReclassifyPendingValues({ newCategory, newPriority, newMachineId });
     setShowReclassifyEdit(false);
     setShowReclassifyConfirm(true);
     setReclassifyError('');
@@ -994,6 +1033,7 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
         ticketId,
         problem_category_ID: matchedCat ? (matchedCat.problem_category_ID || matchedCat.id) : undefined,
         priority_ID: matchedPriority ? (matchedPriority.priority_ID || matchedPriority.id) : priorityMap[reclassifyPendingValues.newPriority],
+        machine_ID: reclassifyPendingValues.newMachineId || undefined,
       };
 
       const res = await reclassifyTicket(payload);
@@ -1711,6 +1751,7 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
         {/* AssigneeRow (when not pending reassignment) */}
         {!ticket.reassignmentRequested && (
           <div className="rounded-xl border border-[#D5D9E4] bg-white p-3.5 sm:p-4 shadow-xs space-y-3">
+            {assigneeList.length > 1 && <AssigneeChips ticket={ticket} />}
             {assigneeList.length > 0 ? (
               assigneeList.map((a, idx) => {
                 const cd = getReminderCooldown(a);
@@ -2027,6 +2068,8 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
           currentPriority={currentPriority}
           categories={formOptions.categories}
           priorities={formOptions.priorities}
+          customerMachines={ticket.customer_machines || []}
+          hasMachine={Boolean(ticket.machine_ID)}
           onReviewChanges={handleReviewReclassify}
         />
       )}
@@ -2075,7 +2118,11 @@ export function TicketSummary({ ticket: ticketProp, employees = [], onClose, onE
 /* ─────────────────────────────────────────────
    ASSIGN MODAL
 ───────────────────────────────────────────── */
-export function AssignModal({ ticket, employees, departments, priorityOptions, onClose, onSave, onCloseTicket }) {
+export function AssignModal({ ticket: ticketProp, employees, departments, priorityOptions, onClose, onSave, onCloseTicket, onClassified }) {
+  // Spec 0043 (AC-20): an unclassified ticket is classified here before anyone can be assigned.
+  const [classifiedFields, setClassifiedFields] = useState(null);
+  const ticket = classifiedFields ? { ...ticketProp, ...classifiedFields } : ticketProp;
+  const needsClassification = ticketNeedsClassification(ticket);
   // Close without assigning is offered only when the superadmin Transition Matrix
   // allows the ticket's current state to move to Closed (backend sends allowed_transitions).
   const canCloseWithoutAssigning = typeof onCloseTicket === 'function'
@@ -2205,6 +2252,11 @@ export function AssignModal({ ticket, employees, departments, priorityOptions, o
     setSaveError('');
     setValidationError('');
 
+    if (needsClassification) {
+      setValidationError(CLASSIFY_BEFORE_ASSIGN);
+      return;
+    }
+
     if (selectedEmployees.length === 0) {
       setValidationError('At least one eligible employee must be selected.');
       return;
@@ -2286,6 +2338,17 @@ export function AssignModal({ ticket, employees, departments, priorityOptions, o
                 <X className="w-5 h-5" />
               </button>
             </div>
+
+            {needsClassification && (
+              <ClassifyTicketPanel
+                ticket={ticket}
+                onClassified={(fields) => {
+                  setClassifiedFields(fields);
+                  setCategory(fields.category);
+                  onClassified?.(fields);
+                }}
+              />
+            )}
 
             {/* Ticket Info Card */}
             <div className="bg-primary text-white rounded-xl p-4 mb-4 shadow-sm">
@@ -2893,7 +2956,8 @@ export function AssignModal({ ticket, employees, departments, priorityOptions, o
               type="button"
               variant="default"
               onClick={handleAcceptClick}
-              disabled={isSaving || isClosing}
+              disabled={isSaving || isClosing || needsClassification}
+              title={needsClassification ? CLASSIFY_BEFORE_ASSIGN : undefined}
             >
               {isSaving ? (
                 <span className="flex items-center gap-1.5">

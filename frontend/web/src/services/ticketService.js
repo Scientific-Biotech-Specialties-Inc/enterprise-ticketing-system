@@ -866,9 +866,13 @@ export const resumeTicket = async (ticketId) => {
   return response.data;
 };
 
-export const reclassifyTicket = async ({ ticketId, problem_category_ID, priority_ID }) => {
+export const reclassifyTicket = async ({ ticketId, problem_category_ID, priority_ID, machine_ID }) => {
   const numericId = Number(String(ticketId).replace(/\D/g, ''));
   const payload = {};
+  // Spec 0043 (AC-20): a Service classification carries one of the customer's machines.
+  if (machine_ID !== undefined && machine_ID !== null && machine_ID !== '') {
+    payload.machine_ID = Number(machine_ID);
+  }
   if (problem_category_ID !== undefined && problem_category_ID !== null) {
     payload.problem_category_ID = Number(problem_category_ID);
   }
@@ -1814,4 +1818,32 @@ export const classifyDepartment = async (title, description) => {
       source: 'client-fallback'
     };
   }
+};
+
+// ─── Spec 0043: department codes (superadmin; employee-service owns `departments`) ───
+
+/** Every department with its code and active state, for the superadmin departments table. */
+export const getDepartmentsWithCodes = async () => {
+  const response = await employeeClient.get('/departments', { params: { include_inactive: 1 } });
+  return response.data?.departments ?? [];
+};
+
+/** Server suggested code for a department name (initials, first 3 letters, number suffix if taken). */
+export const suggestDepartmentCode = async (name, excludeId = null) => {
+  const params = { name };
+  if (excludeId) params.exclude_id = excludeId;
+  const response = await employeeClient.get('/departments/code-suggestion', { params });
+  return response.data?.code ?? '';
+};
+
+export const createDepartment = async ({ name, code, description }) => {
+  const response = await employeeClient.post('/departments', { name, code: code || undefined, description: description || undefined });
+  departmentsCache = null;
+  return response.data?.department;
+};
+
+export const updateDepartment = async (id, fields) => {
+  const response = await employeeClient.put(`/departments/${id}`, fields);
+  departmentsCache = null;
+  return response.data?.department;
 };

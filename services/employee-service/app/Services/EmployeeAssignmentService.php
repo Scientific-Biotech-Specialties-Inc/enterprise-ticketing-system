@@ -187,6 +187,11 @@ class EmployeeAssignmentService
             return ['status' => 404, 'data' => ['message' => 'Ticket not found']];
         }
 
+        // Spec 0043 (AC-20): an unclassified ticket must be classified by CS before anyone is assigned.
+        if ($ticket->problem_category_ID === null) {
+            return ['status' => 422, 'data' => ['message' => 'Classify this ticket before assigning.', 'code' => 'NEEDS_CLASSIFICATION']];
+        }
+
         $currentState = $this->stateMachine->resolveState($ticket);
         try {
             $this->stateMachine->validateTransition($ticket, $currentState, TicketStateMachine::STATE_ASSIGNED);

@@ -144,8 +144,8 @@ describe('ExternalFeedbackPage Component Tests (Category Specific Feedback Accep
       expect(screen.getByText(/IT Category/i)).toBeInTheDocument();
     });
 
-    // Check that configured IT questions are displayed
-    expect(screen.getByText('How quickly was your technical incident resolved?')).toBeInTheDocument();
+    // Check that configured IT questions are displayed (fetched once the ticket's category is known)
+    expect(await screen.findByText('How quickly was your technical incident resolved?')).toBeInTheDocument();
     expect(screen.getByText('Did the technician follow security protocols during the session?')).toBeInTheDocument();
     expect(screen.getByText('Which primary communication channel was used?')).toBeInTheDocument();
     expect(screen.getByText('Which hardware or software components were checked?')).toBeInTheDocument();

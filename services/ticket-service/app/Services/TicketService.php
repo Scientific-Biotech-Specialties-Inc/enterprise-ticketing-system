@@ -103,7 +103,7 @@ class TicketService
     public function getFullTicketDetails(int $ticketId): ?array
     {
         $row = DB::table('tickets as t')
-            ->join('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
+            ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
             ->join('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
             ->leftJoin('clients as c', 'c.id', '=', 't.created_by')
             ->leftJoin('machines as m', 'm.machine_ID', '=', 't.machine_ID')
@@ -116,7 +116,7 @@ class TicketService
                 't.title',
                 't.is_internal',
                 't.requested_by',
-                'pc.category_name',
+                DB::raw("COALESCE(pc.category_name, 'Unclassified') as category_name"),
                 'ts.status_name',
                 'tp.priority_name',
                 'e.department',
@@ -263,17 +263,10 @@ class TicketService
 
         $externalTypeId = DB::table('ticket_types')->where('type_name', 'External')->value('ticket_type_ID') ?? 2;
 
-        $deptCodeParam = null;
-        if ($departmentId) {
-            $deptName = DB::table('departments')->where('id', $departmentId)->value('name') ?? '';
-            if (stripos($deptName, 'IT') !== false) {
-                $deptCodeParam = 'IT';
-            } elseif (stripos($deptName, 'Service') !== false) {
-                $deptCodeParam = 'SVC';
-            } elseif (!empty($deptName)) {
-                $deptCodeParam = strtoupper(substr(preg_replace('/[^A-Za-z0-9]/', '', $deptName), 0, 4));
-            }
-        }
+        // Spec 0043 (AC-7): the department segment is the department's own code.
+        $deptCodeParam = $departmentId
+            ? (DB::table('departments')->where('id', $departmentId)->value('code') ?: null)
+            : null;
         $ticketNumber = $this->numberGeneratorService->generateNextTicketNumber($deptCodeParam);
 
         $defaults = TicketConfigurationService::getDefaultsConfig();
@@ -478,7 +471,10 @@ class TicketService
         $internalTypeId = DB::table('ticket_types')->where('type_name', 'Internal')->value('ticket_type_ID');
         $empId = (int) $user->emp_id;
 
-        $deptCodeParam = !empty($user->department) ? $user->department : null;
+        // Spec 0043 (AC-7): use the requester department's own code.
+        $deptCodeParam = !empty($user->department)
+            ? (DB::table('departments')->whereRaw('LOWER(name) = ?', [strtolower(trim((string) $user->department))])->value('code') ?: null)
+            : null;
         $ticketNumber = $this->numberGeneratorService->generateNextTicketNumber($deptCodeParam);
 
         $defaults = TicketConfigurationService::getDefaultsConfig();
@@ -663,7 +659,7 @@ class TicketService
     public function showTicket(int $ticketId, $user, bool $isCustomer): ?array
     {
         $ticket = DB::table('tickets as t')
-            ->join('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
+            ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
             ->join('ticket_statuses as ts', 'ts.ticket_status_ID', '=', 't.ticket_status_ID')
             ->leftJoin('ticket_priorities as tp', 'tp.priority_ID', '=', 't.priority_ID')
             ->leftJoin('machines as m', 'm.machine_ID', '=', 't.machine_ID')
@@ -678,7 +674,7 @@ class TicketService
                 't.description',
                 't.problem_category_ID',
                 't.machine_ID',
-                'pc.category_name',
+                DB::raw("COALESCE(pc.category_name, 'Unclassified') as category_name"),
                 'ts.status_name',
                 'tp.priority_name',
                 't.created_at',
@@ -1368,7 +1364,73 @@ class TicketService
             'requested_by' => $ticket->requested_by,
             'last_reminder_sent_at' => $ticket->last_reminder_sent_at ? Carbon::parse($ticket->last_reminder_sent_at)->toIso8601String() : null,
             'worklogs' => DB::table('work_logs')->where('ticket_id', $ticketId)->orderBy('log_date', 'desc')->orderBy('created_at', 'desc')->get(),
+            // Spec 0043 (AC-20): the reclassify modal lists only this customer's registered machines.
+            'customer_machines' => (!$isCustomer && !$ticket->is_internal)
+                ? DB::table('machines')
+                    ->where('client_ID', (int) $ticket->created_by)
+                    ->orderBy('machine_name')
+                    ->get(['machine_ID', 'machine_name', 'serial_number'])
+                    ->map(fn ($m) => [
+                        'machine_ID' => (int) $m->machine_ID,
+                        'machine_name' => $m->machine_name,
+                        'serial_number' => $m->serial_number,
+                        'label' => trim($m->machine_name . ($m->serial_number ? ' - ' . $m->serial_number : '')),
+                    ])->values()->all()
+                : [],
         ];
+    }
+
+    /**
+     * A customer may change the category of their own open ticket (to an active category). The
+     * machine rules follow the category being saved: no machine on a Software ticket, a machine
+     * required on a Service ticket, and only the customer's own registered machines.
+     */
+    protected function customerEditError(object $ticket, array $validated, int $clientId): ?array
+    {
+        $reject = fn (string $field, string $message) => [
+            'status' => 422,
+            'data' => ['message' => $message, 'errors' => [$field => [$message]]],
+        ];
+
+        $currentCategory = $ticket->problem_category_ID !== null ? (int) $ticket->problem_category_ID : null;
+        if (array_key_exists('problem_category_ID', $validated) && $validated['problem_category_ID'] !== null) {
+            $requested = (int) $validated['problem_category_ID'];
+            $active = DB::table('problem_categories')
+                ->where('problem_category_ID', $requested)
+                ->where('is_active', true)
+                ->exists();
+            if (!$active) {
+                return $reject('problem_category_ID', 'Choose one of the available categories.');
+            }
+            $currentCategory = $requested;
+        }
+
+        if (!array_key_exists('machine_ID', $validated)) {
+            return null;
+        }
+
+        $machineId = $validated['machine_ID'] !== null ? (int) $validated['machine_ID'] : null;
+        $resolver = app(CategoryDepartmentResolver::class);
+
+        if ($resolver->isSoftware($currentCategory) && $machineId !== null) {
+            return $reject('machine_ID', 'A Software ticket does not take a machine.');
+        }
+
+        if ($resolver->isService($currentCategory) && $machineId === null) {
+            return $reject('machine_ID', 'A Service ticket needs one of your registered machines.');
+        }
+
+        if ($machineId !== null) {
+            $owned = DB::table('machines')
+                ->where('machine_ID', $machineId)
+                ->where('client_ID', $clientId)
+                ->exists();
+            if (!$owned) {
+                return $reject('machine_ID', 'The selected machine is not registered to this customer.');
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -1478,6 +1540,12 @@ class TicketService
             if (array_key_exists('priority_ID', $validated) && $validated['priority_ID'] !== null) {
                 return ['status' => 403, 'data' => ['message' => 'Customers cannot edit ticket priority.', 'code' => 'FORBIDDEN']];
             }
+
+            // Spec 0043 (AC-17): category and machine rules for a customer's own edit.
+            $customerEditError = $this->customerEditError($ticket, $validated, (int) $user->id);
+            if ($customerEditError !== null) {
+                return $customerEditError;
+            }
         } else {
             // Staff / Employee edits:
             // Category edits: Customer service, admin, superadmin may edit on any non-closed ticket.
@@ -1490,6 +1558,11 @@ class TicketService
                     ],
                 ];
             }
+        }
+
+        // Spec 0043 (AC-20): nobody is assigned to a ticket that still needs classification.
+        if (array_key_exists('assigned_to', $validated) && $validated['assigned_to'] !== null && $ticket->problem_category_ID === null) {
+            return ['status' => 422, 'data' => ['message' => 'Classify this ticket before assigning.', 'code' => 'NEEDS_CLASSIFICATION']];
         }
 
         // 8. State machine validation if ticket_status_ID is present
@@ -1620,6 +1693,13 @@ class TicketService
             if ($ticket->machine_ID != $validated['machine_ID']) {
                 $changes[] = ['field' => 'machine_ID', 'old' => $ticket->machine_ID, 'new' => $validated['machine_ID']];
             }
+        } elseif (array_key_exists('machine_ID', $validated) && $ticket->machine_ID !== null
+            && app(CategoryDepartmentResolver::class)->isSoftware(
+                !empty($validated['problem_category_ID']) ? (int) $validated['problem_category_ID']
+                    : ($ticket->problem_category_ID !== null ? (int) $ticket->problem_category_ID : null)
+            )) {
+            // Spec 0043 (AC-15): saving a Software ticket clears any stale machine.
+            $changes[] = ['field' => 'machine_ID', 'old' => $ticket->machine_ID, 'new' => null];
         }
 
         if (array_key_exists('assigned_to', $validated) && $validated['assigned_to'] !== null) {
@@ -1741,6 +1821,8 @@ class TicketService
             }
             if (array_key_exists('machine_ID', $validated) && $validated['machine_ID'] !== null) {
                 $update['machine_ID'] = $validated['machine_ID'];
+            } elseif (collect($changes)->contains(fn ($c) => $c['field'] === 'machine_ID' && $c['new'] === null)) {
+                $update['machine_ID'] = null;
             }
             if (array_key_exists('assigned_to', $validated) && $validated['assigned_to'] !== null && empty($update['assigned_to'])) {
                 $update['assigned_to'] = (int) $validated['assigned_to'];
@@ -2040,7 +2122,30 @@ class TicketService
         ]);
 
         $this->cacheService->clearTicketCaches((int) $ticketId);
-        return ['status' => 200, 'data' => ['message' => 'Ticket updated successfully.']];
+
+        // Spec 0043 (AC-16): return the saved row so the edit dialog refreshes from the server.
+        $saved = DB::table('tickets as t')
+            ->leftJoin('problem_categories as pc', 'pc.problem_category_ID', '=', 't.problem_category_ID')
+            ->leftJoin('machines as m', 'm.machine_ID', '=', 't.machine_ID')
+            ->where('t.ticket_ID', $ticketId)
+            ->first(['t.ticket_ID', 't.ticket_number', 't.title', 't.description', 't.machine_ID', 't.problem_category_ID', 't.updated_at', 'pc.category_name', 'm.machine_name', 'm.serial_number']);
+
+        return ['status' => 200, 'data' => [
+            'message' => 'Ticket updated successfully.',
+            'ticket' => $saved ? [
+                'ticket_ID' => (int) $saved->ticket_ID,
+                'ticket_number' => $saved->ticket_number,
+                'title' => $saved->title,
+                'description' => $saved->description,
+                'machine_ID' => $saved->machine_ID !== null ? (int) $saved->machine_ID : null,
+                'machine_name' => $saved->machine_name,
+                'serial_number' => $saved->serial_number,
+                'equipment' => $saved->machine_name ? trim($saved->machine_name . ($saved->serial_number ? ' - ' . $saved->serial_number : '')) : null,
+                'problem_category_ID' => $saved->problem_category_ID !== null ? (int) $saved->problem_category_ID : null,
+                'category' => $saved->category_name ?? 'Unclassified',
+                'updated_at' => $saved->updated_at ? Carbon::parse($saved->updated_at)->toIso8601String() : null,
+            ] : null,
+        ]];
     }
 
     /**
@@ -2589,17 +2694,53 @@ class TicketService
             ];
         }
 
-        $oldCategory = (int) $ticket->problem_category_ID;
+        $oldCategory = $ticket->problem_category_ID !== null ? (int) $ticket->problem_category_ID : null;
         $newCategory = array_key_exists('problem_category_ID', $validated) && $validated['problem_category_ID'] !== null
             ? (int) $validated['problem_category_ID']
             : $oldCategory;
+
+        // Spec 0043 (AC-20): Service needs one of the customer's registered machines; Software clears it.
+        $resolver = app(CategoryDepartmentResolver::class);
+        $oldMachine = $ticket->machine_ID !== null ? (int) $ticket->machine_ID : null;
+        $newMachine = $oldMachine;
+        if ($newCategory !== null && $resolver->isSoftware($newCategory)) {
+            $newMachine = null;
+        } elseif ($newCategory !== null && $resolver->isService($newCategory)) {
+            $newMachine = !empty($validated['machine_ID']) ? (int) $validated['machine_ID'] : $oldMachine;
+            if ($newMachine === null && $newCategory !== $oldCategory) {
+                return [
+                    'status' => 422,
+                    'data' => [
+                        'message' => "Choose one of the customer's registered machines for a Service ticket.",
+                        'errors' => ['machine_ID' => ["Choose one of the customer's registered machines for a Service ticket."]],
+                        'code' => 'MACHINE_REQUIRED',
+                    ],
+                ];
+            }
+            if (empty($ticket->is_internal) && $newMachine !== $oldMachine) {
+                $owned = DB::table('machines')
+                    ->where('machine_ID', $newMachine)
+                    ->where('client_ID', (int) $ticket->created_by)
+                    ->exists();
+                if (!$owned) {
+                    return [
+                        'status' => 422,
+                        'data' => [
+                            'message' => 'The selected machine is not registered to this customer.',
+                            'errors' => ['machine_ID' => ['The selected machine is not registered to this customer.']],
+                            'code' => 'MACHINE_NOT_OWNED',
+                        ],
+                    ];
+                }
+            }
+        }
 
         $oldPriority = (int) ($ticket->priority_ID ?? 1);
         $newPriority = array_key_exists('priority_ID', $validated) && $validated['priority_ID'] !== null
             ? (int) $validated['priority_ID']
             : $oldPriority;
 
-        if ($oldCategory === $newCategory && $oldPriority === $newPriority) {
+        if ($oldCategory === $newCategory && $oldPriority === $newPriority && $oldMachine === $newMachine) {
             return [
                 'status' => 200,
                 'data' => [
@@ -2630,11 +2771,15 @@ class TicketService
             $actorId,
             $actorType,
             $reassignmentNeeded,
+            $newMachine,
+            $oldMachine,
             &$slaRecalc
         ) {
+            // The ticket number is never touched here (AC-7): it is fixed at creation.
             DB::table('tickets')->where('ticket_ID', $ticketId)->update([
                 'problem_category_ID' => $newCategory,
                 'priority_ID' => $newPriority,
+                'machine_ID' => $newMachine,
                 'updated_at' => now(),
             ]);
 
@@ -2654,16 +2799,22 @@ class TicketService
                     'new_category_id' => $newCategory,
                     'old_priority_id' => $oldPriority,
                     'new_priority_id' => $newPriority,
+                    'old_machine_id' => $oldMachine,
+                    'new_machine_id' => $newMachine,
                     'reassignment_needed' => $reassignmentNeeded,
                 ]),
                 'created_at' => now(),
             ]);
         });
 
+        $department = $resolver->resolve($newCategory);
+
         $this->cacheService->clearTicketCaches();
         $this->notificationService->broadcastTicketChange('updated', $ticketId, [
             'problem_category_ID' => $newCategory,
             'priority_ID' => $newPriority,
+            'machine_ID' => $newMachine,
+            'department_id' => $department['id'] ?? null,
         ]);
 
         // TODO: TS005 per-user notification preferences
@@ -2723,6 +2874,9 @@ class TicketService
                 'new_category_id' => $newCategory,
                 'old_priority_id' => $oldPriority,
                 'new_priority_id' => $newPriority,
+                'problem_category_ID' => $newCategory,
+                'machine_ID' => $newMachine,
+                'department_id' => $department['id'] ?? null,
                 'reassignment_needed' => $reassignmentNeeded,
                 'sla' => $slaRecalc,
             ],

@@ -38,7 +38,23 @@ class TicketController extends Controller
      */
     public function formOptions()
     {
-        return response()->json($this->ticketService->getFormOptions());
+        $options = $this->ticketService->getFormOptions();
+
+        // Spec 0043 (AC-1, AC-15): a customer only ever sees and picks their own registered machines.
+        $user = request()->user();
+        if ($user instanceof \App\Models\Client) {
+            $machines = \Illuminate\Support\Facades\DB::table('machines')
+                ->where('client_ID', (int) $user->id)
+                ->orderBy('machine_name')
+                ->get(['machine_ID', 'machine_name', 'serial_number']);
+            $options['machines'] = $machines;
+            $options['equipment_options'] = $machines->map(fn ($row) => [
+                'value' => $row->machine_ID,
+                'label' => $row->machine_name . ' - ' . $row->serial_number,
+            ])->values()->all();
+        }
+
+        return response()->json($options);
     }
 
     /**
@@ -104,8 +120,13 @@ class TicketController extends Controller
             $request->merge(['attachments' => []]);
         }
 
-        $deptId = (int) $request->input('department_id', 2);
-        $isServiceDept = ($deptId === 1);
+        // The department is always derived on the server from the category; the customer may choose
+        // the category itself (validated below), but never the department.
+        $request->request->remove('department_id');
+        $request->query->remove('department_id');
+        if ($request->input('problem_category_ID') === '' || $request->input('problem_category_ID') === 'null') {
+            $request->merge(['problem_category_ID' => null]);
+        }
 
         if ($request->has('machine_ID') && ($request->input('machine_ID') === '' || $request->input('machine_ID') === 'null' || $request->input('machine_ID') === null)) {
             $request->merge(['machine_ID' => null]);
@@ -127,10 +148,9 @@ class TicketController extends Controller
         };
 
         $validated = $request->validate([
-            'machine_ID' => $isServiceDept
-                ? ['required', 'integer', 'exists:machines,machine_ID', $machineOwnedByCustomer]
-                : ['nullable', 'integer', 'exists:machines,machine_ID', $machineOwnedByCustomer],
-            'problem_category_ID' => ['required', 'integer', 'exists:problem_categories,problem_category_ID'],
+            'machine_ID' => ['nullable', 'integer', 'exists:machines,machine_ID', $machineOwnedByCustomer],
+            // The customer may pick the category (the form prefills the AI suggestion).
+            'problem_category_ID' => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('problem_categories', 'problem_category_ID')->where('is_active', true)],
             'priority_ID' => ['nullable', 'integer', 'exists:ticket_priorities,priority_ID'],
             'branch_id' => ['nullable', 'string', 'max:64', 'exists:branches,slug'],
             'title' => ['required', 'string', 'max:255', $this->ticketService->rejectMarkup(), $this->ticketService->validateProperCasing()],
@@ -139,11 +159,19 @@ class TicketController extends Controller
             'attachments.*' => ['integer'],
             'origin' => ['nullable', 'string', 'max:50'],
             'conversation_id' => ['nullable', 'string', 'max:64'],
-            'department_id' => ['nullable', 'integer'],
         ]);
 
+        $callerToken = $request->bearerToken() ?: $request->cookie('access_token');
+        $intake = app(\App\Services\TicketIntakeClassificationService::class);
+        // A category the customer chose wins; only when none was sent does the server ask the AI.
+        $classification = !empty($validated['problem_category_ID'])
+            ? $intake->apply((int) $validated['problem_category_ID'], !empty($validated['machine_ID']) ? (int) $validated['machine_ID'] : null)
+            : $intake->classifyForCreate($validated, $callerToken ? (string) $callerToken : null);
+        $validated['problem_category_ID'] = $classification['problem_category_ID'];
+        $validated['machine_ID'] = $classification['machine_ID'];
+
         try {
-            $result = app(\App\Actions\Tickets\CreateTicketAction::class)->execute($validated, $user, $deptId);
+            $result = app(\App\Actions\Tickets\CreateTicketAction::class)->execute($validated, $user, $classification['department_id']);
         } catch (TicketLimitExceededException $e) {
             return response()->json([
                 'message' => $e->getMessage(),
@@ -160,6 +188,8 @@ class TicketController extends Controller
 
         // TS020: Draft is only removed once final submission succeeds
         if ($draftId) {
+            // Spec 0043 AC-14 instrumentation: ties a created ticket to the draft it came from.
+            \Illuminate\Support\Facades\Log::info('Ticket submitted from draft', ['ticket_ID' => $result['ticket_id'] ?? null, 'draft_id' => (int) $draftId]);
             try {
                 app(\App\Services\TicketDraftService::class)->deleteDraft((int) $user->id, (int) $draftId);
             } catch (\Throwable $e) {
@@ -401,6 +431,7 @@ class TicketController extends Controller
         $validated = $request->validate([
             'problem_category_ID' => ['nullable', 'integer', 'exists:problem_categories,problem_category_ID'],
             'priority_ID' => ['nullable', 'integer', 'exists:ticket_priorities,priority_ID'],
+            'machine_ID' => ['nullable', 'integer', 'exists:machines,machine_ID'],
         ]);
 
         if (empty($validated['problem_category_ID']) && empty($validated['priority_ID'])) {

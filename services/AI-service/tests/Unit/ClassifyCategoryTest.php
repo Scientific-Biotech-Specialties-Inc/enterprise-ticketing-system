@@ -60,6 +60,28 @@ class ClassifyCategoryTest extends TestCase
         $this->assertNull($this->service()->classifyCategory('x', 'y', $this->categories)['category_id']);
     }
 
+    /** A lite model rejects thinkingBudget 0 with HTTP 400, which left every ticket unclassified. */
+    public function test_lite_model_request_carries_no_thinking_config(): void
+    {
+        config(['services.gemini.model' => 'gemini-3.5-flash-lite']);
+        $this->fakeGemini('{"category_id": 7, "confidence": 0.92, "reasoning": "Calibration drift."}');
+
+        $this->service()->classifyCategory('Analyzer drift', 'Results are off', $this->categories);
+
+        Http::assertSent(fn ($request) => !array_key_exists('thinkingConfig', $request['generationConfig']));
+    }
+
+    /** A full flash model thinks by default, so thinking stays switched off to fit the token budget. */
+    public function test_full_flash_model_request_turns_thinking_off(): void
+    {
+        config(['services.gemini.model' => 'gemini-3.5-flash']);
+        $this->fakeGemini('{"category_id": 7, "confidence": 0.92, "reasoning": "Calibration drift."}');
+
+        $this->service()->classifyCategory('Analyzer drift', 'Results are off', $this->categories);
+
+        Http::assertSent(fn ($request) => ($request['generationConfig']['thinkingConfig']['thinkingBudget'] ?? null) === 0);
+    }
+
     public function test_no_api_key_means_no_suggestion_and_no_http_call(): void
     {
         Http::fake();

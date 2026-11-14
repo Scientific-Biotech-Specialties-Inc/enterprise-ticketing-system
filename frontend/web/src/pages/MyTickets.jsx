@@ -40,12 +40,25 @@ import { getMaxOpenTicketsLimit, OPEN_STATUS_SET } from '@/data/ticketLimitConfi
 
 import { parseUTCDate } from '@/utils/dateUtils';
 import TitleCasingModal from '@/components/TitleCasingModal';
+import { needsProperCasing, formatProperTitleCase } from '@/utils/titleCaseUtils';
 import useLockBodyScroll from '@/hooks/useLockBodyScroll';
 import { hasFeedbackBeenSubmitted, fetchFeedbackForTicket } from '@/data/mockFeedbackData';
 import tokenStore from '@/auth/tokenStore';
 
 const ACTIVE_STATUSES = ['Open', 'Pending Assignment', 'In Progress', 'Pending', 'On Hold', 'Closed'];
 const HISTORY_STATUSES = ['Resolved', 'Closed', 'Discarded by Customer', 'Discarded'];
+const DISCARDED_STATUSES = ['Discarded', 'Discarded by Customer'];
+
+/**
+ * Spec 0043 (AC-19): which My Tickets tab a ticket belongs to.
+ * Closed goes to Closed (including closed tickets still awaiting feedback); Discarded goes to
+ * History only; every other status, Resolved included, stays in Active.
+ */
+export const customerTabFor = (ticket) => {
+  const status = ticket?.status || '';
+  if (DISCARDED_STATUSES.includes(status)) return null;
+  return status === 'Closed' ? 'closed' : 'active';
+};
 
 const getStoredUser = () => {
   try {
@@ -78,7 +91,7 @@ export default function MyTickets({ mode = 'all' }) {
   const location = useLocation();
   const navigate = useNavigate();
   const params = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const urlTicketId = params?.ticketId || searchParams.get('ticketId');
 
   const isLoggedOut =
@@ -111,9 +124,10 @@ export default function MyTickets({ mode = 'all' }) {
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPos, setMenuPos] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
+  const initialTab = location.state?.tab || searchParams.get('tab');
   const [activeTab, setActiveTab] = useState(
-    location.state?.tab === 'drafts' || searchParams.get('tab') === 'drafts' ? 'drafts' : 'tickets'
-  ); // 'tickets' | 'drafts'
+    ['drafts', 'closed'].includes(initialTab) ? initialTab : 'active'
+  ); // 'active' | 'closed' | 'drafts'
   const [feedbackVersion, setFeedbackVersion] = useState(0);
   const [drafts, setDrafts] = useState([]);
   const [loadingDrafts, setLoadingDrafts] = useState(false);
@@ -151,7 +165,7 @@ export default function MyTickets({ mode = 'all' }) {
   useEffect(() => {
     const targetTab = location.state?.tab || searchParams.get('tab');
     if (targetTab) {
-      setActiveTab(targetTab);
+      setActiveTab(['drafts', 'closed', 'active'].includes(targetTab) ? targetTab : 'active');
       if (targetTab === 'drafts') {
         loadDrafts();
       }
@@ -355,11 +369,29 @@ export default function MyTickets({ mode = 'all' }) {
   }, [filterOptions.categories, tickets]);
 
   const availableStatuses = useMemo(() => {
-    if (filterOptions.statuses && filterOptions.statuses.length > 0) {
-      return filterOptions.statuses.map((s) => (typeof s === 'string' ? s : (s.status_name || s.name || s.label || String(s.ticket_status_ID))));
-    }
-    return isHistory ? HISTORY_STATUSES : ACTIVE_STATUSES;
-  }, [filterOptions.statuses, isHistory]);
+    const all = filterOptions.statuses && filterOptions.statuses.length > 0
+      ? filterOptions.statuses.map((s) => (typeof s === 'string' ? s : (s.status_name || s.name || s.label || String(s.ticket_status_ID))))
+      : (isHistory ? HISTORY_STATUSES : ACTIVE_STATUSES);
+    if (isHistory) return all;
+    // AC-19: each tab's status filter lists only the statuses that tab holds.
+    if (activeTab === 'closed') return ['Closed'];
+    return all.filter((st) => st !== 'Closed' && !DISCARDED_STATUSES.includes(st));
+  }, [filterOptions.statuses, isHistory, activeTab]);
+
+  const tabCounts = useMemo(() => {
+    const counts = { active: 0, closed: 0 };
+    (tickets || []).forEach((t) => {
+      const tab = customerTabFor(t);
+      if (tab) counts[tab] += 1;
+    });
+    return counts;
+  }, [tickets]);
+
+  const isAwaitingFeedback = (ticket) => {
+    const isInternal = ticket.is_internal || ticket.ticket_type === 'Internal';
+    return ticket.status === 'Closed' && !isInternal
+      && !(hasFeedbackBeenSubmitted(ticket.id) || hasFeedbackBeenSubmitted(ticket.ticket_ID));
+  };
 
   const activeFilterList = useMemo(() => {
     const list = [];
@@ -381,18 +413,9 @@ export default function MyTickets({ mode = 'all' }) {
         if (!HISTORY_STATUSES.includes(ticket.status)) return false;
         // Closed tickets pending feedback stay in My Tickets until feedback is submitted
         if (isClosedPendingFeedback) return false;
-      } else {
-        // Active "My Tickets"
-        if (filters.status) {
-          // If the user explicitly selects a status filter like 'Closed' or 'Resolved', respect it
-          if (ticket.status !== filters.status) return false;
-        } else {
-          if (ticket.status === 'Closed') {
-            if (!isClosedPendingFeedback) return false;
-          } else if (HISTORY_STATUSES.includes(ticket.status) || ['Resolved', 'Discarded', 'Discarded by Customer'].includes(ticket.status)) {
-            return false;
-          }
-        }
+      } else if (customerTabFor(ticket) !== activeTab) {
+        // AC-19: Active, Closed, and Drafts tabs; Discarded tickets only appear in History.
+        return false;
       }
 
       // Keywords filter (matching Ticket ID, Title, Description, Machine/Equipment, Category, Assigned Employee, Priority)
@@ -459,7 +482,7 @@ export default function MyTickets({ mode = 'all' }) {
 
       return true;
     });
-  }, [filters, isHistory, tickets]);
+  }, [filters, isHistory, tickets, activeTab]);
 
   const [page, setPage] = useState(1);
   const itemsPerPage = 10;
@@ -467,6 +490,12 @@ export default function MyTickets({ mode = 'all' }) {
   useEffect(() => {
     setPage(1);
   }, [filters, isHistory, activeTab]);
+
+  useEffect(() => {
+    if (!isHistory && filters.status && !availableStatuses.includes(filters.status)) {
+      setFilters((current) => ({ ...current, status: '' }));
+    }
+  }, [availableStatuses, filters.status, isHistory]);
 
   const paginatedTickets = useMemo(() => {
     const start = (page - 1) * itemsPerPage;
@@ -598,13 +627,18 @@ export default function MyTickets({ mode = 'all' }) {
     }
   };
 
+  const handleGiveFeedback = (t) => {
+    const ticketId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
+    navigate(`/history/${ticketId}`, { state: { ticket: t, backPath: '/my-tickets?tab=closed', openFeedback: true } });
+  };
+
   const handleViewTicket = async (t) => {
     if (isHistory || t.status === 'Resolved' || t.status === 'Closed') {
       const ticketId = t.ticket_ID || parseInt(String(t.id || '').replace(/\D/g, ''), 10);
       navigate(`/history/${ticketId}`, {
         state: {
           ticket: t,
-          backPath: isHistory ? '/history' : '/my-tickets',
+          backPath: isHistory ? '/history' : (t.status === 'Closed' ? '/my-tickets?tab=closed' : '/my-tickets'),
         },
       });
       return;
@@ -790,6 +824,15 @@ export default function MyTickets({ mode = 'all' }) {
     return s === 'Open' && !hasAssignee;
   };
 
+  /** 'software' | 'service' | 'unclassified', from the category picked in the edit dialog (or the stored one). */
+  const editCategoryKind = (ticket) => {
+    const picked = (editOptions?.problem_categories || []).find((c) => String(c.problem_category_ID) === String(editCategory || ''));
+    const name = String(picked?.category_name || (editCategory ? '' : ticket?.category) || '').trim().toLowerCase();
+    if (name === 'software') return 'software';
+    if (name === 'service') return 'service';
+    return 'unclassified';
+  };
+
   const handleEditTicket = async (ticket) => {
     if (!canEditTicket(ticket)) {
       showError('Cannot Edit Ticket', 'Tickets can only be edited while Open and not yet assigned to an employee.');
@@ -805,6 +848,7 @@ export default function MyTickets({ mode = 'all' }) {
 
     let opts = getCachedTicketFormOptions();
     if (!opts) {
+      try { opts = await getTicketFormOptions(); } catch { opts = null; }
     }
     setEditOptions(opts);
 
@@ -944,9 +988,31 @@ export default function MyTickets({ mode = 'all' }) {
         title: finalTitle,
         description: editDescription,
       };
-      if (editCategory) payload.problem_category_ID = editCategory;
-      if (editEquipment) payload.machine_ID = editEquipment;
-      await updateTicket(payload);
+      // The customer may change the category. Software saves no machine;
+      // Service must keep one of the customer's registered machines.
+      if (editCategory) {
+        payload.problem_category_ID = Number(editCategory);
+      }
+      const editKind = editCategoryKind(ticket);
+      if (editKind === 'software') {
+        payload.machine_ID = null;
+      } else if (editEquipment) {
+        payload.machine_ID = Number(editEquipment);
+      } else if (editKind === 'service') {
+        showError('Validation error', 'Select one of your registered machines for a Service ticket.');
+        setModalLoading(false);
+        return;
+      }
+      const result = await updateTicket(payload);
+      const saved = result?.ticket;
+      if (saved) {
+        // AC-16: refresh the row from the server response, not from local guesses.
+        setTickets((prev) => (prev || []).map((t) => (
+          (t.ticket_ID && Number(t.ticket_ID) === Number(saved.ticket_ID)) || t.id === ticket.id
+            ? { ...t, title: saved.title, description: saved.description, machine_ID: saved.machine_ID, problem_category_ID: saved.problem_category_ID, category: saved.category, equipment: saved.equipment || t.equipment, last_updated: saved.updated_at || t.last_updated }
+            : t
+        )));
+      }
       const timestamp = new Date().toISOString();
       try {
         const existing = JSON.parse(localStorage.getItem('customer_ticket_details') || '{}');
@@ -1056,25 +1122,31 @@ export default function MyTickets({ mode = 'all' }) {
 
       {!isHistory && (
         <div className="flex border-b border-gray-200 gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('tickets');
-              setSearchParams({});
-            }}
-            className={`pb-3 px-4 text-sm font-bold transition-all border-b-2 -mb-px flex items-center gap-2 cursor-pointer ${
-              activeTab === 'tickets'
-                ? 'border-brand-primary text-brand-primary'
-                : 'border-transparent text-muted-slate hover:text-dark-slate'
-            }`}
-          >
-            All Tickets
-            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
-              activeTab === 'tickets' ? 'bg-brand-primary/10 text-brand-primary' : 'bg-page text-muted-slate'
-            }`}>
-              {visibleTickets.length}
-            </span>
-          </button>
+          {[
+            { key: 'active', label: 'Active', count: tabCounts.active },
+            { key: 'closed', label: 'Closed', count: tabCounts.closed },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => {
+                setActiveTab(tab.key);
+                setSearchParams(tab.key === 'active' ? {} : { tab: tab.key });
+              }}
+              className={`pb-3 px-4 text-sm font-bold transition-all border-b-2 -mb-px flex items-center gap-2 cursor-pointer ${
+                activeTab === tab.key
+                  ? 'border-brand-primary text-brand-primary'
+                  : 'border-transparent text-muted-slate hover:text-dark-slate'
+              }`}
+            >
+              {tab.label}
+              <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                activeTab === tab.key ? 'bg-brand-primary/10 text-brand-primary' : 'bg-page text-muted-slate'
+              }`}>
+                {tab.count}
+              </span>
+            </button>
+          ))}
           <button
             type="button"
             onClick={() => {
@@ -1088,7 +1160,7 @@ export default function MyTickets({ mode = 'all' }) {
                 : 'border-transparent text-muted-slate hover:text-dark-slate'
             }`}
           >
-            My Drafts
+            Drafts
             <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
               activeTab === 'drafts' ? 'bg-amber-100 text-amber-800' : 'bg-page text-muted-slate'
             }`}>
@@ -1327,6 +1399,11 @@ export default function MyTickets({ mode = 'all' }) {
                               </>
                             ) : (
                               <>
+                                {isAwaitingFeedback(ticket) && (
+                                  <DropdownMenuItem onClick={() => handleGiveFeedback(ticket)}>
+                                    Give Feedback
+                                  </DropdownMenuItem>
+                                )}
                                 {canEditTicket(ticket) && (
                                   <DropdownMenuItem onClick={() => handleEditTicket(ticket)}>
                                     Edit
@@ -1525,24 +1602,20 @@ export default function MyTickets({ mode = 'all' }) {
               </div>
               <div className="grid gap-4 md:grid-cols-3">
                 <div className="min-w-0 md:col-span-2">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-slate">Category</p>
-                  {editOptions ? (
-                    <select
-                      value={editCategory}
-                      onChange={(e) => setEditCategory(e.target.value)}
-                      title={editingTicket.category || ''}
-                      className="mt-1 w-full rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-brand-accent"
-                    >
-                      <option value="">{editingTicket.category ? `Current: ${editingTicket.category}` : 'Select category'}</option>
-                      {(editOptions.problem_categories || editOptions.category_options || []).map((cat) => (
-                        <option key={cat.problem_category_ID || cat.value} value={cat.problem_category_ID || cat.value} title={cat.category_name || cat.label || cat.name}>
-                          {cat.category_name || cat.label || cat.name}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <p className="mt-1 text-sm text-dark-slate break-words">{editingTicket.category}</p>
-                  )}
+                  <label htmlFor="edit-category" className="text-xs font-semibold uppercase tracking-wider text-muted-slate">Category</label>
+                  <select
+                    id="edit-category"
+                    data-testid="edit-category"
+                    value={editCategory ? String(editCategory) : ''}
+                    onChange={(e) => setEditCategory(e.target.value)}
+                    disabled={!editOptions}
+                    className="mt-1 w-full rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-brand-accent disabled:opacity-60"
+                  >
+                    <option value="" disabled>Pending classification</option>
+                    {(editOptions?.problem_categories || []).map((c) => (
+                      <option key={c.problem_category_ID} value={String(c.problem_category_ID)}>{c.category_name}</option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-muted-slate">Status</p>
@@ -1550,30 +1623,28 @@ export default function MyTickets({ mode = 'all' }) {
                     {!editingTicket.assigned_to && editingTicket.status === 'In Progress' ? 'Open' : editingTicket.status}
                   </p>
                 </div>
-                <div className="min-w-0 md:col-span-2">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-slate">Equipment</p>
-                  {editOptions ? (
+                {editCategoryKind(editingTicket) !== 'software' && (
+                  <div className="min-w-0 md:col-span-2">
+                    <label htmlFor="edit-equipment" className="text-xs font-semibold uppercase tracking-wider text-muted-slate">
+                      Equipment {editCategoryKind(editingTicket) === 'service' && <span className="text-destructive">*</span>}
+                    </label>
                     <select
+                      id="edit-equipment"
                       value={editEquipment}
                       onChange={(e) => setEditEquipment(e.target.value)}
-                      title={editingTicket.equipment || ''}
-                      className="mt-1 w-full rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-brand-accent"
+                      disabled={!editOptions}
+                      required={editCategoryKind(editingTicket) === 'service'}
+                      className="mt-1 w-full rounded-xl border border-gray-200 bg-surface px-3 py-2 text-sm text-dark-slate outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-brand-accent disabled:opacity-60"
                     >
-                      <option value="">{editingTicket.equipment ? `Current: ${editingTicket.equipment}` : 'Select equipment'}</option>
-                      {(editOptions.equipment_options || editOptions.machines || []).map((m) => {
-                        const optVal = m.machine_ID || m.value || '';
-                        const optLabel = m.machine_name ? `${m.machine_name}${m.serial_number ? ` - ${m.serial_number}` : ''}` : (typeof m.label === 'string' ? m.label : (m.name || `Machine #${optVal}`));
-                        return (
-                          <option key={optVal || optLabel} value={optVal} title={optLabel}>
-                            {optLabel}
-                          </option>
-                        );
-                      })}
+                      <option value="">Select a machine</option>
+                      {(editOptions?.machines || []).map((m) => (
+                        <option key={m.machine_ID} value={m.machine_ID}>
+                          {`${m.machine_name}${m.serial_number ? ` - ${m.serial_number}` : ''}`}
+                        </option>
+                      ))}
                     </select>
-                  ) : (
-                    <p className="mt-1 text-sm text-dark-slate break-words">{editingTicket.equipment}</p>
-                  )}
-                </div>
+                  </div>
+                )}
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-muted-slate">Date Created</p>
                   <p className="mt-1 text-sm text-dark-slate">{formatDate(editingTicket.date_created)}</p>

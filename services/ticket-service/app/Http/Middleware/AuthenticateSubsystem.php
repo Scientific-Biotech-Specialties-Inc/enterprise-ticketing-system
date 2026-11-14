@@ -13,9 +13,10 @@ class AuthenticateSubsystem
      *
      * @param  \Illuminate\Http\Request  $request
      * @param  \Closure  $next
+     * @param  string|null  $mode  `optional` lets an unauthenticated request through as a guest
      * @return mixed
      */
-    public function handle(Request $request, Closure $next)
+    public function handle(Request $request, Closure $next, ?string $mode = null)
     {
         // 0. If request is already authenticated (e.g. test actingAs), proceed
         if (Auth::check() || $request->user()) {
@@ -70,6 +71,10 @@ class AuthenticateSubsystem
             }
         } catch (\Throwable $e) {
             // Passport check failed
+        }
+
+        if ($mode === 'optional') {
+            return $next($request);
         }
 
         return response()->json(['message' => 'Unauthenticated.'], 401);
